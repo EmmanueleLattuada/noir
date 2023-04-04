@@ -139,6 +139,9 @@ pub trait Operator<Out: Data>: Clone + Send + Display {
 
     /// A more refined representation of the operator and its predecessors.
     fn structure(&self) -> BlockStructure;
+
+    /// Return the operator id: this identifies the operator inside the chain
+    fn get_op_id(&self) -> &u32;
 }
 
 impl<Out> StreamElement<Out> {
