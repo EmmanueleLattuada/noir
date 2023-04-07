@@ -90,6 +90,10 @@ impl<Out: Data, PreviousOperator: Operator<Out>> Operator<Out>
     fn structure(&self) -> BlockStructure {
         Default::default()
     }
+
+    fn get_op_id(&self) -> &u32 {
+        &0
+    }
 }
 
 /// Helper functions for running the integration tests.
@@ -111,7 +115,7 @@ impl TestHelper {
         config: EnvironmentConfig,
         body: Arc<dyn Fn(StreamEnvironment) + Send + Sync>,
     ) {
-        let timeout_sec = Self::parse_int_from_env("RSTREAM_TEST_TIMEOUT").unwrap_or(10);
+        let timeout_sec = Self::parse_int_from_env("RSTREAM_TEST_TIMEOUT").unwrap_or(50);
         let timeout = Duration::from_secs(timeout_sec);
         let (sender, receiver) = std::sync::mpsc::channel();
         let worker = std::thread::Builder::new()

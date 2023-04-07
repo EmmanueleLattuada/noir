@@ -15,6 +15,7 @@ where
     PreviousOperator: Operator<In> + 'static,
 {
     prev: PreviousOperator,
+    op_id: u32,
     predicate: Predicate,
     _in: PhantomData<In>,
     _out: PhantomData<Out>,
@@ -43,8 +44,10 @@ where
     PreviousOperator: Operator<In> + 'static,
 {
     fn new(prev: PreviousOperator, predicate: Predicate) -> Self {
+        let op_id = prev.get_op_id() + 1;
         Self {
             prev,
+            op_id,
             predicate,
             _in: Default::default(),
             _out: Default::default(),
@@ -88,6 +91,10 @@ where
         self.prev
             .structure()
             .add_operator(OperatorStructure::new::<Out, _>("FilterMap"))
+    }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
     }
 }
 

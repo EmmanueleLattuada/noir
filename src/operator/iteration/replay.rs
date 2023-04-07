@@ -34,6 +34,8 @@ where
     /// The chain of previous operators where the dataset to replay is read from.
     prev: OperatorChain,
 
+    op_id: u32,
+
     /// The content of the stream to replay.
     content: Vec<StreamElement<Out>>,
     /// The index inside `content` of the first message to be sent.
@@ -67,11 +69,14 @@ where
         leader_block_id: BlockId,
         state_lock: Arc<IterationStateLock>,
     ) -> Self {
+        let op_id = prev.get_op_id() + 1;
         Self {
             // these fields will be set inside the `setup` method
             coord: Coord::new(0, 0, 0),
 
             prev,
+            op_id,
+
             content: Default::default(),
             content_index: 0,
             input_finished: false,
@@ -198,6 +203,10 @@ where
                 self.state.leader_block_id,
             ));
         self.prev.structure().add_operator(operator)
+    }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
     }
 }
 

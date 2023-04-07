@@ -137,6 +137,7 @@ where
     #[derivative(Debug = "ignore")]
     inner: IteratorGenerator<Source>,
     terminated: bool,
+    op_id: u32,
 }
 
 impl<Source> Display for ParallelIteratorSource<Source>
@@ -188,6 +189,8 @@ where
         Self {
             inner: IteratorGenerator::Generator(generator),
             terminated: false,
+            // This is the first operator in the chain
+            op_id: 0,
         }
     }
 }
@@ -239,6 +242,10 @@ where
         operator.kind = OperatorKind::Source;
         BlockStructure::default().add_operator(operator)
     }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
+    }
 }
 
 impl<Source> Clone for ParallelIteratorSource<Source>
@@ -250,6 +257,7 @@ where
         Self {
             inner: self.inner.clone(),
             terminated: false,
+            op_id: self.op_id,
         }
     }
 }

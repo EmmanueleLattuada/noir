@@ -21,6 +21,7 @@ mod inner {
         InnerIterator: Iterator,
     {
         prev: PreviousOperators,
+        op_id: u32,
         // used to store elements that have not been returned by next() yet
         // buffer: VecDeque<StreamElement<NewOut>>,
         // Make an element of type `Out` iterable
@@ -61,8 +62,10 @@ mod inner {
         InnerIterator: Iterator<Item = Out> + Clone + Send,
     {
         pub(super) fn new(prev: PreviousOperators) -> Self {
+            let op_id = prev.get_op_id() + 1;
             Self {
                 prev,
+                op_id,
                 frontiter: None,
                 #[cfg(feature = "timestamp")]
                 timestamp: None,
@@ -128,6 +131,10 @@ mod inner {
                 .structure()
                 .add_operator(OperatorStructure::new::<Out, _>("Flatten"))
         }
+
+        fn get_op_id(&self) -> &u32 {
+            &self.op_id
+        }
     }
 
     impl<In, Out, InnerIterator, OperatorChain> Stream<In, OperatorChain>
@@ -174,6 +181,7 @@ mod inner {
         InnerIterator: Iterator,
     {
         prev: PreviousOperators,
+        op_id: u32,
         // used to store elements that have not been returned by next() yet
         // buffer: VecDeque<StreamElement<NewOut>>,
         // Make an element of type `Out` iterable
@@ -217,8 +225,10 @@ mod inner {
         InnerIterator: Iterator<Item = Out> + Clone + Send,
     {
         fn new(prev: PreviousOperators) -> Self {
+            let op_id = prev.get_op_id() + 1;
             Self {
                 prev,
+                op_id,
                 frontiter: None,
                 timestamp: None,
                 _key: Default::default(),
@@ -283,6 +293,10 @@ mod inner {
             self.prev
                 .structure()
                 .add_operator(OperatorStructure::new::<Out, _>("KeyedFlatten"))
+        }
+
+        fn get_op_id(&self) -> &u32 {
+            &self.op_id
         }
     }
 

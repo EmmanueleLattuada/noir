@@ -30,6 +30,7 @@ where
 {
     /// The coordinates of this block.
     coord: Coord,
+    op_id:u32,
 
     /// The index of the current iteration (0-based).
     iteration_index: usize,
@@ -104,6 +105,10 @@ where
             feedback_senders: Default::default(),
             coord: Coord::new(0, 0, 0),
             num_receivers: 0,
+
+            // This the second block in the chain
+            // TODO: check this
+            op_id: 1,
 
             max_iterations: num_iterations,
             iteration_index: 0,
@@ -250,6 +255,10 @@ where
             .unwrap()
             .structure()
             .add_operator(operator)
+    }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
     }
 }
 

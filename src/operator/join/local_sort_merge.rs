@@ -28,6 +28,8 @@ struct JoinLocalSortMerge<
 > {
     prev: OperatorChain,
 
+    op_id: u32,
+
     keyer1: Keyer1,
     keyer2: Keyer2,
 
@@ -77,8 +79,10 @@ impl<
     > JoinLocalSortMerge<Key, Out1, Out2, Keyer1, Keyer2, OperatorChain>
 {
     fn new(prev: OperatorChain, variant: JoinVariant, keyer1: Keyer1, keyer2: Keyer2) -> Self {
+        let op_id = prev.get_op_id() + 1;
         Self {
             prev,
+            op_id,
             keyer1,
             keyer2,
             left_ended: false,
@@ -223,6 +227,10 @@ impl<
             KeyValue<Key, OuterJoinTuple<Out1, Out2>>,
             _,
         >("JoinLocalSortMerge"))
+    }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
     }
 }
 

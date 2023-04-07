@@ -21,6 +21,7 @@ where
     PreviousOperators: Operator<KeyValue<Key, Out>>,
 {
     prev: PreviousOperators,
+    op_id: u32,
     #[derivative(Debug = "ignore")]
     fold: F,
     init: NewOut,
@@ -56,8 +57,10 @@ where
     F: Fn(&mut NewOut, Out) + Send + Clone,
 {
     fn new(prev: PreviousOperators, init: NewOut, fold: F) -> Self {
+        let op_id = prev.get_op_id() + 1;
         KeyedFold {
             prev,
+            op_id,
             fold,
             init,
             accumulators: Default::default(),
@@ -161,6 +164,10 @@ where
             .add_operator(OperatorStructure::new::<KeyValue<Key, NewOut>, _>(
                 "KeyedFold",
             ))
+    }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
     }
 }
 

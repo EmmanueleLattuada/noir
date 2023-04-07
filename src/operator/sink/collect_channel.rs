@@ -17,7 +17,22 @@ where
     PreviousOperators: Operator<Out>,
 {
     prev: PreviousOperators,
+    op_id: u32,
     tx: Option<Sender<Out>>,
+}
+
+impl<Out: ExchangeData, PreviousOperators> CollectChannelSink<Out, PreviousOperators>
+where
+    PreviousOperators: Operator<Out>,
+{
+    fn new(prev: PreviousOperators, tx:Option<Sender<Out>>) -> Self {
+        let op_id = prev.get_op_id() + 1;
+        Self {
+            prev,
+            op_id,
+            tx
+        }
+    }
 }
 
 impl<Out: ExchangeData, PreviousOperators> Display for CollectChannelSink<Out, PreviousOperators>
@@ -59,6 +74,10 @@ where
         operator.kind = OperatorKind::Sink;
         self.prev.structure().add_operator(operator)
     }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
+    }
 }
 
 impl<Out: ExchangeData, PreviousOperators> Sink for CollectChannelSink<Out, PreviousOperators> where
@@ -98,7 +117,7 @@ where
     pub fn collect_channel(self) -> Receiver<Out> {
         let (tx, rx) = unbounded();
         self.max_parallelism(1)
-            .add_operator(|prev| CollectChannelSink { prev, tx: Some(tx) })
+            .add_operator(|prev| CollectChannelSink::new(prev, Some(tx)))
             .finalize_block();
         rx
     }
@@ -128,7 +147,7 @@ where
     /// ```
     pub fn collect_channel_parallel(self) -> Receiver<Out> {
         let (tx, rx) = unbounded();
-        self.add_operator(|prev| CollectChannelSink { prev, tx: Some(tx) })
+        self.add_operator(|prev| CollectChannelSink::new(prev, Some(tx)))
             .finalize_block();
         rx
     }

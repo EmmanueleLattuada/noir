@@ -68,6 +68,7 @@ pub(crate) struct StartBlock<Out: ExchangeData, Receiver: StartBlockReceiver<Out
     max_delay: Option<Duration>,
 
     coord: Option<Coord>,
+    op_id: u32,
 
     /// The actual receiver able to fetch messages from the network.
     receiver: Receiver,
@@ -145,6 +146,9 @@ impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send> StartBlock<Out
         Self {
             coord: Default::default(),
             max_delay: Default::default(),
+
+            // This is the first operator in the chain
+            op_id: 0,
 
             receiver,
             batch_iter: None,
@@ -291,6 +295,10 @@ impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send> Operator<Out>
 
     fn structure(&self) -> BlockStructure {
         self.receiver.structure()
+    }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
     }
 }
 

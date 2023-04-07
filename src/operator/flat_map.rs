@@ -19,6 +19,7 @@ where
     F: Fn(In) -> Iter + Clone + Send + 'static,
 {
     prev: PreviousOperators,
+    op_id: u32,
     f: F,
     // used to store elements that have not been returned by next() yet
     // buffer: VecDeque<StreamElement<NewOut>>,
@@ -46,6 +47,7 @@ where
     fn clone(&self) -> Self {
         Self {
             prev: self.prev.clone(),
+            op_id: self.op_id,
             f: self.f.clone(),
             frontiter: None,
             timestamp: self.timestamp,
@@ -85,8 +87,10 @@ where
     F: Fn(In) -> Iter + Clone + Send + 'static,
 {
     pub(super) fn new(prev: PreviousOperators, f: F) -> Self {
+        let op_id = prev.get_op_id() + 1;
         Self {
             prev,
+            op_id,
             f,
             frontiter: None,
             #[cfg(feature = "timestamp")]
@@ -154,6 +158,10 @@ where
             .structure()
             .add_operator(OperatorStructure::new::<Out, _>("FlatMap"))
     }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
+    }
 }
 
 impl<Out: Data, OperatorChain> Stream<Out, OperatorChain>
@@ -204,6 +212,7 @@ where
     F: Fn((&Key, In)) -> Iter + Clone + Send + 'static,
 {
     prev: PreviousOperators,
+    op_id: u32,
     f: F,
     // used to store elements that have not been returned by next() yet
     // buffer: VecDeque<StreamElement<NewOut>>,
@@ -232,6 +241,7 @@ where
     fn clone(&self) -> Self {
         Self {
             prev: self.prev.clone(),
+            op_id: self.op_id,
             f: self.f.clone(),
             frontiter: None,
             timestamp: self.timestamp,
@@ -276,8 +286,10 @@ where
     F: Fn((&Key, In)) -> Iter + Clone + Send + 'static,
 {
     fn new(prev: PreviousOperators, f: F) -> Self {
+        let op_id = prev.get_op_id() + 1;
         Self {
             prev,
+            op_id,
             f,
             frontiter: None,
             timestamp: None,
@@ -347,6 +359,10 @@ where
         self.prev
             .structure()
             .add_operator(OperatorStructure::new::<Out, _>("KeyedFlatMap"))
+    }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
     }
 }
 

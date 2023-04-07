@@ -15,10 +15,28 @@ where
     PreviousOperators: Operator<Out>,
 {
     prev: PreviousOperators,
+    op_id: u32,
     #[derivative(Debug = "ignore")]
     f: F,
     _out: PhantomData<Out>,
 }
+
+impl<Out: Data, F, PreviousOperators> ForEachSink<Out, F, PreviousOperators>
+where
+    F: FnMut(Out) + Send + Clone,
+    PreviousOperators: Operator<Out>,
+{
+    fn new(prev: PreviousOperators, f: F) -> Self {
+        let op_id = prev.get_op_id() + 1;
+        Self {
+            prev,
+            op_id,
+            f,
+            _out: PhantomData,
+        }
+    }
+}
+
 
 impl<Out: Data, F, PreviousOperators> Display for ForEachSink<Out, F, PreviousOperators>
 where
@@ -58,6 +76,10 @@ where
         operator.kind = OperatorKind::Sink;
         self.prev.structure().add_operator(operator)
     }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
+    }
 }
 
 impl<Out: Data, F, PreviousOperators> Sink for ForEachSink<Out, F, PreviousOperators>
@@ -88,11 +110,10 @@ where
     where
         F: FnMut(Out) + Send + Clone + 'static,
     {
-        self.add_operator(|prev| ForEachSink {
+        self.add_operator(|prev| ForEachSink::new(
             prev,
             f,
-            _out: Default::default(),
-        })
+        ))
         .finalize_block();
     }
 }
@@ -119,11 +140,10 @@ where
         F: FnMut((Key, Out)) + Send + Clone + 'static,
     {
         self.0
-            .add_operator(|prev| ForEachSink {
+            .add_operator(|prev| ForEachSink::new(
                 prev,
                 f,
-                _out: Default::default(),
-            })
+            ))
             .finalize_block();
     }
 }

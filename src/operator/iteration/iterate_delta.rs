@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::block::{BlockStructure, OperatorStructure};
 use crate::operator::iteration::IterationStateHandle;
 use crate::operator::{
-    ExchangeData, ExchangeDataKey, Operator, SingleStartBlockReceiverOperator, StreamElement,
+   ExchangeData, ExchangeDataKey, Operator, SingleStartBlockReceiverOperator, StreamElement,
 };
 use crate::scheduler::ExecutionMetadata;
 use crate::KeyedStream;
@@ -66,6 +66,18 @@ pub struct DeltaIterate<
     O: ExchangeData,
 > {
     prev: SingleStartBlockReceiverOperator<(Key, Msg<I, U, D, O>)>,
+    op_id: u32,
+}
+
+impl<Key: ExchangeData, I: ExchangeData, U: ExchangeData, D: ExchangeData, O: ExchangeData> DeltaIterate< Key, I, U, D, O> {
+    fn new(prev: SingleStartBlockReceiverOperator<(Key, Msg<I, U, D, O>)>) ->  Self {
+        let op_id = prev.get_op_id() + 1;
+        Self {
+            prev,
+            op_id,
+        }
+
+    }
 }
 
 impl<Key: ExchangeData, I: ExchangeData, U: ExchangeData, D: ExchangeData, O: ExchangeData>
@@ -83,6 +95,10 @@ impl<Key: ExchangeData, I: ExchangeData, U: ExchangeData, D: ExchangeData, O: Ex
         self.prev
             .structure()
             .add_operator(OperatorStructure::new::<(Key, U), _>("DeltaIterate"))
+    }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
     }
 }
 
@@ -158,7 +174,7 @@ where
                         .next()
                         .unwrap()
                         .to_keyed()
-                        .add_operator(|prev| DeltaIterate { prev }),
+                        .add_operator(|prev| DeltaIterate::new(prev)),
                 )
                 .map(|(_, v)| Msg::Delta(v))
                 .unkey();

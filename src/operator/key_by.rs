@@ -15,6 +15,7 @@ where
     OperatorChain: Operator<Out>,
 {
     prev: OperatorChain,
+    op_id: u32,
     #[derivative(Debug = "ignore")]
     keyer: Keyer,
     _key: PhantomData<Key>,
@@ -43,8 +44,10 @@ where
     OperatorChain: Operator<Out>,
 {
     pub fn new(prev: OperatorChain, keyer: Keyer) -> Self {
+        let op_id = prev.get_op_id() + 1;
         Self {
             prev,
+            op_id,
             keyer,
             _key: Default::default(),
             _out: Default::default(),
@@ -80,6 +83,10 @@ where
         self.prev
             .structure()
             .add_operator(OperatorStructure::new::<KeyValue<Key, Out>, _>("KeyBy"))
+    }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
     }
 }
 

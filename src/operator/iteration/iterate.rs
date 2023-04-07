@@ -37,6 +37,10 @@ pub struct Iterate<Out: ExchangeData, State: ExchangeData> {
     /// The coordinate of this replica.
     coord: Coord,
 
+    /// Operator id. 
+    // TODO: fix it
+    op_id:u32,
+
     /// Helper structure that manages the iteration's state.
     state: IterationStateHandler<State>,
 
@@ -85,6 +89,9 @@ impl<Out: ExchangeData, State: ExchangeData> Iterate<Out, State> {
             input_block_id,
             output_sender: None,
             output_block_id,
+
+            // TODO: Check this, is the first op in the chain?
+            op_id: 0,
 
             content: Default::default(),
             input_stash: Default::default(),
@@ -293,6 +300,10 @@ impl<Out: ExchangeData, State: ExchangeData + Sync> Operator<Out> for Iterate<Ou
             &NextStrategy::only_one(),
         ));
         BlockStructure::default().add_operator(operator)
+    }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
     }
 }
 

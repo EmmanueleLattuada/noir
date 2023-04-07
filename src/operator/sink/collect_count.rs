@@ -13,8 +13,24 @@ where
     PreviousOperators: Operator<usize>,
 {
     prev: PreviousOperators,
+    op_id: u32,
     result: usize,
     output: StreamOutputRef<usize>,
+}
+
+impl<PreviousOperators> CollectCountSink<PreviousOperators>
+where
+    PreviousOperators: Operator<usize>,
+{
+    fn new(prev: PreviousOperators, result: usize, output:StreamOutputRef<usize>) -> Self {
+        let op_id = prev.get_op_id() + 1;
+        Self {
+            prev,
+            op_id,
+            result,
+            output,
+        }
+    }
 }
 
 impl<PreviousOperators> Display for CollectCountSink<PreviousOperators>
@@ -54,6 +70,10 @@ where
         let mut operator = OperatorStructure::new::<usize, _>("CollectCountSink");
         operator.kind = OperatorKind::Sink;
         self.prev.structure().add_operator(operator)
+    }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
     }
 }
 
@@ -101,11 +121,11 @@ where
         let output = StreamOutputRef::default();
         self.add_operator(|prev| Fold::new(prev, 0, |acc, _| *acc += 1))
             .max_parallelism(1)
-            .add_operator(|prev| CollectCountSink {
+            .add_operator(|prev| CollectCountSink::new(
                 prev,
-                result: 0,
-                output: output.clone(),
-            })
+                0,
+                output.clone(),
+            ))
             .finalize_block();
         StreamOutput { result: output }
     }

@@ -12,8 +12,24 @@ where
     PreviousOperators: Operator<Out>,
 {
     prev: PreviousOperators,
+    op_id: u32,
     result: Option<Vec<Out>>,
     output: StreamOutputRef<Vec<Out>>,
+}
+
+impl<Out: ExchangeData, PreviousOperators> CollectVecSink<Out, PreviousOperators>
+where
+    PreviousOperators: Operator<Out>,
+{
+    fn new(prev: PreviousOperators, result: Option<Vec<Out>>, output: StreamOutputRef<Vec<Out>>) -> Self {
+        let op_id = prev.get_op_id() + 1;
+        Self {
+            prev,
+            op_id,
+            result,
+            output,
+        }
+    }
 }
 
 impl<Out: ExchangeData, PreviousOperators> Display for CollectVecSink<Out, PreviousOperators>
@@ -58,6 +74,10 @@ where
         let mut operator = OperatorStructure::new::<Out, _>("CollectVecSink");
         operator.kind = OperatorKind::Sink;
         self.prev.structure().add_operator(operator)
+    }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
     }
 }
 
@@ -104,11 +124,11 @@ where
     pub fn collect_vec(self) -> StreamOutput<Vec<Out>> {
         let output = StreamOutputRef::default();
         self.max_parallelism(1)
-            .add_operator(|prev| CollectVecSink {
+            .add_operator(|prev| CollectVecSink::new(
                 prev,
-                result: Some(Vec::new()),
-                output: output.clone(),
-            })
+                Some(Vec::new()),
+                output.clone(),
+            ))
             .finalize_block();
         StreamOutput { result: output }
     }

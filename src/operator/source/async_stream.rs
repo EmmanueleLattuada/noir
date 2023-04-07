@@ -20,6 +20,8 @@ where
     #[derivative(Debug = "ignore")]
     inner: S,
     terminated: bool,
+
+    op_id: u32,
 }
 
 impl<Out: Data, S> Display for AsyncStreamSource<Out, S>
@@ -56,6 +58,8 @@ where
         Self {
             inner,
             terminated: false,
+            // This is the first operator in the chain
+            op_id: 0,
         }
     }
 }
@@ -94,6 +98,10 @@ where
         let mut operator = OperatorStructure::new::<Out, _>("AsyncStreamSource");
         operator.kind = OperatorKind::Source;
         BlockStructure::default().add_operator(operator)
+    }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
     }
 }
 

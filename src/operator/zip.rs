@@ -12,6 +12,7 @@ use crate::stream::Stream;
 #[derive(Clone)]
 pub struct Zip<Out1: ExchangeData, Out2: ExchangeData> {
     prev: MultipleStartBlockReceiverOperator<Out1, Out2>,
+    op_id: u32,
     stash1: VecDeque<StreamElement<Out1>>,
     stash2: VecDeque<StreamElement<Out2>>,
     prev_block_id1: BlockId,
@@ -45,6 +46,8 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Zip<Out1, Out2> {
                 right_cache,
                 state_lock,
             ),
+            // Since previous operator is the first in the chain, this will have op_id 1
+            op_id: 1,
             stash1: Default::default(),
             stash2: Default::default(),
             prev_block_id1,
@@ -119,6 +122,10 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Operator<(Out1, Out2)> for Zip<Out1
             .receivers
             .push(OperatorReceiver::new::<Out2>(self.prev_block_id2));
         BlockStructure::default().add_operator(operator)
+    }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
     }
 }
 

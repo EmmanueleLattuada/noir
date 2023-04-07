@@ -20,6 +20,7 @@ pub struct ChannelSource<Out: Data> {
     rx: Receiver<Out>,
     terminated: bool,
     retry_count: u8,
+    op_id: u32,
 }
 
 impl<Out: Data> Display for ChannelSource<Out> {
@@ -53,6 +54,8 @@ impl<Out: Data> ChannelSource<Out> {
             rx,
             terminated: false,
             retry_count: 0,
+            // This is the first operator in the chain
+            op_id: 0,
         };
 
         (tx, s)
@@ -116,6 +119,10 @@ impl<Out: Data + core::fmt::Debug> Operator<Out> for ChannelSource<Out> {
         let mut operator = OperatorStructure::new::<Out, _>("ChannelSource");
         operator.kind = OperatorKind::Source;
         BlockStructure::default().add_operator(operator)
+    }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
     }
 }
 

@@ -57,6 +57,8 @@ struct JoinLocalHash<
     prev: OperatorChain,
     coord: Coord,
 
+    op_id: u32,
+
     /// The content of the left side.
     left: SideHashMap<Key, Out1>,
     /// The content of the right side.
@@ -103,8 +105,10 @@ impl<
     > JoinLocalHash<Key, Out1, Out2, Keyer1, Keyer2, OperatorChain>
 {
     fn new(prev: OperatorChain, variant: JoinVariant, keyer1: Keyer1, keyer2: Keyer2) -> Self {
+        let op_id = prev.get_op_id() + 1;
         Self {
             prev,
+            op_id,
             coord: Default::default(),
             left: Default::default(),
             right: Default::default(),
@@ -280,6 +284,10 @@ impl<
             KeyValue<Key, OuterJoinTuple<Out1, Out2>>,
             _,
         >("JoinLocalHash"))
+    }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
     }
 }
 

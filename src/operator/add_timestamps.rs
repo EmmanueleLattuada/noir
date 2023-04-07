@@ -14,6 +14,7 @@ where
     WatermarkGen: FnMut(&Out, &Timestamp) -> Option<Timestamp> + Clone + Send + 'static,
 {
     prev: OperatorChain,
+    op_id: u32,
     timestamp_gen: TimestampGen,
     watermark_gen: WatermarkGen,
     pending_watermark: Option<Timestamp>,
@@ -40,8 +41,10 @@ where
     WatermarkGen: FnMut(&Out, &Timestamp) -> Option<Timestamp> + Clone + Send + 'static,
 {
     fn new(prev: OperatorChain, timestamp_gen: TimestampGen, watermark_gen: WatermarkGen) -> Self {
+        let op_id = prev.get_op_id() + 1;
         Self {
             prev,
+            op_id,
             timestamp_gen,
             watermark_gen,
             pending_watermark: None,
@@ -87,6 +90,10 @@ where
             .structure()
             .add_operator(OperatorStructure::new::<Out, _>("AddTimestamp"))
     }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
+    }
 }
 
 #[derive(Clone)]
@@ -95,6 +102,7 @@ where
     OperatorChain: Operator<Out>,
 {
     prev: OperatorChain,
+    op_id: u32,
     _out: PhantomData<Out>,
 }
 
@@ -112,8 +120,10 @@ where
     OperatorChain: Operator<Out>,
 {
     fn new(prev: OperatorChain) -> Self {
+        let op_id = prev.get_op_id() + 1;
         Self {
             prev,
+            op_id,
             _out: Default::default(),
         }
     }
@@ -142,6 +152,10 @@ where
         self.prev
             .structure()
             .add_operator(OperatorStructure::new::<Out, _>("DropTimestamp"))
+    }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
     }
 }
 

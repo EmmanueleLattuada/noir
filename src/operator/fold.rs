@@ -14,6 +14,7 @@ where
     PreviousOperators: Operator<Out>,
 {
     prev: PreviousOperators,
+    op_id: u32,
     #[derivative(Debug = "ignore")]
     fold: F,
     init: NewOut,
@@ -48,8 +49,10 @@ where
     F: Fn(&mut NewOut, Out) + Send + Clone,
 {
     pub(super) fn new(prev: PreviousOperators, init: NewOut, fold: F) -> Self {
+        let op_id = prev.get_op_id() + 1;
         Fold {
             prev,
+            op_id,
             fold,
             init,
             accumulator: None,
@@ -130,6 +133,10 @@ where
         self.prev
             .structure()
             .add_operator(OperatorStructure::new::<NewOut, _>("Fold"))
+    }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
     }
 }
 

@@ -14,6 +14,7 @@ where
     PreviousOperators: Operator<Out>,
 {
     prev: PreviousOperators,
+    op_id: u32,
     #[derivative(Debug = "ignore")]
     f: F,
     _out: PhantomData<Out>,
@@ -43,9 +44,11 @@ where
     PreviousOperators: Operator<Out>,
 {
     fn new(prev: PreviousOperators, f: F) -> Self {
+        let op_id = prev.get_op_id() + 1;
         Self {
             prev,
             f,
+            op_id,
             _out: Default::default(),
             _new_out: Default::default(),
         }
@@ -71,6 +74,10 @@ where
         self.prev
             .structure()
             .add_operator(OperatorStructure::new::<NewOut, _>("Map"))
+    }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
     }
 }
 

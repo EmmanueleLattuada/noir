@@ -24,6 +24,7 @@ pub struct FileSource {
     end: usize,
     terminated: bool,
     coord: Option<Coord>,
+    op_id:u32,
 }
 
 impl Display for FileSource {
@@ -62,6 +63,8 @@ impl FileSource {
             end: 0,
             terminated: false,
             coord: None,
+            // This is the first operator in the chain
+            op_id: 0,
         }
     }
 }
@@ -147,6 +150,10 @@ impl Operator<String> for FileSource {
         operator.kind = OperatorKind::Source;
         BlockStructure::default().add_operator(operator)
     }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
+    }
 }
 
 impl Clone for FileSource {
@@ -162,6 +169,8 @@ impl Clone for FileSource {
             end: 0,
             terminated: false,
             coord: None,
+            // This is the first operator in the chain
+            op_id: 0,
         }
     }
 }

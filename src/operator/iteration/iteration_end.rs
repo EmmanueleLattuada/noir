@@ -19,6 +19,7 @@ where
     ///
     /// At the end of this chain there should be the local reduction.
     prev: OperatorChain,
+    op_id: u32,
     /// Whether, since the last `IterEnd`, an element has been received.
     ///
     /// If two `IterEnd` are received in a row it means that the local reduction didn't happen since
@@ -52,8 +53,10 @@ where
     OperatorChain: Operator<DeltaUpdate>,
 {
     pub fn new(prev: OperatorChain, leader_block_id: BlockId) -> Self {
+        let op_id = prev.get_op_id() + 1;
         Self {
             prev,
+            op_id,
             has_received_item: false,
             leader_block_id,
             leader_sender: None,
@@ -131,5 +134,9 @@ where
             &NextStrategy::only_one(),
         ));
         self.prev.structure().add_operator(operator)
+    }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
     }
 }

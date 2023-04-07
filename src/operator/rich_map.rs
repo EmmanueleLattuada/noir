@@ -14,6 +14,7 @@ where
     OperatorChain: Operator<KeyValue<Key, Out>>,
 {
     prev: OperatorChain,
+    op_id: u32,
     maps_fn: HashMap<Key, F, crate::block::GroupHasherBuilder>,
     init_map: F,
     _out: PhantomData<Out>,
@@ -29,6 +30,7 @@ where
     fn clone(&self) -> Self {
         Self {
             prev: self.prev.clone(),
+            op_id: self.op_id,
             maps_fn: self.maps_fn.clone(),
             init_map: self.init_map.clone(),
             _out: self._out,
@@ -61,8 +63,10 @@ where
     OperatorChain: Operator<KeyValue<Key, Out>>,
 {
     fn new(prev: OperatorChain, f: F) -> Self {
+        let op_id = prev.get_op_id() + 1;
         Self {
             prev,
+            op_id,
             maps_fn: Default::default(),
             init_map: f,
             _out: Default::default(),
@@ -105,6 +109,10 @@ where
         self.prev
             .structure()
             .add_operator(OperatorStructure::new::<NewOut, _>("RichMap"))
+    }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
     }
 }
 

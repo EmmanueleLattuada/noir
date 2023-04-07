@@ -35,6 +35,7 @@ where
     OperatorChain: Operator<Out>,
 {
     prev: OperatorChain,
+    op_id: u32,
     map_fn: F,
     _out: PhantomData<Out>,
     _new_out: PhantomData<NewOut>,
@@ -63,8 +64,10 @@ where
     OperatorChain: Operator<Out>,
 {
     fn new(prev: OperatorChain, f: F) -> Self {
+        let op_id = prev.get_op_id() + 1;
         Self {
             prev,
+            op_id,
             map_fn: f,
             _out: Default::default(),
             _new_out: Default::default(),
@@ -91,6 +94,10 @@ where
         self.prev
             .structure()
             .add_operator(OperatorStructure::new::<NewOut, _>("RichMapCustom"))
+    }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
     }
 }
 

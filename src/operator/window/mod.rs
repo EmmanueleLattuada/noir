@@ -105,6 +105,8 @@ where
 {
     /// The previous operators in the chain.
     prev: Prev,
+    /// Operator id
+    op_id: u32,
     /// The name of the actual operator that this one abstracts.
     ///
     /// It is used only for tracing purposes.
@@ -199,10 +201,18 @@ where
             .structure()
             .add_operator(OperatorStructure::new::<KeyValue<Key, Out>, _>(&self.name))
     }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
+    }
 }
 
 impl<Key, In, Out, Prev, W> WindowOperator<Key, In, Out, Prev, W>
 where
+    Prev: Operator<KeyValue<Key, In>>,
+    Key: DataKey,
+    In: Data,
+    Out: Data,
     W: WindowManager,
 {
     pub(crate) fn new(
@@ -210,8 +220,10 @@ where
         name: String,
         manager: KeyedWindowManager<Key, In, Out, W>,
     ) -> Self {
+        let op_id = prev.get_op_id() + 1;
         Self {
-            prev,
+            prev,            
+            op_id,
             name,
             manager,
             output_buffer: Default::default(),

@@ -26,6 +26,7 @@ where
     OperatorChain: Operator<KeyValue<Key, MergeElement<Out, Out2>>>,
 {
     prev: OperatorChain,
+    op_id: u32,
     /// Elements of the left side to be processed.
     left: VecDeque<(Timestamp, KeyValue<Key, Out>)>,
     /// Elements of the right side that might still be matched.
@@ -69,8 +70,10 @@ where
     OperatorChain: Operator<KeyValue<Key, MergeElement<Out, Out2>>>,
 {
     fn new(prev: OperatorChain, lower_bound: Timestamp, upper_bound: Timestamp) -> Self {
+        let op_id = prev.get_op_id() + 1;
         Self {
             prev,
+            op_id,
             left: Default::default(),
             right: Default::default(),
             buffer: Default::default(),
@@ -196,6 +199,10 @@ where
             .add_operator(OperatorStructure::new::<KeyValue<Key, (Out, Out2)>, _>(
                 "IntervalJoin",
             ))
+    }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
     }
 }
 

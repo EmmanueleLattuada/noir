@@ -29,6 +29,7 @@ where
     OperatorChain: Operator<Out>,
 {
     prev: OperatorChain,
+    op_id: u32,
     coord: Option<Coord>,
     next_strategy: NextStrategy<Out, IndexFn>,
     batch_mode: BatchMode,
@@ -63,8 +64,10 @@ where
         next_strategy: NextStrategy<Out, IndexFn>,
         batch_mode: BatchMode,
     ) -> Self {
+        let op_id = prev.get_op_id() + 1;
         Self {
             prev,
+            op_id,
             coord: None,
             next_strategy,
             batch_mode,
@@ -210,6 +213,10 @@ where
             }
         }
         self.prev.structure().add_operator(operator)
+    }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
     }
 }
 

@@ -45,6 +45,9 @@ where
     scratch: Vec<TimestampedItem<Out>>,
     last_watermark: Option<Timestamp>,
     prev: PreviousOperators,
+
+    op_id: u32,
+
     received_end: bool,
 }
 
@@ -67,11 +70,15 @@ where
     PreviousOperators: Operator<Out>,
 {
     pub(crate) fn new(prev: PreviousOperators) -> Self {
+        let op_id = prev.get_op_id() + 1;
         Self {
             buffer: Default::default(),
             scratch: Default::default(),
             last_watermark: None,
             prev,
+
+            op_id,
+
             received_end: false,
         }
     }
@@ -131,6 +138,10 @@ where
         self.prev
             .structure()
             .add_operator(OperatorStructure::new::<Out, _>("Reorder"))
+    }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
     }
 }
 

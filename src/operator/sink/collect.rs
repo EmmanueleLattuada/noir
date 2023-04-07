@@ -13,8 +13,24 @@ where
     PreviousOperators: Operator<Out>,
 {
     prev: PreviousOperators,
+    op_id: u32,
     output: StreamOutputRef<C>,
     _out: PhantomData<Out>,
+}
+
+impl<Out: ExchangeData, C: FromIterator<Out> + Send, PreviousOperators> Collect<Out, C, PreviousOperators>
+where
+    PreviousOperators: Operator<Out>,
+{
+    fn new(prev: PreviousOperators, output: StreamOutputRef<C>) -> Self {
+        let op_id = prev.get_op_id() + 1;
+        Self {
+            prev,
+            op_id,
+            output,
+            _out: PhantomData,
+        }
+    }
 }
 
 impl<Out: ExchangeData, C: FromIterator<Out> + Send, PreviousOperators> Display
@@ -59,6 +75,10 @@ where
         let mut operator = OperatorStructure::new::<Out, _>("Collect");
         operator.kind = OperatorKind::Sink;
         self.prev.structure().add_operator(operator)
+    }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
     }
 }
 
@@ -108,11 +128,10 @@ where
     pub fn collect<C: FromIterator<Out> + Send + 'static>(self) -> StreamOutput<C> {
         let output = StreamOutputRef::default();
         self.max_parallelism(1)
-            .add_operator(|prev| Collect {
+            .add_operator(|prev| Collect::new(
                 prev,
-                output: output.clone(),
-                _out: PhantomData,
-            })
+                output.clone(),
+            ))
             .finalize_block();
         StreamOutput { result: output }
     }

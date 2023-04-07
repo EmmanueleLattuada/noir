@@ -59,6 +59,10 @@ impl<Out: Data> Operator<Out> for FakeOperator<Out> {
     fn structure(&self) -> BlockStructure {
         BlockStructure::default().add_operator(OperatorStructure::new::<Out, _>("FakeOperator"))
     }
+
+    fn get_op_id(&self) -> &u32 {
+        &0
+    }
 }
 
 impl<Out: Data> Source<Out> for FakeOperator<Out> {

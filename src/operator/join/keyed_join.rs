@@ -49,6 +49,7 @@ impl<Key: DataKey, Out> Default for SideHashMap<Key, Out> {
 #[derive(Clone)]
 struct JoinKeyedOuter<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> {
     prev: MultipleStartBlockReceiverOperator<KeyValue<K, V1>, KeyValue<K, V2>>,
+    op_id: u32,
     variant: JoinVariant,
     _k: PhantomData<K>,
     _v1: PhantomData<V1>,
@@ -72,8 +73,10 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> JoinKeyedOut
         O1: Operator<KeyValue<K, V1>> + 'static,
         O2: Operator<KeyValue<K, V2>> + 'static,
     {
+        let op_id = prev.get_op_id() + 1;
         JoinKeyedOuter {
             prev,
+            op_id,
             variant,
             _k: PhantomData,
             _v1: PhantomData,
@@ -249,11 +252,16 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
             _,
         >("JoinKeyed"))
     }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
+    }
 }
 
 #[derive(Clone)]
 struct JoinKeyedInner<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> {
     prev: MultipleStartBlockReceiverOperator<KeyValue<K, V1>, KeyValue<K, V2>>,
+    op_id: u32,
     _k: PhantomData<K>,
     _v1: PhantomData<V1>,
     _v2: PhantomData<V2>,
@@ -295,8 +303,10 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
         O1: Operator<KeyValue<K, V1>> + 'static,
         O2: Operator<KeyValue<K, V2>> + 'static,
     {
+        let op_id = prev.get_op_id() + 1;
         JoinKeyedInner {
             prev,
+            op_id,
             _k: PhantomData,
             _v1: PhantomData,
             _v2: PhantomData,
@@ -391,6 +401,10 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
             KeyValue<K, InnerJoinTuple<V1, V2>>,
             _,
         >("JoinKeyed"))
+    }
+
+    fn get_op_id(&self) -> &u32 {
+        &self.op_id
     }
 }
 
