@@ -7,10 +7,12 @@ use std::path::PathBuf;
 
 use crate::block::{BlockStructure, OperatorKind, OperatorStructure};
 use crate::network::Coord;
+use crate::network::OperatorCoord;
 use crate::operator::source::Source;
 use crate::operator::{Operator, StreamElement};
 use crate::scheduler::ExecutionMetadata;
 use crate::Stream;
+use crate::scheduler::OperatorId;
 
 /// Source that reads a text file line-by-line.
 ///
@@ -24,7 +26,7 @@ pub struct FileSource {
     end: usize,
     terminated: bool,
     coord: Option<Coord>,
-    op_id:u32,
+    operator_coord: OperatorCoord,
 }
 
 impl Display for FileSource {
@@ -63,8 +65,9 @@ impl FileSource {
             end: 0,
             terminated: false,
             coord: None,
-            // This is the first operator in the chain
-            op_id: 0,
+            // This is the first operator in the chain so operator_id = 0
+            // Other fields will be set in setup method
+            operator_coord: OperatorCoord::new(0, 0, 0, 0),
         }
     }
 }
@@ -112,6 +115,10 @@ impl Operator<String> for FileSource {
         }
         self.coord = Some(metadata.coord);
         self.reader = Some(reader);
+
+        self.operator_coord.block_id = metadata.coord.block_id;
+        self.operator_coord.host_id = metadata.coord.host_id;
+        self.operator_coord.replica_id = metadata.coord.replica_id;
     }
 
     fn next(&mut self) -> StreamElement<String> {
@@ -151,8 +158,8 @@ impl Operator<String> for FileSource {
         BlockStructure::default().add_operator(operator)
     }
 
-    fn get_op_id(&self) -> &u32 {
-        &self.op_id
+    fn get_op_id(&self) -> OperatorId {
+        self.operator_coord.operator_id
     }
 }
 
@@ -169,8 +176,7 @@ impl Clone for FileSource {
             end: 0,
             terminated: false,
             coord: None,
-            // This is the first operator in the chain
-            op_id: 0,
+            operator_coord: OperatorCoord::new(0, 0, 0, 0),
         }
     }
 }

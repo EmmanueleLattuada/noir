@@ -2,10 +2,11 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
 
 use crate::block::{BlockStructure, OperatorStructure};
+use crate::network::OperatorCoord;
 use crate::operator::merge::MergeElement;
 use crate::operator::reorder::Reorder;
 use crate::operator::{ExchangeData, ExchangeDataKey, Operator, StreamElement, Timestamp};
-use crate::scheduler::ExecutionMetadata;
+use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::stream::{KeyValue, KeyedStream, Stream};
 
 type OutputElement<Key, Out, Out2> = KeyValue<Key, (Out, Out2)>;
@@ -26,7 +27,7 @@ where
     OperatorChain: Operator<KeyValue<Key, MergeElement<Out, Out2>>>,
 {
     prev: OperatorChain,
-    op_id: u32,
+    operator_coord: OperatorCoord,
     /// Elements of the left side to be processed.
     left: VecDeque<(Timestamp, KeyValue<Key, Out>)>,
     /// Elements of the right side that might still be matched.
@@ -73,7 +74,9 @@ where
         let op_id = prev.get_op_id() + 1;
         Self {
             prev,
-            op_id,
+            // This will be set in setup method
+            operator_coord: OperatorCoord::new(0, 0, 0, op_id),
+
             left: Default::default(),
             right: Default::default(),
             buffer: Default::default(),
@@ -149,6 +152,10 @@ where
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
+
+        self.operator_coord.block_id = metadata.coord.block_id;
+        self.operator_coord.host_id = metadata.coord.host_id;
+        self.operator_coord.replica_id = metadata.coord.replica_id;
     }
 
     fn next(&mut self) -> StreamElement<(Key, (Out, Out2))> {
@@ -201,8 +208,8 @@ where
             ))
     }
 
-    fn get_op_id(&self) -> &u32 {
-        &self.op_id
+    fn get_op_id(&self) -> OperatorId {
+        self.operator_coord.operator_id
     }
 }
 

@@ -3,16 +3,17 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use crate::block::{BlockStructure, NextStrategy, OperatorReceiver, OperatorStructure};
+use crate::network::OperatorCoord;
 use crate::operator::iteration::IterationStateLock;
 use crate::operator::start::{MultipleStartBlockReceiverOperator, StartBlock, TwoSidesItem};
 use crate::operator::{ExchangeData, Operator, StreamElement};
-use crate::scheduler::{BlockId, ExecutionMetadata};
+use crate::scheduler::{BlockId, ExecutionMetadata, OperatorId};
 use crate::stream::Stream;
 
 #[derive(Clone)]
 pub struct Zip<Out1: ExchangeData, Out2: ExchangeData> {
     prev: MultipleStartBlockReceiverOperator<Out1, Out2>,
-    op_id: u32,
+    operator_coord: OperatorCoord,
     stash1: VecDeque<StreamElement<Out1>>,
     stash2: VecDeque<StreamElement<Out2>>,
     prev_block_id1: BlockId,
@@ -47,7 +48,8 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Zip<Out1, Out2> {
                 state_lock,
             ),
             // Since previous operator is the first in the chain, this will have op_id 1
-            op_id: 1,
+            // Other fields will be set in setup method
+            operator_coord: OperatorCoord::new(0, 0, 0, 1),
             stash1: Default::default(),
             stash2: Default::default(),
             prev_block_id1,
@@ -59,6 +61,10 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Zip<Out1, Out2> {
 impl<Out1: ExchangeData, Out2: ExchangeData> Operator<(Out1, Out2)> for Zip<Out1, Out2> {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
+
+        self.operator_coord.block_id = metadata.coord.block_id;
+        self.operator_coord.host_id = metadata.coord.host_id;
+        self.operator_coord.replica_id = metadata.coord.replica_id;
     }
 
     #[inline]
@@ -124,8 +130,8 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Operator<(Out1, Out2)> for Zip<Out1
         BlockStructure::default().add_operator(operator)
     }
 
-    fn get_op_id(&self) -> &u32 {
-        &self.op_id
+    fn get_op_id(&self) -> OperatorId {
+        self.operator_coord.operator_id
     }
 }
 

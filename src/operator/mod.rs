@@ -14,7 +14,7 @@ pub(crate) use start::*;
 pub use rich_map_custom::ElementGenerator;
 
 use crate::block::BlockStructure;
-use crate::scheduler::ExecutionMetadata;
+use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::stream::KeyValue;
 
 #[cfg(feature = "timestamp")]
@@ -141,7 +141,7 @@ pub trait Operator<Out: Data>: Clone + Send + Display {
     fn structure(&self) -> BlockStructure;
 
     /// Return the operator id: this identifies the operator inside the chain
-    fn get_op_id(&self) -> &u32;
+    fn get_op_id(&self) -> OperatorId;
 }
 
 impl<Out> StreamElement<Out> {

@@ -6,7 +6,7 @@ pub(crate) use network_channel::*;
 pub(crate) use topology::*;
 
 use crate::operator::StreamElement;
-use crate::scheduler::{BlockId, HostId, ReplicaId};
+use crate::scheduler::{BlockId, HostId, ReplicaId, OperatorId};
 
 mod demultiplexer;
 mod multiplexer;
@@ -63,6 +63,21 @@ pub struct Coord {
     pub host_id: HostId,
     /// The identifier of the replica inside the host.
     pub replica_id: ReplicaId,
+}
+
+/// Coordinates that identify an operator inside the network.
+#[derive(
+    Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Default, Deserialize, Serialize,
+)]
+pub(crate) struct OperatorCoord {
+    /// The identifier of the block the replicas works on.
+    pub(crate) block_id: BlockId,
+    /// The identifier of where the replica is located.
+    pub(crate) host_id: HostId,
+    /// The identifier of the replica inside the host.
+    pub(crate) replica_id: ReplicaId,
+    /// The identifier of the operator inside the chain
+    pub(crate) operator_id: OperatorId,
 }
 
 /// The identifier of a single receiver endpoint of a replicated block.
@@ -136,6 +151,17 @@ impl Coord {
             block_id,
             host_id,
             replica_id,
+        }
+    }
+}
+
+impl OperatorCoord {
+    pub fn new(block_id: BlockId, host_id: HostId, replica_id: ReplicaId, operator_id: OperatorId) -> Self {
+        Self {
+            block_id,
+            host_id,
+            replica_id,
+            operator_id,
         }
     }
 }

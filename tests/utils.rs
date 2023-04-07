@@ -91,8 +91,8 @@ impl<Out: Data, PreviousOperator: Operator<Out>> Operator<Out>
         Default::default()
     }
 
-    fn get_op_id(&self) -> &u32 {
-        &0
+    fn get_op_id(&self) -> CoordUInt {
+        0
     }
 }
 

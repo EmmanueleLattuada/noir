@@ -9,9 +9,10 @@ use csv::{Reader, ReaderBuilder, Terminator, Trim};
 use serde::Deserialize;
 
 use crate::block::{BlockStructure, OperatorKind, OperatorStructure};
+use crate::network::OperatorCoord;
 use crate::operator::source::Source;
 use crate::operator::{Data, Operator, StreamElement};
-use crate::scheduler::ExecutionMetadata;
+use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::Stream;
 
 /// Wrapper that limits the bytes that can be read from a type that implements `io::Read`.
@@ -96,7 +97,7 @@ pub struct CsvSource<Out: Data + for<'a> Deserialize<'a>> {
     /// Whether the reader has terminated its job.
     terminated: bool,
     
-    op_id: u32,
+    operator_coord: OperatorCoord,
 
     _out: PhantomData<Out>,
 }
@@ -146,8 +147,9 @@ impl<Out: Data + for<'a> Deserialize<'a>> CsvSource<Out> {
             csv_reader: None,
             options: Default::default(),
             terminated: false,
-            // This is the first operator in the chain
-            op_id: 0,
+            // This is the first operator in the chain so operator_id = 0
+            // Other fields will be set in setup method
+            operator_coord: OperatorCoord::new(0, 0, 0, 0),
             _out: PhantomData,
         }
     }
@@ -374,6 +376,10 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
         }
 
         self.csv_reader = Some(csv_reader);
+
+        self.operator_coord.block_id = metadata.coord.block_id;
+        self.operator_coord.host_id = metadata.coord.host_id;
+        self.operator_coord.replica_id = metadata.coord.replica_id;
     }
 
     fn next(&mut self) -> StreamElement<Out> {
@@ -400,8 +406,8 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
         BlockStructure::default().add_operator(operator)
     }
 
-    fn get_op_id(&self) -> &u32 {
-        &self.op_id
+    fn get_op_id(&self) -> OperatorId {
+        self.operator_coord.operator_id
     }
 }
 
@@ -416,7 +422,7 @@ impl<Out: Data + for<'a> Deserialize<'a>> Clone for CsvSource<Out> {
             csv_reader: None,
             options: self.options.clone(),
             terminated: false,
-            op_id: self.op_id,
+            operator_coord: self.operator_coord,
             _out: PhantomData,
         }
     }

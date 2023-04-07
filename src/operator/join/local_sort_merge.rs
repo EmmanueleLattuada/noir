@@ -5,11 +5,12 @@ use std::fmt::Display;
 use std::marker::PhantomData;
 
 use crate::block::{BlockStructure, OperatorStructure};
+use crate::network::OperatorCoord;
 use crate::operator::join::ship::{ShipBroadcastRight, ShipHash, ShipStrategy};
 use crate::operator::join::{InnerJoinTuple, JoinVariant, LeftJoinTuple, OuterJoinTuple};
 use crate::operator::start::{MultipleStartBlockReceiverOperator, TwoSidesItem};
 use crate::operator::{Data, ExchangeData, KeyerFn, Operator, StreamElement};
-use crate::scheduler::ExecutionMetadata;
+use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::stream::{KeyValue, KeyedStream, Stream};
 use crate::worker::replica_coord;
 
@@ -28,7 +29,7 @@ struct JoinLocalSortMerge<
 > {
     prev: OperatorChain,
 
-    op_id: u32,
+    operator_coord: OperatorCoord,
 
     keyer1: Keyer1,
     keyer2: Keyer2,
@@ -82,7 +83,8 @@ impl<
         let op_id = prev.get_op_id() + 1;
         Self {
             prev,
-            op_id,
+            // This will be set in setup method
+            operator_coord: OperatorCoord::new(0, 0, 0, op_id),
             keyer1,
             keyer2,
             left_ended: false,
@@ -168,6 +170,10 @@ impl<
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
+
+        self.operator_coord.block_id = metadata.coord.block_id;
+        self.operator_coord.host_id = metadata.coord.host_id;
+        self.operator_coord.replica_id = metadata.coord.replica_id;
     }
 
     fn next(&mut self) -> StreamElement<(Key, (Option<Out1>, Option<Out2>))> {
@@ -229,8 +235,8 @@ impl<
         >("JoinLocalSortMerge"))
     }
 
-    fn get_op_id(&self) -> &u32 {
-        &self.op_id
+    fn get_op_id(&self) -> OperatorId {
+        self.operator_coord.operator_id
     }
 }
 

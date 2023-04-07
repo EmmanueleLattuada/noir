@@ -5,12 +5,13 @@ use std::fmt::Display;
 use std::marker::PhantomData;
 
 use crate::block::{group_by_hash, BlockStructure, NextStrategy, OperatorStructure};
+use crate::network::OperatorCoord;
 use crate::operator::end::EndBlock;
 use crate::operator::key_by::KeyBy;
 use crate::operator::{
     Data, DataKey, ExchangeData, ExchangeDataKey, Operator, StreamElement, Timestamp,
 };
-use crate::scheduler::ExecutionMetadata;
+use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::stream::{KeyValue, KeyedStream, Stream};
 
 #[derive(Derivative)]
@@ -21,7 +22,7 @@ where
     PreviousOperators: Operator<KeyValue<Key, Out>>,
 {
     prev: PreviousOperators,
-    op_id: u32,
+    operator_coord: OperatorCoord,
     #[derivative(Debug = "ignore")]
     fold: F,
     init: NewOut,
@@ -60,7 +61,9 @@ where
         let op_id = prev.get_op_id() + 1;
         KeyedFold {
             prev,
-            op_id,
+            // This will be set in setup method
+            operator_coord: OperatorCoord::new(0,0,0,op_id),
+
             fold,
             init,
             accumulators: Default::default(),
@@ -96,6 +99,10 @@ where
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
+
+        self.operator_coord.block_id = metadata.coord.block_id;
+        self.operator_coord.host_id = metadata.coord.host_id;
+        self.operator_coord.replica_id = metadata.coord.replica_id;
     }
 
     #[inline]
@@ -166,8 +173,8 @@ where
             ))
     }
 
-    fn get_op_id(&self) -> &u32 {
-        &self.op_id
+    fn get_op_id(&self) -> OperatorId {
+        self.operator_coord.operator_id
     }
 }
 

@@ -7,8 +7,9 @@ mod inner {
     use std::marker::PhantomData;
 
     use crate::block::{BlockStructure, OperatorStructure};
+    use crate::network::OperatorCoord;
     use crate::operator::{Data, DataKey, Operator, StreamElement, Timestamp};
-    use crate::scheduler::ExecutionMetadata;
+    use crate::scheduler::{ExecutionMetadata, OperatorId};
     use crate::stream::{KeyValue, KeyedStream, Stream};
 
     #[derive(Clone, Derivative)]
@@ -21,7 +22,7 @@ mod inner {
         InnerIterator: Iterator,
     {
         prev: PreviousOperators,
-        op_id: u32,
+        operator_coord: OperatorCoord,
         // used to store elements that have not been returned by next() yet
         // buffer: VecDeque<StreamElement<NewOut>>,
         // Make an element of type `Out` iterable
@@ -65,7 +66,9 @@ mod inner {
             let op_id = prev.get_op_id() + 1;
             Self {
                 prev,
-                op_id,
+                // This will be set in setup method
+                operator_coord: OperatorCoord::new(0,0,0,op_id),
+
                 frontiter: None,
                 #[cfg(feature = "timestamp")]
                 timestamp: None,
@@ -85,6 +88,10 @@ mod inner {
     {
         fn setup(&mut self, metadata: &mut ExecutionMetadata) {
             self.prev.setup(metadata);
+
+            self.operator_coord.block_id = metadata.coord.block_id;
+            self.operator_coord.host_id = metadata.coord.host_id;
+            self.operator_coord.replica_id = metadata.coord.replica_id;
         }
 
         #[inline]
@@ -132,8 +139,8 @@ mod inner {
                 .add_operator(OperatorStructure::new::<Out, _>("Flatten"))
         }
 
-        fn get_op_id(&self) -> &u32 {
-            &self.op_id
+        fn get_op_id(&self) -> OperatorId {
+            self.operator_coord.operator_id
         }
     }
 
@@ -181,7 +188,7 @@ mod inner {
         InnerIterator: Iterator,
     {
         prev: PreviousOperators,
-        op_id: u32,
+        operator_coord: OperatorCoord,
         // used to store elements that have not been returned by next() yet
         // buffer: VecDeque<StreamElement<NewOut>>,
         // Make an element of type `Out` iterable
@@ -228,7 +235,9 @@ mod inner {
             let op_id = prev.get_op_id() + 1;
             Self {
                 prev,
-                op_id,
+                // This will be set in setup method
+                operator_coord: OperatorCoord::new(0,0,0,op_id),
+
                 frontiter: None,
                 timestamp: None,
                 _key: Default::default(),
@@ -249,6 +258,10 @@ mod inner {
     {
         fn setup(&mut self, metadata: &mut ExecutionMetadata) {
             self.prev.setup(metadata);
+
+            self.operator_coord.block_id = metadata.coord.block_id;
+            self.operator_coord.host_id = metadata.coord.host_id;
+            self.operator_coord.replica_id = metadata.coord.replica_id;
         }
 
         fn next(&mut self) -> StreamElement<KeyValue<Key, Out>> {
@@ -295,8 +308,8 @@ mod inner {
                 .add_operator(OperatorStructure::new::<Out, _>("KeyedFlatten"))
         }
 
-        fn get_op_id(&self) -> &u32 {
-            &self.op_id
+        fn get_op_id(&self) -> OperatorId {
+            self.operator_coord.operator_id
         }
     }
 

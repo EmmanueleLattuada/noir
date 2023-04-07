@@ -6,12 +6,12 @@ use std::{
 
 use crate::{
     block::{NextStrategy, OperatorStructure},
-    network::Coord,
+    network::{Coord, OperatorCoord},
     operator::{
         Data, DataKey, ExchangeData, MultipleStartBlockReceiverOperator, Operator, StartBlock,
         StreamElement, TwoSidesItem,
     },
-    KeyValue, KeyedStream,
+    KeyValue, KeyedStream, scheduler::OperatorId,
 };
 
 use super::{InnerJoinTuple, JoinVariant, OuterJoinTuple};
@@ -49,7 +49,7 @@ impl<Key: DataKey, Out> Default for SideHashMap<Key, Out> {
 #[derive(Clone)]
 struct JoinKeyedOuter<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> {
     prev: MultipleStartBlockReceiverOperator<KeyValue<K, V1>, KeyValue<K, V2>>,
-    op_id: u32,
+    operator_coord: OperatorCoord,
     variant: JoinVariant,
     _k: PhantomData<K>,
     _v1: PhantomData<V1>,
@@ -76,7 +76,8 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> JoinKeyedOut
         let op_id = prev.get_op_id() + 1;
         JoinKeyedOuter {
             prev,
-            op_id,
+            // This will be set in setup method
+            operator_coord: OperatorCoord::new(0, 0, 0, op_id),
             variant,
             _k: PhantomData,
             _v1: PhantomData,
@@ -211,6 +212,10 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
     fn setup(&mut self, metadata: &mut crate::ExecutionMetadata) {
         self.prev.setup(metadata);
         self.coord = Some(metadata.coord);
+
+        self.operator_coord.block_id = metadata.coord.block_id;
+        self.operator_coord.host_id = metadata.coord.host_id;
+        self.operator_coord.replica_id = metadata.coord.replica_id;
     }
 
     fn next(&mut self) -> crate::operator::StreamElement<KeyValue<K, OuterJoinTuple<V1, V2>>> {
@@ -253,15 +258,15 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
         >("JoinKeyed"))
     }
 
-    fn get_op_id(&self) -> &u32 {
-        &self.op_id
+    fn get_op_id(&self) -> OperatorId {
+        self.operator_coord.operator_id
     }
 }
 
 #[derive(Clone)]
 struct JoinKeyedInner<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> {
     prev: MultipleStartBlockReceiverOperator<KeyValue<K, V1>, KeyValue<K, V2>>,
-    op_id: u32,
+    operator_coord: OperatorCoord,
     _k: PhantomData<K>,
     _v1: PhantomData<V1>,
     _v2: PhantomData<V2>,
@@ -306,7 +311,8 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
         let op_id = prev.get_op_id() + 1;
         JoinKeyedInner {
             prev,
-            op_id,
+            // This will be set in setup method
+            operator_coord: OperatorCoord::new(0, 0, 0, op_id),
             _k: PhantomData,
             _v1: PhantomData,
             _v2: PhantomData,
@@ -367,6 +373,10 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
     fn setup(&mut self, metadata: &mut crate::ExecutionMetadata) {
         self.coord = Some(metadata.coord);
         self.prev.setup(metadata);
+
+        self.operator_coord.block_id = metadata.coord.block_id;
+        self.operator_coord.host_id = metadata.coord.host_id;
+        self.operator_coord.replica_id = metadata.coord.replica_id;
     }
 
     fn next(&mut self) -> crate::operator::StreamElement<KeyValue<K, InnerJoinTuple<V1, V2>>> {
@@ -403,8 +413,8 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
         >("JoinKeyed"))
     }
 
-    fn get_op_id(&self) -> &u32 {
-        &self.op_id
+    fn get_op_id(&self) -> OperatorId {
+        self.operator_coord.operator_id
     }
 }
 

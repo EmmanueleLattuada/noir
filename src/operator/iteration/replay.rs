@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::block::{BlockStructure, NextStrategy, OperatorReceiver, OperatorStructure};
 use crate::environment::StreamEnvironmentInner;
-use crate::network::Coord;
+use crate::network::{Coord, OperatorCoord};
 use crate::operator::end::EndBlock;
 use crate::operator::iteration::iteration_end::IterationEndBlock;
 use crate::operator::iteration::leader::IterationLeader;
@@ -14,7 +14,7 @@ use crate::operator::iteration::{
     IterationResult, IterationStateHandle, IterationStateLock, StateFeedback,
 };
 use crate::operator::{Data, ExchangeData, Operator, StreamElement};
-use crate::scheduler::{BlockId, ExecutionMetadata};
+use crate::scheduler::{BlockId, ExecutionMetadata, OperatorId};
 use crate::stream::Stream;
 
 /// This is the first operator of the chain of blocks inside an iteration.
@@ -34,7 +34,7 @@ where
     /// The chain of previous operators where the dataset to replay is read from.
     prev: OperatorChain,
 
-    op_id: u32,
+    operator_coord: OperatorCoord,
 
     /// The content of the stream to replay.
     content: Vec<StreamElement<Out>>,
@@ -73,10 +73,10 @@ where
         Self {
             // these fields will be set inside the `setup` method
             coord: Coord::new(0, 0, 0),
+            operator_coord: OperatorCoord::new(0 , 0, 0, op_id),
 
             prev,
-            op_id,
-
+            
             content: Default::default(),
             content_index: 0,
             input_finished: false,
@@ -157,6 +157,10 @@ where
         self.coord = metadata.coord;
         self.prev.setup(metadata);
         self.state.setup(metadata);
+
+        self.operator_coord.block_id = metadata.coord.block_id;
+        self.operator_coord.host_id = metadata.coord.host_id;
+        self.operator_coord.replica_id = metadata.coord.replica_id;
     }
 
     fn next(&mut self) -> StreamElement<Out> {
@@ -205,8 +209,8 @@ where
         self.prev.structure().add_operator(operator)
     }
 
-    fn get_op_id(&self) -> &u32 {
-        &self.op_id
+    fn get_op_id(&self) -> OperatorId {
+        self.operator_coord.operator_id
     }
 }
 

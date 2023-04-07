@@ -2,7 +2,9 @@ use std::fmt::Display;
 use std::marker::PhantomData;
 
 use crate::block::{BlockStructure, OperatorStructure};
+use crate::network::OperatorCoord;
 use crate::operator::{Data, DataKey, Operator};
+use crate::scheduler::OperatorId;
 use crate::stream::{KeyValue, KeyedStream, Stream};
 use crate::ExecutionMetadata;
 
@@ -15,7 +17,7 @@ where
     PreviousOperator: Operator<In> + 'static,
 {
     prev: PreviousOperator,
-    op_id: u32,
+    operator_coord : OperatorCoord,
     predicate: Predicate,
     _in: PhantomData<In>,
     _out: PhantomData<Out>,
@@ -47,7 +49,9 @@ where
         let op_id = prev.get_op_id() + 1;
         Self {
             prev,
-            op_id,
+            // This will be set in setup method
+            operator_coord: OperatorCoord::new(0,0,0,op_id),
+
             predicate,
             _in: Default::default(),
             _out: Default::default(),
@@ -63,6 +67,10 @@ where
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
+
+        self.operator_coord.block_id = metadata.coord.block_id;
+        self.operator_coord.host_id = metadata.coord.host_id;
+        self.operator_coord.replica_id = metadata.coord.replica_id;
     }
 
     #[inline]
@@ -93,8 +101,8 @@ where
             .add_operator(OperatorStructure::new::<Out, _>("FilterMap"))
     }
 
-    fn get_op_id(&self) -> &u32 {
-        &self.op_id
+    fn get_op_id(&self) -> OperatorId {
+        self.operator_coord.operator_id
     }
 }
 

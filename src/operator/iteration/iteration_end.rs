@@ -1,7 +1,7 @@
 use crate::block::{BlockStructure, Connection, NextStrategy, OperatorStructure};
-use crate::network::{Coord, NetworkMessage, NetworkSender, ReceiverEndpoint};
+use crate::network::{Coord, NetworkMessage, NetworkSender, ReceiverEndpoint, OperatorCoord};
 use crate::operator::{ExchangeData, Operator, StreamElement};
-use crate::scheduler::{BlockId, ExecutionMetadata};
+use crate::scheduler::{BlockId, ExecutionMetadata, OperatorId};
 
 /// Similar to `EndBlock`, but tied specifically for the iterations.
 ///
@@ -19,7 +19,8 @@ where
     ///
     /// At the end of this chain there should be the local reduction.
     prev: OperatorChain,
-    op_id: u32,
+    /// Coordinate of the operator in the network
+    operator_coord: OperatorCoord,
     /// Whether, since the last `IterEnd`, an element has been received.
     ///
     /// If two `IterEnd` are received in a row it means that the local reduction didn't happen since
@@ -56,7 +57,8 @@ where
         let op_id = prev.get_op_id() + 1;
         Self {
             prev,
-            op_id,
+            // This will be set in setup method
+            operator_coord: OperatorCoord::new(0, 0, 0, op_id),
             has_received_item: false,
             leader_block_id,
             leader_sender: None,
@@ -92,6 +94,10 @@ where
 
         self.coord = metadata.coord;
         self.prev.setup(metadata);
+
+        self.operator_coord.block_id = metadata.coord.block_id;
+        self.operator_coord.host_id = metadata.coord.host_id;
+        self.operator_coord.replica_id = metadata.coord.replica_id;
     }
 
     fn next(&mut self) -> StreamElement<()> {
@@ -136,7 +142,7 @@ where
         self.prev.structure().add_operator(operator)
     }
 
-    fn get_op_id(&self) -> &u32 {
-        &self.op_id
+    fn get_op_id(&self) -> OperatorId {
+        self.operator_coord.operator_id
     }
 }

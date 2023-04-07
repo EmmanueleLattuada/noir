@@ -9,7 +9,9 @@ pub use descr::*;
 // pub use description::*;
 
 use crate::block::{GroupHasherBuilder, OperatorStructure};
+use crate::network::OperatorCoord;
 use crate::operator::{Data, DataKey, ExchangeData, Operator, StreamElement, Timestamp};
+use crate::scheduler::OperatorId;
 use crate::stream::{KeyValue, KeyedStream, Stream, WindowedStream};
 
 mod aggr;
@@ -105,8 +107,8 @@ where
 {
     /// The previous operators in the chain.
     prev: Prev,
-    /// Operator id
-    op_id: u32,
+    /// Operator coordinate
+    operator_coord: OperatorCoord,
     /// The name of the actual operator that this one abstracts.
     ///
     /// It is used only for tracing purposes.
@@ -144,6 +146,10 @@ where
 {
     fn setup(&mut self, metadata: &mut crate::ExecutionMetadata) {
         self.prev.setup(metadata);
+
+        self.operator_coord.block_id = metadata.coord.block_id;
+        self.operator_coord.host_id = metadata.coord.host_id;
+        self.operator_coord.replica_id = metadata.coord.replica_id;
     }
 
     fn next(&mut self) -> StreamElement<KeyValue<Key, Out>> {
@@ -202,8 +208,8 @@ where
             .add_operator(OperatorStructure::new::<KeyValue<Key, Out>, _>(&self.name))
     }
 
-    fn get_op_id(&self) -> &u32 {
-        &self.op_id
+    fn get_op_id(&self) -> OperatorId {
+        self.operator_coord.operator_id
     }
 }
 
@@ -222,8 +228,9 @@ where
     ) -> Self {
         let op_id = prev.get_op_id() + 1;
         Self {
-            prev,            
-            op_id,
+            prev,  
+            // This will be set in setup method          
+            operator_coord: OperatorCoord::new(0, 0, 0, op_id),
             name,
             manager,
             output_buffer: Default::default(),

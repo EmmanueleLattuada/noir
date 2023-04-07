@@ -3,8 +3,9 @@ use std::collections::VecDeque;
 use std::fmt::Display;
 
 use crate::block::{BlockStructure, OperatorStructure};
+use crate::network::OperatorCoord;
 use crate::operator::{Data, Operator, StreamElement, Timestamp};
-use crate::scheduler::ExecutionMetadata;
+use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::{KeyValue, KeyedStream, Stream};
 
 use super::DataKey;
@@ -46,7 +47,7 @@ where
     last_watermark: Option<Timestamp>,
     prev: PreviousOperators,
 
-    op_id: u32,
+    operator_coord: OperatorCoord,
 
     received_end: bool,
 }
@@ -77,7 +78,8 @@ where
             last_watermark: None,
             prev,
 
-            op_id,
+            // This will be set in setup method
+            operator_coord: OperatorCoord::new(0, 0, 0, op_id),
 
             received_end: false,
         }
@@ -90,6 +92,10 @@ where
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
+
+        self.operator_coord.block_id = metadata.coord.block_id;
+        self.operator_coord.host_id = metadata.coord.host_id;
+        self.operator_coord.replica_id = metadata.coord.replica_id;
     }
 
     #[inline]
@@ -140,8 +146,8 @@ where
             .add_operator(OperatorStructure::new::<Out, _>("Reorder"))
     }
 
-    fn get_op_id(&self) -> &u32 {
-        &self.op_id
+    fn get_op_id(&self) -> OperatorId {
+        self.operator_coord.operator_id
     }
 }
 

@@ -3,8 +3,9 @@ use std::fmt::Display;
 use std::marker::PhantomData;
 
 use crate::block::{BlockStructure, OperatorStructure};
+use crate::network::OperatorCoord;
 use crate::operator::{Data, DataKey, Operator, StreamElement};
-use crate::scheduler::ExecutionMetadata;
+use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::stream::{KeyValue, KeyedStream, Stream};
 
 #[derive(Debug)]
@@ -14,7 +15,7 @@ where
     OperatorChain: Operator<KeyValue<Key, Out>>,
 {
     prev: OperatorChain,
-    op_id: u32,
+    operator_coord: OperatorCoord,
     maps_fn: HashMap<Key, F, crate::block::GroupHasherBuilder>,
     init_map: F,
     _out: PhantomData<Out>,
@@ -30,7 +31,7 @@ where
     fn clone(&self) -> Self {
         Self {
             prev: self.prev.clone(),
-            op_id: self.op_id,
+            operator_coord: self.operator_coord,
             maps_fn: self.maps_fn.clone(),
             init_map: self.init_map.clone(),
             _out: self._out,
@@ -66,7 +67,10 @@ where
         let op_id = prev.get_op_id() + 1;
         Self {
             prev,
-            op_id,
+            
+            // This will be set in setup method
+            operator_coord: OperatorCoord::new(0, 0, 0, op_id),
+
             maps_fn: Default::default(),
             init_map: f,
             _out: Default::default(),
@@ -83,6 +87,10 @@ where
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
+
+        self.operator_coord.block_id = metadata.coord.block_id;
+        self.operator_coord.host_id = metadata.coord.host_id;
+        self.operator_coord.replica_id = metadata.coord.replica_id;
     }
 
     #[inline]
@@ -111,8 +119,8 @@ where
             .add_operator(OperatorStructure::new::<NewOut, _>("RichMap"))
     }
 
-    fn get_op_id(&self) -> &u32 {
-        &self.op_id
+    fn get_op_id(&self) -> OperatorId {
+        self.operator_coord.operator_id
     }
 }
 

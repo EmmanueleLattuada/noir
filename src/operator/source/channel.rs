@@ -3,9 +3,10 @@ use std::fmt::Display;
 use crate::channel::{bounded, Receiver, RecvError, Sender, TryRecvError};
 
 use crate::block::{BlockStructure, OperatorKind, OperatorStructure};
+use crate::network::OperatorCoord;
 use crate::operator::source::Source;
 use crate::operator::{Data, Operator, StreamElement};
-use crate::scheduler::ExecutionMetadata;
+use crate::scheduler::{ExecutionMetadata, OperatorId};
 
 const MAX_RETRY: u8 = 8;
 
@@ -20,7 +21,7 @@ pub struct ChannelSource<Out: Data> {
     rx: Receiver<Out>,
     terminated: bool,
     retry_count: u8,
-    op_id: u32,
+    operator_coord: OperatorCoord,
 }
 
 impl<Out: Data> Display for ChannelSource<Out> {
@@ -54,8 +55,9 @@ impl<Out: Data> ChannelSource<Out> {
             rx,
             terminated: false,
             retry_count: 0,
-            // This is the first operator in the chain
-            op_id: 0,
+            // This is the first operator in the chain so operator_id = 0
+            // Other fields will be set in setup method
+            operator_coord: OperatorCoord::new(0, 0, 0, 0),
         };
 
         (tx, s)
@@ -69,7 +71,11 @@ impl<Out: Data + core::fmt::Debug> Source<Out> for ChannelSource<Out> {
 }
 
 impl<Out: Data + core::fmt::Debug> Operator<Out> for ChannelSource<Out> {
-    fn setup(&mut self, _metadata: &mut ExecutionMetadata) {}
+    fn setup(&mut self, metadata: &mut ExecutionMetadata) {
+        self.operator_coord.block_id = metadata.coord.block_id;
+        self.operator_coord.host_id = metadata.coord.host_id;
+        self.operator_coord.replica_id = metadata.coord.replica_id;
+    }
 
     fn next(&mut self) -> StreamElement<Out> {
         loop {
@@ -121,8 +127,8 @@ impl<Out: Data + core::fmt::Debug> Operator<Out> for ChannelSource<Out> {
         BlockStructure::default().add_operator(operator)
     }
 
-    fn get_op_id(&self) -> &u32 {
-        &self.op_id
+    fn get_op_id(&self) -> OperatorId {
+        self.operator_coord.operator_id
     }
 }
 

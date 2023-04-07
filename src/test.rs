@@ -7,7 +7,7 @@ use crate::block::{BlockStructure, OperatorStructure};
 use crate::network::{Coord, NetworkSender, NetworkTopology, ReceiverEndpoint};
 use crate::operator::source::Source;
 use crate::operator::{Data, ExchangeData, Operator, StreamElement};
-use crate::scheduler::ExecutionMetadata;
+use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::CoordUInt;
 use crate::{BatchMode, EnvironmentConfig};
 
@@ -60,8 +60,8 @@ impl<Out: Data> Operator<Out> for FakeOperator<Out> {
         BlockStructure::default().add_operator(OperatorStructure::new::<Out, _>("FakeOperator"))
     }
 
-    fn get_op_id(&self) -> &u32 {
-        &0
+    fn get_op_id(&self) -> OperatorId {
+        0
     }
 }
 

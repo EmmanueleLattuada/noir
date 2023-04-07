@@ -1,11 +1,12 @@
 use serde::{Deserialize, Serialize};
 
 use crate::block::{BlockStructure, OperatorStructure};
+use crate::network::OperatorCoord;
 use crate::operator::iteration::IterationStateHandle;
 use crate::operator::{
    ExchangeData, ExchangeDataKey, Operator, SingleStartBlockReceiverOperator, StreamElement,
 };
-use crate::scheduler::ExecutionMetadata;
+use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::KeyedStream;
 
 #[derive(Clone, Serialize, Deserialize, Default, Debug)]
@@ -66,7 +67,7 @@ pub struct DeltaIterate<
     O: ExchangeData,
 > {
     prev: SingleStartBlockReceiverOperator<(Key, Msg<I, U, D, O>)>,
-    op_id: u32,
+    operator_coord: OperatorCoord,
 }
 
 impl<Key: ExchangeData, I: ExchangeData, U: ExchangeData, D: ExchangeData, O: ExchangeData> DeltaIterate< Key, I, U, D, O> {
@@ -74,7 +75,8 @@ impl<Key: ExchangeData, I: ExchangeData, U: ExchangeData, D: ExchangeData, O: Ex
         let op_id = prev.get_op_id() + 1;
         Self {
             prev,
-            op_id,
+            // This will be set in setup method
+            operator_coord: OperatorCoord::new(0, 0, 0, op_id),
         }
 
     }
@@ -85,6 +87,10 @@ impl<Key: ExchangeData, I: ExchangeData, U: ExchangeData, D: ExchangeData, O: Ex
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
+
+        self.operator_coord.block_id = metadata.coord.block_id;
+        self.operator_coord.host_id = metadata.coord.host_id;
+        self.operator_coord.replica_id = metadata.coord.replica_id;
     }
 
     fn next(&mut self) -> StreamElement<(Key, U)> {
@@ -97,8 +103,8 @@ impl<Key: ExchangeData, I: ExchangeData, U: ExchangeData, D: ExchangeData, O: Ex
             .add_operator(OperatorStructure::new::<(Key, U), _>("DeltaIterate"))
     }
 
-    fn get_op_id(&self) -> &u32 {
-        &self.op_id
+    fn get_op_id(&self) -> OperatorId {
+        self.operator_coord.operator_id
     }
 }
 

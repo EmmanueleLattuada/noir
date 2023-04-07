@@ -20,6 +20,8 @@ pub type BlockId = CoordUInt;
 pub type HostId = CoordUInt;
 /// The identifier of a replica of a block in the execution graph.
 pub type ReplicaId = CoordUInt;
+/// The identifier of an operator inside the chain of operators of a block.
+pub type OperatorId = CoordUInt;
 
 type BlockInitFn =
     Box<dyn FnOnce(&mut ExecutionMetadata) -> (JoinHandle<()>, BlockStructure) + Send>;

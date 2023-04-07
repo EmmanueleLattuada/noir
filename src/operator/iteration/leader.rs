@@ -3,13 +3,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use crate::block::{BlockStructure, Connection, NextStrategy, OperatorStructure};
-use crate::network::{Coord, NetworkMessage, NetworkSender};
+use crate::network::{Coord, NetworkMessage, NetworkSender, OperatorCoord};
 use crate::operator::iteration::{IterationResult, StateFeedback};
 use crate::operator::source::Source;
 use crate::operator::start::{SingleStartBlockReceiverOperator, StartBlock, StartBlockReceiver};
 use crate::operator::{ExchangeData, Operator, StreamElement};
 use crate::profiler::{get_profiler, Profiler};
-use crate::scheduler::{BlockId, ExecutionMetadata};
+use crate::scheduler::{BlockId, ExecutionMetadata, OperatorId};
 
 /// The leader block of an iteration.
 ///
@@ -30,7 +30,7 @@ where
 {
     /// The coordinates of this block.
     coord: Coord,
-    op_id:u32,
+    operator_coord: OperatorCoord,
 
     /// The index of the current iteration (0-based).
     iteration_index: usize,
@@ -105,10 +105,9 @@ where
             feedback_senders: Default::default(),
             coord: Coord::new(0, 0, 0),
             num_receivers: 0,
-
             // This the second block in the chain
             // TODO: check this
-            op_id: 1,
+            operator_coord: OperatorCoord::new(0, 0, 0, 1),
 
             max_iterations: num_iterations,
             iteration_index: 0,
@@ -201,6 +200,10 @@ where
         delta_update_receiver.setup(metadata);
         self.num_receivers = delta_update_receiver.receiver().prev_replicas().len();
         self.state_update_receiver = Some(delta_update_receiver);
+
+        self.operator_coord.block_id = metadata.coord.block_id;
+        self.operator_coord.host_id = metadata.coord.host_id;
+        self.operator_coord.replica_id = metadata.coord.replica_id;
     }
 
     fn next(&mut self) -> StreamElement<State> {
@@ -257,8 +260,8 @@ where
             .add_operator(operator)
     }
 
-    fn get_op_id(&self) -> &u32 {
-        &self.op_id
+    fn get_op_id(&self) -> OperatorId {
+        self.operator_coord.operator_id
     }
 }
 

@@ -9,12 +9,12 @@ pub(crate) use single::*;
 use super::Timestamp;
 use crate::block::BlockStructure;
 use crate::channel::RecvTimeoutError;
-use crate::network::{Coord, NetworkDataIterator, NetworkMessage};
+use crate::network::{Coord, NetworkDataIterator, NetworkMessage, OperatorCoord};
 use crate::operator::iteration::IterationStateLock;
 use crate::operator::source::Source;
 use crate::operator::start::watermark_frontier::WatermarkFrontier;
 use crate::operator::{ExchangeData, Operator, StreamElement};
-use crate::scheduler::{BlockId, ExecutionMetadata};
+use crate::scheduler::{BlockId, ExecutionMetadata, OperatorId};
 
 mod multiple;
 mod single;
@@ -68,7 +68,7 @@ pub(crate) struct StartBlock<Out: ExchangeData, Receiver: StartBlockReceiver<Out
     max_delay: Option<Duration>,
 
     coord: Option<Coord>,
-    op_id: u32,
+    operator_coord: OperatorCoord,
 
     /// The actual receiver able to fetch messages from the network.
     receiver: Receiver,
@@ -147,8 +147,9 @@ impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send> StartBlock<Out
             coord: Default::default(),
             max_delay: Default::default(),
 
-            // This is the first operator in the chain
-            op_id: 0,
+            // This is the first operator in the chain so operator_id is 0
+            // Other fields will be set in setup method
+            operator_coord: OperatorCoord::new(0, 0, 0, 0),
 
             receiver,
             batch_iter: None,
@@ -191,6 +192,10 @@ impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send> Operator<Out>
         );
         self.coord = Some(metadata.coord);
         self.max_delay = metadata.batch_mode.max_delay();
+
+        self.operator_coord.block_id = metadata.coord.block_id;
+        self.operator_coord.host_id = metadata.coord.host_id;
+        self.operator_coord.replica_id = metadata.coord.replica_id;
     }
 
     fn next(&mut self) -> StreamElement<Out> {
@@ -297,8 +302,8 @@ impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send> Operator<Out>
         self.receiver.structure()
     }
 
-    fn get_op_id(&self) -> &u32 {
-        &self.op_id
+    fn get_op_id(&self) -> OperatorId {
+        self.operator_coord.operator_id
     }
 }
 

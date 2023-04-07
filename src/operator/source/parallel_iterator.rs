@@ -2,9 +2,10 @@ use std::fmt::Display;
 use std::ops::Range;
 
 use crate::block::{BlockStructure, OperatorKind, OperatorStructure};
+use crate::network::OperatorCoord;
 use crate::operator::source::Source;
 use crate::operator::{Data, Operator, StreamElement};
-use crate::scheduler::ExecutionMetadata;
+use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::{CoordUInt, Stream};
 
 pub trait IntoParallelSource: Clone + Send {
@@ -137,7 +138,7 @@ where
     #[derivative(Debug = "ignore")]
     inner: IteratorGenerator<Source>,
     terminated: bool,
-    op_id: u32,
+    operator_coord: OperatorCoord,
 }
 
 impl<Source> Display for ParallelIteratorSource<Source>
@@ -189,8 +190,9 @@ where
         Self {
             inner: IteratorGenerator::Generator(generator),
             terminated: false,
-            // This is the first operator in the chain
-            op_id: 0,
+            // This is the first operator in the chain so operator_id = 0
+            // Other fields will be set in setup method
+            operator_coord: OperatorCoord::new(0, 0, 0, 0),
         }
     }
 }
@@ -221,6 +223,10 @@ where
                 .try_into()
                 .expect("Num replicas > max id"),
         );
+
+        self.operator_coord.block_id = metadata.coord.block_id;
+        self.operator_coord.host_id = metadata.coord.host_id;
+        self.operator_coord.replica_id = metadata.coord.replica_id;
     }
 
     fn next(&mut self) -> StreamElement<Source::Item> {
@@ -243,8 +249,8 @@ where
         BlockStructure::default().add_operator(operator)
     }
 
-    fn get_op_id(&self) -> &u32 {
-        &self.op_id
+    fn get_op_id(&self) -> OperatorId {
+        self.operator_coord.operator_id
     }
 }
 
@@ -257,7 +263,7 @@ where
         Self {
             inner: self.inner.clone(),
             terminated: false,
-            op_id: self.op_id,
+            operator_coord: self.operator_coord,
         }
     }
 }

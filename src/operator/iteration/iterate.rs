@@ -10,7 +10,7 @@ use crate::block::{
 use crate::channel::RecvError::Disconnected;
 use crate::channel::SelectResult;
 use crate::environment::StreamEnvironmentInner;
-use crate::network::{Coord, NetworkMessage, NetworkReceiver, NetworkSender, ReceiverEndpoint};
+use crate::network::{Coord, NetworkMessage, NetworkReceiver, NetworkSender, ReceiverEndpoint, OperatorCoord};
 use crate::operator::end::EndBlock;
 use crate::operator::iteration::iteration_end::IterationEndBlock;
 use crate::operator::iteration::leader::IterationLeader;
@@ -21,7 +21,7 @@ use crate::operator::iteration::{
 use crate::operator::source::Source;
 use crate::operator::start::StartBlock;
 use crate::operator::{ExchangeData, Operator, StreamElement};
-use crate::scheduler::{BlockId, ExecutionMetadata};
+use crate::scheduler::{BlockId, ExecutionMetadata, OperatorId};
 use crate::stream::Stream;
 
 fn clone_with_default<T: Default>(_: &T) -> T {
@@ -37,9 +37,9 @@ pub struct Iterate<Out: ExchangeData, State: ExchangeData> {
     /// The coordinate of this replica.
     coord: Coord,
 
-    /// Operator id. 
+    /// Operator coordinate. 
     // TODO: fix it
-    op_id:u32,
+    operator_coord: OperatorCoord,
 
     /// Helper structure that manages the iteration's state.
     state: IterationStateHandler<State>,
@@ -89,9 +89,8 @@ impl<Out: ExchangeData, State: ExchangeData> Iterate<Out, State> {
             input_block_id,
             output_sender: None,
             output_block_id,
-
             // TODO: Check this, is the first op in the chain?
-            op_id: 0,
+            operator_coord: OperatorCoord::new(0, 0, 0, 0),
 
             content: Default::default(),
             input_stash: Default::default(),
@@ -233,6 +232,10 @@ impl<Out: ExchangeData, State: ExchangeData + Sync> Operator<Out> for Iterate<Ou
         self.output_sender = Some(metadata.network.get_sender(output_endpoint));
 
         self.state.setup(metadata);
+
+        self.operator_coord.block_id = metadata.coord.block_id;
+        self.operator_coord.host_id = metadata.coord.host_id;
+        self.operator_coord.replica_id = metadata.coord.replica_id;
     }
 
     fn next(&mut self) -> StreamElement<Out> {
@@ -302,8 +305,8 @@ impl<Out: ExchangeData, State: ExchangeData + Sync> Operator<Out> for Iterate<Ou
         BlockStructure::default().add_operator(operator)
     }
 
-    fn get_op_id(&self) -> &u32 {
-        &self.op_id
+    fn get_op_id(&self) -> OperatorId {
+        self.operator_coord.operator_id
     }
 }
 
