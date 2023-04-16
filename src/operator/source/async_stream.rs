@@ -21,7 +21,7 @@ where
     inner: S,
     terminated: bool,
 
-    op_id: u32,
+    operator_coord: OperatorCoord,
 }
 
 impl<Out: Data, S> Display for AsyncStreamSource<Out, S>
@@ -59,7 +59,8 @@ where
             inner,
             terminated: false,
             // This is the first operator in the chain
-            op_id: 0,
+            // This will be set in setup method
+            operator_coord: OperatorCoord::new(0, 0, 0, 0),
         }
     }
 }
@@ -77,7 +78,11 @@ impl<Out: Data, S> Operator<Out> for AsyncStreamSource<Out, S>
 where
     S: Stream<Item = Out> + Send + Unpin + 'static,
 {
-    fn setup(&mut self, _metadata: &mut ExecutionMetadata) {}
+    fn setup(&mut self, _metadata: &mut ExecutionMetadata) {
+        self.operator_coord.block_id = metadata.coord.block_id;
+        self.operator_coord.host_id = metadata.coord.host_id;
+        self.operator_coord.replica_id = metadata.coord.replica_id;
+    }
 
     fn next(&mut self) -> StreamElement<Out> {
         if self.terminated {
@@ -96,12 +101,14 @@ where
 
     fn structure(&self) -> BlockStructure {
         let mut operator = OperatorStructure::new::<Out, _>("AsyncStreamSource");
+        let op_id = self.operator_coord.operator_id;
+        operator.subtitle = format!("op id: {op_id}");
         operator.kind = OperatorKind::Source;
         BlockStructure::default().add_operator(operator)
     }
 
-    fn get_op_id(&self) -> &u32 {
-        &self.op_id
+    fn get_op_id(&self) -> OperatorId {
+        self.operator_coord.operator_id
     }
 }
 

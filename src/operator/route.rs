@@ -287,6 +287,8 @@ where
 
     fn structure(&self) -> BlockStructure {
         let mut operator = OperatorStructure::new::<Out, _>("RoutingEndBlock");
+        let op_id = self.operator_coord.operator_id;
+        operator.subtitle = format!("op id: {op_id}");
         for e in &self.endpoints {
             if !e.block_senders.indexes.is_empty() {
                 let block_id = self.senders[e.block_senders.indexes[0]].0.coord.block_id;

@@ -203,9 +203,12 @@ where
     }
 
     fn structure(&self) -> crate::block::BlockStructure {
+        let mut operator = OperatorStructure::new::<KeyValue<Key, Out>, _>(&self.name);
+        let op_id = self.operator_coord.operator_id;
+        operator.subtitle = format!("op id: {op_id}");
         self.prev
             .structure()
-            .add_operator(OperatorStructure::new::<KeyValue<Key, Out>, _>(&self.name))
+            .add_operator(operator)
     }
 
     fn get_op_id(&self) -> OperatorId {

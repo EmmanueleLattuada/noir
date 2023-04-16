@@ -121,6 +121,8 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Operator<(Out1, Out2)> for Zip<Out1
 
     fn structure(&self) -> BlockStructure {
         let mut operator = OperatorStructure::new::<(Out1, Out2), _>("Zip");
+        let op_id = self.operator_coord.operator_id;
+        operator.subtitle = format!("op id: {op_id}");
         operator
             .receivers
             .push(OperatorReceiver::new::<Out1>(self.prev_block_id1));

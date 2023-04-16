@@ -135,6 +135,8 @@ where
 
     fn structure(&self) -> BlockStructure {
         let mut operator = OperatorStructure::new::<DeltaUpdate, _>("IterationEndBlock");
+        let op_id = self.operator_coord.operator_id;
+        operator.subtitle = format!("op id: {op_id}");
         operator.connections.push(Connection::new::<DeltaUpdate, _>(
             self.leader_block_id,
             &NextStrategy::only_one(),

@@ -98,9 +98,12 @@ impl<Key: ExchangeData, I: ExchangeData, U: ExchangeData, D: ExchangeData, O: Ex
     }
 
     fn structure(&self) -> BlockStructure {
+        let mut operator = OperatorStructure::new::<(Key, U), _>("DeltaIterate");
+        let op_id = self.operator_coord.operator_id;
+        operator.subtitle = format!("op id: {op_id}");
         self.prev
             .structure()
-            .add_operator(OperatorStructure::new::<(Key, U), _>("DeltaIterate"))
+            .add_operator(operator)
     }
 
     fn get_op_id(&self) -> OperatorId {

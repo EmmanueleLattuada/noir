@@ -285,10 +285,13 @@ impl<
     }
 
     fn structure(&self) -> BlockStructure {
-        self.prev.structure().add_operator(OperatorStructure::new::<
+        let mut operator = OperatorStructure::new::<
             KeyValue<Key, OuterJoinTuple<Out1, Out2>>,
             _,
-        >("JoinLocalHash"))
+        >("JoinLocalHash");
+        let op_id = self.operator_coord.operator_id;
+        operator.subtitle = format!("op id: {op_id}");
+        self.prev.structure().add_operator(operator)
     }
 
     fn get_op_id(&self) -> OperatorId {

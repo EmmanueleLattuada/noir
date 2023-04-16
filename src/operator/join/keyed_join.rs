@@ -252,10 +252,13 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
     }
 
     fn structure(&self) -> crate::block::BlockStructure {
-        self.prev.structure().add_operator(OperatorStructure::new::<
+        let mut operator = OperatorStructure::new::<
             KeyValue<K, InnerJoinTuple<V1, V2>>,
             _,
-        >("JoinKeyed"))
+        >("JoinKeyed");
+        let op_id = self.operator_coord.operator_id;
+        operator.subtitle = format!("op id: {op_id}");
+        self.prev.structure().add_operator(operator)
     }
 
     fn get_op_id(&self) -> OperatorId {
@@ -407,10 +410,13 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
     }
 
     fn structure(&self) -> crate::block::BlockStructure {
-        self.prev.structure().add_operator(OperatorStructure::new::<
+        let mut operator = OperatorStructure::new::<
             KeyValue<K, InnerJoinTuple<V1, V2>>,
             _,
-        >("JoinKeyed"))
+        >("JoinKeyed");
+        let op_id = self.operator_coord.operator_id;
+        operator.subtitle = format!("op id: {op_id}");
+        self.prev.structure().add_operator(operator)
     }
 
     fn get_op_id(&self) -> OperatorId {

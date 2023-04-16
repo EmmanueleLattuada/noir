@@ -209,6 +209,8 @@ where
 
     fn structure(&self) -> BlockStructure {
         let mut operator = OperatorStructure::new::<Out, _>("EndBlock");
+        let op_id = self.operator_coord.operator_id;
+        operator.subtitle = format!("op id: {op_id}");
         for sender_group in &self.block_senders {
             if !sender_group.indexes.is_empty() {
                 let block_id = self.senders[sender_group.indexes[0]].0.coord.block_id;

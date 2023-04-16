@@ -123,6 +123,8 @@ impl<Out: Data + core::fmt::Debug> Operator<Out> for ChannelSource<Out> {
 
     fn structure(&self) -> BlockStructure {
         let mut operator = OperatorStructure::new::<Out, _>("ChannelSource");
+        let op_id = self.operator_coord.operator_id;
+        operator.subtitle = format!("op id: {op_id}");
         operator.kind = OperatorKind::Source;
         BlockStructure::default().add_operator(operator)
     }

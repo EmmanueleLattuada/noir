@@ -74,6 +74,8 @@ where
 
     fn structure(&self) -> BlockStructure {
         let mut operator = OperatorStructure::new::<usize, _>("CollectCountSink");
+        let op_id = self.operator_coord.operator_id;
+        operator.subtitle = format!("op id: {op_id}");
         operator.kind = OperatorKind::Sink;
         self.prev.structure().add_operator(operator)
     }

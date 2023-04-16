@@ -93,9 +93,12 @@ where
     }
 
     fn structure(&self) -> BlockStructure {
+        let mut operator = OperatorStructure::new::<Out, _>("AddTimestamp");
+        let op_id = self.operator_coord.operator_id;
+        operator.subtitle = format!("op id: {op_id}");
         self.prev
             .structure()
-            .add_operator(OperatorStructure::new::<Out, _>("AddTimestamp"))
+            .add_operator(operator)
     }
 
     fn get_op_id(&self) -> OperatorId {
@@ -161,9 +164,12 @@ where
     }
 
     fn structure(&self) -> BlockStructure {
+        let mut operator = OperatorStructure::new::<Out, _>("DropTimestamp");
+        let op_id = self.operator_coord.operator_id;
+        operator.subtitle = format!("op id: {op_id}");
         self.prev
             .structure()
-            .add_operator(OperatorStructure::new::<Out, _>("DropTimestamp"))
+            .add_operator(operator)
     }
 
     fn get_op_id(&self) -> OperatorId {

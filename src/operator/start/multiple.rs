@@ -348,6 +348,8 @@ impl<OutL: ExchangeData, OutR: ExchangeData> StartBlockReceiver<TwoSidesItem<Out
 
     fn structure(&self) -> BlockStructure {
         let mut operator = OperatorStructure::new::<TwoSidesItem<OutL, OutR>, _>("StartBlock");
+        // op id must be 0
+        operator.subtitle = format!("op id: 0");
         operator.receivers.push(OperatorReceiver::new::<OutL>(
             self.left.receiver.previous_block_id,
         ));

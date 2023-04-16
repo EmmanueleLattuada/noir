@@ -201,6 +201,8 @@ where
 
     fn structure(&self) -> BlockStructure {
         let mut operator = OperatorStructure::new::<Out, _>("Replay");
+        let op_id = self.operator_coord.operator_id;
+        operator.subtitle = format!("op id: {op_id}");
         operator
             .receivers
             .push(OperatorReceiver::new::<StateFeedback<State>>(

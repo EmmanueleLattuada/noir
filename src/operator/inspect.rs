@@ -76,7 +76,9 @@ where
     }
 
     fn structure(&self) -> BlockStructure {
-        let operator = OperatorStructure::new::<Out, _>("Inspect");
+        let mut operator = OperatorStructure::new::<Out, _>("Inspect");
+        let op_id = self.operator_coord.operator_id;
+        operator.subtitle = format!("op id: {op_id}");
         self.prev.structure().add_operator(operator)
     }
 
