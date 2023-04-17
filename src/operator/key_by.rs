@@ -83,6 +83,10 @@ where
             StreamElement::Terminate => StreamElement::Terminate,
             StreamElement::FlushAndRestart => StreamElement::FlushAndRestart,
             StreamElement::FlushBatch => StreamElement::FlushBatch,
+            // TODO: handle snapshot marker
+            StreamElement::Snapshot(_) => {
+                panic!("Snapshot not supported for key_by operator")
+            }
         }
     }
 

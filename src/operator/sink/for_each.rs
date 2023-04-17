@@ -73,6 +73,10 @@ where
                 StreamElement::Terminate => return StreamElement::Terminate,
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
                 StreamElement::FlushAndRestart => return StreamElement::FlushAndRestart,
+                // TODO: handle snapshot marker
+                StreamElement::Snapshot(_) => {
+                    panic!("Snapshot not supported for for_each operator")
+                }
             }
         }
     }

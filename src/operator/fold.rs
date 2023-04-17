@@ -109,6 +109,10 @@ where
                 }
                 // this block wont sent anything until the stream ends
                 StreamElement::FlushBatch => {}
+                // TODO: handle snapshot marker
+                StreamElement::Snapshot(_) => {
+                    panic!("Snapshot not supported for fold operator")
+                }
             }
         }
 

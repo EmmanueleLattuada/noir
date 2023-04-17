@@ -104,6 +104,11 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Operator<(Out1, Out2)> for Zip<Out1
                 StreamElement::FlushBatch | StreamElement::Terminate => {
                     return item.map(|_| unreachable!())
                 }
+
+                // TODO: handle snapshot marker
+                StreamElement::Snapshot(_) => {
+                    panic!("Snapshot not supported for zip operator")
+                }
             }
         }
         let item1 = self.stash1.pop_front().unwrap();

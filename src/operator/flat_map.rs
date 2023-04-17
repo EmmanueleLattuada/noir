@@ -156,6 +156,10 @@ where
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
                 StreamElement::Terminate => return StreamElement::Terminate,
                 StreamElement::FlushAndRestart => return StreamElement::FlushAndRestart,
+                // TODO: handle snapshot marker
+                StreamElement::Snapshot(_) => {
+                    panic!("Snapshot not supported for flat_map operator")
+                }
             }
         }
     }
@@ -367,6 +371,10 @@ where
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
                 StreamElement::Terminate => return StreamElement::Terminate,
                 StreamElement::FlushAndRestart => return StreamElement::FlushAndRestart,
+                // TODO: handle snapshot marker
+                StreamElement::Snapshot(_) => {
+                    panic!("Snapshot not supported for flat_map operator")
+                }
             }
         }
     }

@@ -191,6 +191,10 @@ where
                 StreamElement::Item(_) => panic!("Interval Join only supports timestamped streams"),
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
                 StreamElement::Terminate => return StreamElement::Terminate,
+                // TODO: handle snapshot marker
+                StreamElement::Snapshot(_) => {
+                    panic!("Snapshot not supported for interval_join operator")
+                }
             }
 
             self.advance();

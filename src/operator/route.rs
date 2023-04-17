@@ -260,6 +260,10 @@ where
                 }
             }
             StreamElement::FlushBatch => {}
+            // TODO: handle snapshot marker
+            StreamElement::Snapshot(_) => {
+                panic!("Snapshot not supported for route operator")
+            }
         };
 
         // Flushing messages

@@ -274,6 +274,10 @@ impl<
                 }
                 StreamElement::Terminate => return StreamElement::Terminate,
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
+                // TODO: handle snapshot marker
+                StreamElement::Snapshot(_) => {
+                    panic!("Snapshot not supported for join operator")
+                }
                 StreamElement::Watermark(_) | StreamElement::Timestamped(_, _) => {
                     panic!("Cannot yet join timestamped streams")
                 }

@@ -241,6 +241,10 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
                 }
                 StreamElement::Terminate => return StreamElement::Terminate,
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
+                // TODO: handle snapshot marker
+                StreamElement::Snapshot(_) => {
+                    panic!("Snapshot not supported for join operator")
+                }
                 StreamElement::Watermark(_) | StreamElement::Timestamped(_, _) => {
                     panic!("Cannot yet join timestamped streams")
                 }
@@ -399,6 +403,10 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
                 }
                 StreamElement::Terminate => return StreamElement::Terminate,
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
+                // TODO: handle snapshot marker
+                StreamElement::Snapshot(_) => {
+                    panic!("Snapshot not supported for join operator")
+                }
                 StreamElement::Watermark(_) | StreamElement::Timestamped(_, _) => {
                     panic!("Cannot yet join timestamped streams")
                 }

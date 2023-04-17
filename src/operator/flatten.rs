@@ -129,6 +129,10 @@ mod inner {
                     StreamElement::FlushBatch => return StreamElement::FlushBatch,
                     StreamElement::Terminate => return StreamElement::Terminate,
                     StreamElement::FlushAndRestart => return StreamElement::FlushAndRestart,
+                    // TODO: handle snapshot marker
+                    StreamElement::Snapshot(_) => {
+                        panic!("Snapshot not supported for flatten operator")
+                    }
                 }
             }
         }
@@ -301,6 +305,10 @@ mod inner {
                     StreamElement::FlushBatch => return StreamElement::FlushBatch,
                     StreamElement::Terminate => return StreamElement::Terminate,
                     StreamElement::FlushAndRestart => return StreamElement::FlushAndRestart,
+                    // TODO: handle snapshot marker
+                    StreamElement::Snapshot(_) => {
+                        panic!("Snapshot not supported for flatten operator")
+                    }
                 }
             }
         }

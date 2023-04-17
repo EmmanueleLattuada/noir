@@ -68,6 +68,10 @@ where
             match self.prev.next() {
                 StreamElement::Item(t) | StreamElement::Timestamped(t, _) => return Some(t),
                 StreamElement::Terminate => return None,
+                // TODO: handle snapshot marker
+                StreamElement::Snapshot(_) => {
+                    panic!("Snapshot not supported for collect operator")
+                }
                 _ => continue,
             }
         });

@@ -116,6 +116,10 @@ where
                     glidesort::sort_with_vec(self.buffer.make_contiguous(), &mut self.scratch);
                 }
                 StreamElement::Terminate => return StreamElement::Terminate,
+                // TODO: handle snapshot marker
+                StreamElement::Snapshot(_) => {
+                    panic!("Snapshot not supported for reorder operator")
+                }
             }
         }
 

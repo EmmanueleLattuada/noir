@@ -84,6 +84,9 @@ pub type Timestamp = i64;
 #[cfg(not(feature = "timestamp"))]
 pub type Timestamp = ();
 
+/// Identifier of the snapshot
+pub type SnapshotId = u64;
+
 /// An element of the stream. This is what enters and exits from the operators.
 ///
 /// An operator may need to change the content of a `StreamElement` (e.g. a `Map` may change the
@@ -116,6 +119,9 @@ pub enum StreamElement<Out> {
     /// mark the end of an iteration. Therefore an operator may be prepared to received new data
     /// after this message, but should not retain the internal state.
     FlushAndRestart,
+
+    /// Marker used to do the snapshot for saving the state
+    Snapshot(SnapshotId),
 }
 
 /// An operator represents a unit of computation. It's always included inside a chain of operators,
@@ -155,6 +161,7 @@ impl<Out> StreamElement<Out> {
             StreamElement::Terminate => StreamElement::Terminate,
             StreamElement::FlushAndRestart => StreamElement::FlushAndRestart,
             StreamElement::FlushBatch => StreamElement::FlushBatch,
+            StreamElement::Snapshot(s) => StreamElement::Snapshot(*s),
         }
     }
 
@@ -167,6 +174,7 @@ impl<Out> StreamElement<Out> {
             StreamElement::Terminate => StreamElement::Terminate,
             StreamElement::FlushAndRestart => StreamElement::FlushAndRestart,
             StreamElement::FlushBatch => StreamElement::FlushBatch,
+            StreamElement::Snapshot(s) => StreamElement::Snapshot(s),
         }
     }
 
@@ -179,6 +187,7 @@ impl<Out> StreamElement<Out> {
             StreamElement::FlushBatch => "FlushBatch",
             StreamElement::Terminate => "Terminate",
             StreamElement::FlushAndRestart => "FlushAndRestart",
+            StreamElement::Snapshot(_) => "Snapshot",
         }
     }
 
@@ -198,6 +207,7 @@ impl<Out> StreamElement<Out> {
             StreamElement::Terminate => StreamElement::Terminate,
             StreamElement::FlushAndRestart => StreamElement::FlushAndRestart,
             StreamElement::FlushBatch => StreamElement::FlushBatch,
+            StreamElement::Snapshot(s) => StreamElement::Snapshot(s),
         }
     }
 }
@@ -213,6 +223,7 @@ impl<Key, Out> StreamElement<KeyValue<Key, Out>> {
             StreamElement::Terminate => (None, StreamElement::Terminate),
             StreamElement::FlushAndRestart => (None, StreamElement::FlushAndRestart),
             StreamElement::FlushBatch => (None, StreamElement::FlushBatch),
+            StreamElement::Snapshot(s) => (None, StreamElement::Snapshot(s)),
         }
     }
 
@@ -224,6 +235,7 @@ impl<Key, Out> StreamElement<KeyValue<Key, Out>> {
             StreamElement::Terminate => None,
             StreamElement::FlushAndRestart => None,
             StreamElement::FlushBatch => None,
+            StreamElement::Snapshot(_) => None,
         }
     }
 }

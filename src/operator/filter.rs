@@ -72,6 +72,10 @@ where
             match self.prev.next() {
                 StreamElement::Item(ref item) | StreamElement::Timestamped(ref item, _)
                     if !(self.predicate)(item) => {}
+                // TODO: handle snapshot marker
+                StreamElement::Snapshot(_) => {
+                    panic!("Snapshot not supported for filter operator")
+                }
                 element => return element,
             }
         }

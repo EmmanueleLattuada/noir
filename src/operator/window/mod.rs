@@ -177,6 +177,10 @@ where
                     );
                 }
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
+                // TODO: handle snapshot marker
+                StreamElement::Snapshot(_) => {
+                    panic!("Snapshot not supported for window operator")
+                }
                 el => {
                     let (_, el) = el.take_key();
 

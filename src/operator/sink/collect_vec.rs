@@ -73,6 +73,10 @@ where
             }
             StreamElement::FlushBatch => StreamElement::FlushBatch,
             StreamElement::FlushAndRestart => StreamElement::FlushAndRestart,
+            // TODO: handle snapshot marker
+            StreamElement::Snapshot(_) => {
+                panic!("Snapshot not supported for collect operator")
+            }
         }
     }
 

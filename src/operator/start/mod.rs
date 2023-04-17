@@ -252,6 +252,10 @@ impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send> Operator<Out>
                                 );
                                 continue;
                             }
+                            // TODO: handle snapshot marker
+                            StreamElement::Snapshot(_) => {
+                                panic!("Snapshot not supported for start operator")
+                            }
                             _ => item,
                         }
                     }

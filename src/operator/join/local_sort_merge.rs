@@ -205,6 +205,10 @@ impl<
                 StreamElement::Timestamped(_, _) | StreamElement::Watermark(_) => {
                     panic!("Cannot join timestamp streams")
                 }
+                // TODO: handle snapshot marker
+                StreamElement::Snapshot(_) => {
+                    panic!("Snapshot not supported for join operator")
+                }
                 StreamElement::FlushAndRestart => {
                     assert!(self.left_ended, "{} left missing", replica_coord().unwrap());
                     assert!(

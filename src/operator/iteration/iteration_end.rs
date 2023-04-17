@@ -129,6 +129,10 @@ where
                 StreamElement::Terminate
             }
             StreamElement::FlushBatch => elem.map(|_| unreachable!()),
+            // TODO: handle snapshot marker
+            StreamElement::Snapshot(_) => {
+                panic!("Snapshot not supported for iteration_end operator")
+            }
             _ => unreachable!(),
         }
     }

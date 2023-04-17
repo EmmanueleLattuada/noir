@@ -111,6 +111,12 @@ where
                 self.content.push(el.clone());
                 el
             }
+
+            // TODO: handle snapshot marker
+            StreamElement::Snapshot(_) => {
+                panic!("Snapshot not supported for replay operator")
+            }
+
             // messages to forward without replaying
             StreamElement::FlushBatch => StreamElement::FlushBatch,
             StreamElement::Terminate => {

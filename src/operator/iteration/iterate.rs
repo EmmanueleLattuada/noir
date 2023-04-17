@@ -111,6 +111,11 @@ impl<Out: ExchangeData, State: ExchangeData> Iterate<Out, State> {
                 self.state.lock();
                 StreamElement::FlushAndRestart
             }
+            // TODO: handle snapshot marker
+            StreamElement::Snapshot(_) => {
+                panic!("Snapshot not supported for iterate operator")
+            }
+
             StreamElement::Item(_)
             | StreamElement::Timestamped(_, _)
             | StreamElement::Watermark(_)

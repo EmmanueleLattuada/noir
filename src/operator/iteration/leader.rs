@@ -139,6 +139,10 @@ where
                     return Some(StreamElement::Terminate);
                 }
                 StreamElement::FlushAndRestart | StreamElement::FlushBatch => {}
+                // TODO: handle snapshot marker
+                StreamElement::Snapshot(_) => {
+                    panic!("Snapshot not supported for leader operator")
+                }
                 update => unreachable!(
                     "IterationLeader received an invalid message: {}",
                     update.variant()

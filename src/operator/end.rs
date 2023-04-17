@@ -181,6 +181,10 @@ where
                     self.senders[sender_idx].1.enqueue(message.clone());
                 }
             }
+            // TODO: handle snapshot marker
+            StreamElement::Snapshot(_) => {
+                panic!("Snapshot not supported for end operator")
+            }
             StreamElement::FlushBatch => {}
         };
 

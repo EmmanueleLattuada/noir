@@ -88,6 +88,10 @@ where
             StreamElement::FlushAndRestart
             | StreamElement::FlushBatch
             | StreamElement::Terminate => elem,
+            // TODO: handle snapshot marker
+            StreamElement::Snapshot(_) => {
+                panic!("Snapshot not supported for add_timestamps operator")
+            }
             _ => panic!("AddTimestamp received invalid variant: {}", elem.variant()),
         }
     }
@@ -158,6 +162,10 @@ where
             match self.prev.next() {
                 StreamElement::Watermark(_) => continue,
                 StreamElement::Timestamped(item, _) => return StreamElement::Item(item),
+                // TODO: handle snapshot marker
+                StreamElement::Snapshot(_) => {
+                    panic!("Snapshot not supported for collect operator")
+                }
                 el => return el,
             }
         }

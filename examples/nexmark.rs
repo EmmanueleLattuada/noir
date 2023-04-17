@@ -267,6 +267,7 @@ impl Q4Unary {
                     self.closing = true;
                     continue;
                 }
+                StreamElement::Snapshot(_) => todo!()
             }
         }
     }

@@ -91,6 +91,10 @@ where
                 StreamElement::Terminate => return StreamElement::Terminate,
                 StreamElement::FlushAndRestart => return StreamElement::FlushAndRestart,
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
+                // TODO: handle snapshot marker
+                StreamElement::Snapshot(_) => {
+                    panic!("Snapshot not supported for filter_map operator")
+                }
             }
         }
     }

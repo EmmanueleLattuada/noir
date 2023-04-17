@@ -70,6 +70,10 @@ where
             StreamElement::Item(t) | StreamElement::Timestamped(t, _) => {
                 (self.f)(t);
             }
+            // TODO: handle snapshot marker
+            StreamElement::Snapshot(_) => {
+                panic!("Snapshot not supported for inspect operator")
+            }
             _ => {}
         }
         el
