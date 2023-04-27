@@ -82,6 +82,8 @@ pub struct EnvironmentConfig {
     /// Skip the check that prevents two remote environments with different environments to be
     /// constructed.
     pub skip_single_remote_check: bool,
+    /// Configuration for persistency
+    pub persistency_configuration: Option<String>,
 }
 
 /// Which kind of environment to use for the execution.
@@ -202,7 +204,14 @@ impl EnvironmentConfig {
             runtime: ExecutionRuntime::Local(LocalRuntimeConfig { num_cores }),
             host_id: Some(0),
             skip_single_remote_check: false,
+            persistency_configuration: None,
         }
+    }
+
+    /// Add configuration to enable persistency services
+    /// Example: persistencyConfiguration = "redis://127.0.0.1"
+    pub fn add_persistency(&mut self, persistency_configuration: String) {
+        self.persistency_configuration = Some(persistency_configuration);
     }
 
     /// Remote environment based on the provided configuration file.
@@ -235,6 +244,7 @@ impl EnvironmentConfig {
             runtime: ExecutionRuntime::Remote(config),
             host_id,
             skip_single_remote_check: false,
+            persistency_configuration: None,
         })
     }
 

@@ -78,15 +78,25 @@ pub(crate) trait PersistencyServices {
 #[derive(Debug, Clone, Default)]
 pub struct PersistencyService {
     handler: RedisHandler,
+    active: bool,
 }
 
 impl PersistencyService {
     /// Create a new persistencyService from given configuration
-    pub (crate) fn new(conf: String) -> Self{
-        let handler = RedisHandler::new(conf);
-        Self { 
-            handler: handler, 
+    pub (crate) fn new(conf: Option<String>) -> Self{
+        if conf.is_some(){
+            let handler = RedisHandler::new(conf.unwrap());
+            return Self { 
+                handler: handler, 
+                active: true,
+            }
+        } else {
+            return Self { 
+                handler: RedisHandler::default(), 
+                active: false,
+            }
         }
+        
     }    
 
 }
@@ -94,34 +104,51 @@ impl PersistencyService {
 // Just wrap methods and check snapshot id constraints
 impl PersistencyServices for PersistencyService{
     fn setup(&mut self) {
-        self.handler.setup();
+        if self.active {
+            self.handler.setup();
+        }
     }
 
     fn save_state<State: ExchangeData>(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId, state: State) {
+        if !self.active {
+            panic!("Persistency services aren't configured");
+        }
         if snapshot_id == 0 {
             panic!("Snapshot id must start from 1");
         }
-        if !(snapshot_id == 1 || self.get_last_snapshot(op_coord).unwrap_or(0) == snapshot_id - 1) {
+        if !((snapshot_id == 1 && self.get_last_snapshot(op_coord).is_none()) || self.get_last_snapshot(op_coord).unwrap_or(0) == snapshot_id - 1) {
             panic!("Snapshot id must be a sequence with step 1 starting from 1");
         }
         self.handler.save_state(op_coord, snapshot_id, state);
     }
     fn save_void_state(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId) {
+        if !self.active {
+            panic!("Persistency services aren't configured");
+        }
         if snapshot_id == 0 {
             panic!("Snapshot id must start from 1");
         }
-        if !(snapshot_id == 1 || self.get_last_snapshot(op_coord).unwrap_or(0) == snapshot_id - 1) {
+        if !((snapshot_id == 1 && self.get_last_snapshot(op_coord).is_none()) || self.get_last_snapshot(op_coord).unwrap_or(0) == snapshot_id - 1) {
             panic!("Snapshot id must be a sequence with step 1 starting from 1");
         }
         self.handler.save_void_state(op_coord, snapshot_id);
     }
     fn get_last_snapshot(&self, op_coord: OperatorCoord) -> Option<SnapshotId> {
+        if !self.active {
+            panic!("Persistency services aren't configured");
+        }
         self.handler.get_last_snapshot(op_coord)
     }
     fn get_state<State: ExchangeData>(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId) -> Option<State> {
+        if !self.active {
+            panic!("Persistency services aren't configured");
+        }
         self.handler.get_state(op_coord, snapshot_id)
     }
     fn delete_state(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId) {
+        if !self.active {
+            panic!("Persistency services aren't configured");
+        }
         self.handler.delete_state(op_coord, snapshot_id);
     }
 }
@@ -401,7 +428,7 @@ mod tests {
         state1.values.push(2);
         state1.values.push(3);
 
-        let mut pers_handler = PersistencyService::new("redis://127.0.0.1".to_string());
+        let mut pers_handler = PersistencyService::new(Some("redis://127.0.0.1".to_string()));
         pers_handler.setup();
 
         pers_handler.save_state(op_coord1, 1, state1.clone());
@@ -450,15 +477,15 @@ mod tests {
             block_id: 1,
             host_id: 1,
             replica_id: 1,
-            operator_id: 1,
+            operator_id: 2,
         };
 
-        let mut pers_handler = PersistencyService::new("redis://127.0.0.1".to_string());
+        let mut pers_handler = PersistencyService::new(Some("redis://127.0.0.1".to_string()));
         pers_handler.setup();
 
         pers_handler.save_void_state(op_coord1, 1);
         pers_handler.save_void_state(op_coord1, 2);
-        let retrived_state: Option<FakeState> = pers_handler.get_state(op_coord1, 1);
+        let retrived_state: Option<FakeState> = pers_handler.get_state(op_coord1, 3);
         assert_eq!(None, retrived_state);
 
         // Clean
@@ -474,6 +501,88 @@ mod tests {
         let last = pers_handler.get_last_snapshot(op_coord1);
         assert_eq!(None, last);
 
+        pers_handler.save_void_state(op_coord1, 1);
+        let last = pers_handler.get_last_snapshot(op_coord1).unwrap();
+        assert_eq!(1, last);
+        pers_handler.delete_state(op_coord1, 1);
+        let last = pers_handler.get_last_snapshot(op_coord1);
+        assert_eq!(None, last);
+
     }
+
+    #[test]
+    fn test_snapshot_id_consistency() {
+        let op_coord1 = OperatorCoord {
+            block_id: 1,
+            host_id: 1,
+            replica_id: 1,
+            operator_id: 1,
+        };
+
+        let mut pers_handler = PersistencyService::new(Some("redis://127.0.0.1".to_string()));
+        pers_handler.setup();
+
+        // Snap_id = 0
+        let result = std::panic::catch_unwind(|| pers_handler.save_state(op_coord1, 0, 100));
+        assert!(result.is_err());
+
+        // Snap_id = 10
+        let result = std::panic::catch_unwind(|| pers_handler.save_void_state(op_coord1, 10));
+        assert!(result.is_err());
+
+        pers_handler.save_state(op_coord1, 1, 101);
+        pers_handler.save_state(op_coord1, 2, 102);
+        pers_handler.save_state(op_coord1, 3, 103);
+
+        // Snap_id = 1
+        let result = std::panic::catch_unwind(|| pers_handler.save_void_state(op_coord1, 1));
+        assert!(result.is_err());
+
+        // Snap_id = 2
+        let result = std::panic::catch_unwind(|| pers_handler.save_void_state(op_coord1, 2));
+        assert!(result.is_err());
+
+        // Snap_id = 3
+        let result = std::panic::catch_unwind(|| pers_handler.save_void_state(op_coord1, 3));
+        assert!(result.is_err());
+
+        // Clean
+        pers_handler.delete_state(op_coord1, 1);
+        pers_handler.delete_state(op_coord1, 2);
+        pers_handler.delete_state(op_coord1, 3);
+
+
+
+    }
+
+    #[test]
+    fn test_no_persistency() {
+        let op_coord1 = OperatorCoord {
+            block_id: 1,
+            host_id: 1,
+            replica_id: 1,
+            operator_id: 1,
+        };
+
+        let mut pers_handler = PersistencyService::new(None);
+        pers_handler.setup();
+
+        let result = std::panic::catch_unwind(|| pers_handler.save_state(op_coord1, 1, 100));
+        assert!(result.is_err());
+
+        let result = std::panic::catch_unwind(|| pers_handler.save_void_state(op_coord1, 1));
+        assert!(result.is_err());
+
+        let result: Result<Option<u32>, Box<dyn std::any::Any + Send>> = std::panic::catch_unwind(|| pers_handler.get_state(op_coord1, 1));
+        assert!(result.is_err());
+
+        let result = std::panic::catch_unwind(|| pers_handler.get_last_snapshot(op_coord1));
+        assert!(result.is_err());
+
+        let result = std::panic::catch_unwind(|| pers_handler.delete_state(op_coord1, 1));
+        assert!(result.is_err());
+
+    }
+    
 
 }

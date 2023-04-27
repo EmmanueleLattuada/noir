@@ -180,6 +180,7 @@ impl TestHelper {
                 runtime: runtime.clone(),
                 host_id: Some(host_id),
                 skip_single_remote_check: true,
+                persistency_configuration: None,
             };
             let body = body.clone();
             join_handles.push(

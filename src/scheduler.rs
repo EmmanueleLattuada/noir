@@ -82,6 +82,7 @@ pub(crate) struct Scheduler {
 
 impl Scheduler {
     pub fn new(config: EnvironmentConfig) -> Self {
+        let pers_conf = config.persistency_configuration.clone();
         Self {
             next_blocks: Default::default(),
             prev_blocks: Default::default(),
@@ -89,8 +90,7 @@ impl Scheduler {
             block_init: Default::default(),
             network: NetworkTopology::new(config.clone()),
             config,
-            // TODO: take it as parameter
-            persistency_service: PersistencyService::new("redis://127.0.0.1".to_string()),
+            persistency_service: PersistencyService::new(pers_conf),
         }
     }
 
