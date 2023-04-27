@@ -83,6 +83,8 @@ pub(crate) mod stream;
 pub(crate) mod test;
 pub(crate) mod worker;
 
+pub(crate) mod persistency;
+
 pub type CoordUInt = u64;
 
 pub mod prelude {

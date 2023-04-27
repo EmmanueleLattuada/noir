@@ -86,6 +86,8 @@ fxhash = "0.2.1"
 glidesort = "0.1.2"
 micrometer = { version = "0.2.0", features = ["enable"] }
 
+# Persistency
+redis = "0.23.0"
 
 [dev-dependencies]
 # for the tests

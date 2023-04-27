@@ -199,6 +199,16 @@ impl Display for Coord {
     }
 }
 
+impl Display for OperatorCoord {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "OperatorCoord[b{}, h{}, r{}, o{}]",
+            self.block_id, self.host_id, self.replica_id, self.operator_id
+        )
+    }
+}
+
 impl Display for BlockCoord {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "BlockCoord[b{}, h{}]", self.block_id, self.host_id)

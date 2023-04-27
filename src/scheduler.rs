@@ -9,6 +9,7 @@ use crate::block::{BatchMode, BlockStructure, InnerBlock, JobGraphGenerator};
 use crate::config::{EnvironmentConfig, ExecutionRuntime, LocalRuntimeConfig, RemoteRuntimeConfig};
 use crate::network::{Coord, NetworkTopology};
 use crate::operator::{Data, Operator};
+use crate::persistency::PersistencyService;
 use crate::profiler::{wait_profiler, ProfilerResult};
 use crate::worker::spawn_worker;
 use crate::CoordUInt;
@@ -41,6 +42,8 @@ pub struct ExecutionMetadata<'a> {
     pub(crate) network: &'a mut NetworkTopology,
     /// The batching mode to use inside this block.
     pub batch_mode: BatchMode,
+    /// Persistency service handler for saving the state
+    pub(crate) persistency_service: PersistencyService,
 }
 
 /// Information about a block in the job graph.
@@ -73,6 +76,8 @@ pub(crate) struct Scheduler {
     block_init: Vec<(Coord, BlockInitFn)>,
     /// The network topology that keeps track of all the connections inside the execution graph.
     network: NetworkTopology,
+    /// Persistency service handler for saving the state
+    persistency_service: PersistencyService,
 }
 
 impl Scheduler {
@@ -84,6 +89,8 @@ impl Scheduler {
             block_init: Default::default(),
             network: NetworkTopology::new(config.clone()),
             config,
+            // TODO: take it as parameter
+            persistency_service: PersistencyService::new("redis://127.0.0.1".to_string()),
         }
     }
 
@@ -247,6 +254,7 @@ impl Scheduler {
                 prev: self.network.prev(coord),
                 network: &mut self.network,
                 batch_mode: block_info.batch_mode,
+                persistency_service: self.persistency_service.clone(),
             };
             let (handle, structure) = init_fn(&mut metadata);
             join.push(handle);
