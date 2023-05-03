@@ -4,15 +4,23 @@ use std::io::BufRead;
 use std::io::Seek;
 use std::io::{BufReader, SeekFrom};
 use std::path::PathBuf;
+use std::time::Duration;
+
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::block::{BlockStructure, OperatorKind, OperatorStructure};
 use crate::network::Coord;
 use crate::network::OperatorCoord;
 use crate::operator::source::Source;
 use crate::operator::{Operator, StreamElement};
+use crate::persistency::PersistencyService;
+use crate::persistency::PersistencyServices;
 use crate::scheduler::ExecutionMetadata;
 use crate::Stream;
 use crate::scheduler::OperatorId;
+
+use super::SnapshotGenerator;
 
 /// Source that reads a text file line-by-line.
 ///
@@ -27,6 +35,8 @@ pub struct FileSource {
     terminated: bool,
     coord: Option<Coord>,
     operator_coord: OperatorCoord,
+    snapshot_generator: SnapshotGenerator,
+    persistency_service: PersistencyService,
 }
 
 impl Display for FileSource {
@@ -68,6 +78,8 @@ impl FileSource {
             // This is the first operator in the chain so operator_id = 0
             // Other fields will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, 0),
+            snapshot_generator: SnapshotGenerator::new(),
+            persistency_service: PersistencyService::default(),
         }
     }
 }
@@ -76,6 +88,20 @@ impl Source<String> for FileSource {
     fn get_max_parallelism(&self) -> Option<usize> {
         None
     }
+
+    fn set_snapshot_frequency_by_item(&mut self, item_interval: u64) {
+        self.snapshot_generator.set_item_interval(item_interval);
+    }
+
+    fn set_snapshot_frequency_by_time(&mut self, time_interval: Duration) {
+        self.snapshot_generator.set_time_interval(time_interval);
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct FileSourceState {
+    current: u64,
+    terminated: bool,
 }
 
 impl Operator<String> for FileSource {
@@ -119,12 +145,28 @@ impl Operator<String> for FileSource {
         self.operator_coord.block_id = metadata.coord.block_id;
         self.operator_coord.host_id = metadata.coord.host_id;
         self.operator_coord.replica_id = metadata.coord.replica_id;
+
+
+        self.persistency_service = metadata.persistency_service.clone();
+        self.persistency_service.setup();
     }
 
     fn next(&mut self) -> StreamElement<String> {
         if self.terminated {
             log::debug!("{} emitting terminate", self.coord.unwrap());
             return StreamElement::Terminate;
+        }
+        // Check snapshot generator
+        let snapshot = self.snapshot_generator.get_snapshot_marker();
+        if snapshot.is_some() {
+            let snapshot_id = snapshot.unwrap();
+            // Save state and forward snapshot marker
+            let state = FileSourceState{
+                current: self.current as u64,
+                terminated: self.terminated,
+            }; 
+            self.persistency_service.save_state(self.operator_coord, snapshot_id, state);
+            return StreamElement::Snapshot(snapshot_id);
         }
         let element = if self.current <= self.end {
             let mut line = String::new();
@@ -179,6 +221,8 @@ impl Clone for FileSource {
             terminated: false,
             coord: None,
             operator_coord: OperatorCoord::new(0, 0, 0, 0),
+            snapshot_generator: self.snapshot_generator.clone(),
+            persistency_service: self.persistency_service.clone(),
         }
     }
 }

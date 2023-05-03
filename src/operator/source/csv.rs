@@ -4,16 +4,20 @@ use std::io;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::marker::PhantomData;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use csv::{Reader, ReaderBuilder, Terminator, Trim};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::block::{BlockStructure, OperatorKind, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::source::Source;
 use crate::operator::{Data, Operator, StreamElement};
+use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::Stream;
+
+use super::SnapshotGenerator;
 
 /// Wrapper that limits the bytes that can be read from a type that implements `io::Read`.
 struct LimitedReader<R: Read> {
@@ -96,8 +100,12 @@ pub struct CsvSource<Out: Data + for<'a> Deserialize<'a>> {
     options: CsvOptions,
     /// Whether the reader has terminated its job.
     terminated: bool,
-    
+    /// Operator coordinate
     operator_coord: OperatorCoord,
+    /// Snapshot markers generator
+    snapshot_generator: SnapshotGenerator,
+    /// Persistency service to save the state
+    persistency_service: PersistencyService,
 
     _out: PhantomData<Out>,
 }
@@ -150,6 +158,8 @@ impl<Out: Data + for<'a> Deserialize<'a>> CsvSource<Out> {
             // This is the first operator in the chain so operator_id = 0
             // Other fields will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, 0),
+            snapshot_generator: SnapshotGenerator::new(),
+            persistency_service: PersistencyService::default(),
             _out: PhantomData,
         }
     }
@@ -269,6 +279,20 @@ impl<Out: Data + for<'a> Deserialize<'a>> Source<Out> for CsvSource<Out> {
     fn get_max_parallelism(&self) -> Option<usize> {
         None
     }
+
+    fn set_snapshot_frequency_by_item(&mut self, item_interval: u64) {
+        self.snapshot_generator.set_item_interval(item_interval);
+    }
+
+    fn set_snapshot_frequency_by_time(&mut self, time_interval: Duration) {
+        self.snapshot_generator.set_time_interval(time_interval);
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct CsvSourceState{
+    current: u64,
+    terminated: bool,
 }
 
 impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
@@ -380,6 +404,9 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
         self.operator_coord.block_id = metadata.coord.block_id;
         self.operator_coord.host_id = metadata.coord.host_id;
         self.operator_coord.replica_id = metadata.coord.replica_id;
+
+        self.persistency_service = metadata.persistency_service.clone();
+        self.persistency_service.setup();
     }
 
     fn next(&mut self) -> StreamElement<Out> {
@@ -390,6 +417,19 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
             .csv_reader
             .as_mut()
             .expect("CsvSource was not initialized");
+
+        // Check snapshot generator
+        let snapshot = self.snapshot_generator.get_snapshot_marker();
+        if snapshot.is_some() {
+            let snapshot_id = snapshot.unwrap();
+            // Save state and forward snapshot marker
+            let state = CsvSourceState {
+                current: csv_reader.position().byte(),
+                terminated: self.terminated,
+            };         
+            self.persistency_service.save_state(self.operator_coord, snapshot_id, state);
+            return StreamElement::Snapshot(snapshot_id);
+        }
 
         match csv_reader.deserialize::<Out>().next() {
             Some(item) => StreamElement::Item(item.unwrap()),
@@ -425,6 +465,8 @@ impl<Out: Data + for<'a> Deserialize<'a>> Clone for CsvSource<Out> {
             options: self.options.clone(),
             terminated: false,
             operator_coord: self.operator_coord,
+            snapshot_generator: self.snapshot_generator.clone(),
+            persistency_service: self.persistency_service.clone(),
             _out: PhantomData,
         }
     }

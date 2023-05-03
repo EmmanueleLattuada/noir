@@ -1,4 +1,5 @@
 use std::fmt::Display;
+use std::time::Duration;
 
 use futures::{Stream, StreamExt};
 
@@ -22,6 +23,8 @@ where
     terminated: bool,
 
     operator_coord: OperatorCoord,
+    snapshot_generator: SnapshotGenerator,
+    persistency_service: PersistencyService,
 }
 
 impl<Out: Data, S> Display for AsyncStreamSource<Out, S>
@@ -61,6 +64,8 @@ where
             // This is the first operator in the chain
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, 0),
+            snapshot_generator: SnapshotGenerator::new(),
+            persistency_service: PersistencyService::default(),
         }
     }
 }
@@ -72,6 +77,14 @@ where
     fn get_max_parallelism(&self) -> Option<usize> {
         Some(1)
     }
+
+    fn set_snapshot_frequency_by_item(&self, item_interval: u64) {
+        self.snapshot_generator.set_snapshot_frequency_by_item(item_interval);
+    }
+
+    fn set_snapshot_frequency_by_time(&self, time_interval: Duration) {
+        self.snapshot_generator.set_snapshot_frequency_by_time(time_interval);
+    }
 }
 
 impl<Out: Data, S> Operator<Out> for AsyncStreamSource<Out, S>
@@ -82,11 +95,23 @@ where
         self.operator_coord.block_id = metadata.coord.block_id;
         self.operator_coord.host_id = metadata.coord.host_id;
         self.operator_coord.replica_id = metadata.coord.replica_id;
+
+        self.persistency_service = metadata.persistency_service.clone();
+        self.persistency_service.setup();
     }
 
     fn next(&mut self) -> StreamElement<Out> {
         if self.terminated {
             return StreamElement::Terminate;
+        }
+        // Check snapshot generator
+        let snapshot = self.snapshot_generator.get_snapshot_marker();
+        if snapshot.is_some() {
+            let snapshot_id = snapshot.unwrap();
+            // Save state and forward snapshot marker
+            // TODO: what is the state ?
+            self.persistency_service.save_void_state(self.operator_coord, snapshot_id);
+            return StreamElement::Snapshot(snapshot_id);
         }
         // TODO: with adaptive batching this does not work since S never emits FlushBatch messages
         let rt = tokio::runtime::Handle::current();

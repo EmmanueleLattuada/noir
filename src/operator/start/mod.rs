@@ -317,6 +317,16 @@ impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send> Source<Out>
     fn get_max_parallelism(&self) -> Option<usize> {
         None
     }
+
+    fn set_snapshot_frequency_by_item(&mut self, _item_interval: u64) {
+        // Forbidden action
+        panic!("It is not possible to set snapshot frequency for start operator");
+    }
+
+    fn set_snapshot_frequency_by_time(&mut self, _time_interval: Duration) {
+        // Forbidden action
+        panic!("It is not possible to set snapshot frequency for start operator");
+    }
 }
 
 #[cfg(test)]

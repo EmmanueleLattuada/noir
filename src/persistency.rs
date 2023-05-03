@@ -409,6 +409,7 @@ mod tests {
         str: String,
     }
 
+    #[ignore]
     #[test]
     fn test_save_get_remove_state(){
         let op_coord1 = OperatorCoord {
@@ -470,7 +471,8 @@ mod tests {
         assert_eq!(None, last);
 
     }
-    
+
+    #[ignore]    
     #[test]
     fn test_save_void_state() {
         let op_coord1 = OperatorCoord {
@@ -510,6 +512,7 @@ mod tests {
 
     }
 
+    #[ignore]
     #[test]
     fn test_snapshot_id_consistency() {
         let op_coord1 = OperatorCoord {

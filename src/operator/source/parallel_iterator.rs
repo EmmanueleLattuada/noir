@@ -1,12 +1,18 @@
 use std::fmt::Display;
 use std::ops::Range;
+use std::time::Duration;
+
+use serde::{Serialize, Deserialize};
 
 use crate::block::{BlockStructure, OperatorKind, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::source::Source;
 use crate::operator::{Data, Operator, StreamElement};
+use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::{CoordUInt, Stream};
+
+use super::SnapshotGenerator;
 
 pub trait IntoParallelSource: Clone + Send {
     type Item;
@@ -137,8 +143,11 @@ where
 {
     #[derivative(Debug = "ignore")]
     inner: IteratorGenerator<Source>,
+    last_index: Option<u64>,
     terminated: bool,
     operator_coord: OperatorCoord,
+    snapshot_generator: SnapshotGenerator,
+    persistency_service: PersistencyService,
 }
 
 impl<Source> Display for ParallelIteratorSource<Source>
@@ -189,10 +198,13 @@ where
     pub fn new(generator: Source) -> Self {
         Self {
             inner: IteratorGenerator::Generator(generator),
+            last_index: None,
             terminated: false,
             // This is the first operator in the chain so operator_id = 0
             // Other fields will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, 0),
+            snapshot_generator: SnapshotGenerator::new(),
+            persistency_service: PersistencyService::default(),
         }
     }
 }
@@ -206,6 +218,20 @@ where
     fn get_max_parallelism(&self) -> Option<usize> {
         None
     }
+
+    fn set_snapshot_frequency_by_item(&mut self, item_interval: u64) {
+        self.snapshot_generator.set_item_interval(item_interval);
+    }
+
+    fn set_snapshot_frequency_by_time(&mut self, time_interval: Duration) {
+        self.snapshot_generator.set_time_interval(time_interval);
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct ParallelIteratorSourceState {
+    last_index: Option<u64>,
+    terminated: bool,
 }
 
 impl<Source> Operator<Source::Item> for ParallelIteratorSource<Source>
@@ -227,15 +253,37 @@ where
         self.operator_coord.block_id = metadata.coord.block_id;
         self.operator_coord.host_id = metadata.coord.host_id;
         self.operator_coord.replica_id = metadata.coord.replica_id;
+
+        self.persistency_service = metadata.persistency_service.clone();
+        self.persistency_service.setup();
     }
 
     fn next(&mut self) -> StreamElement<Source::Item> {
         if self.terminated {
             return StreamElement::Terminate;
         }
+        // Check snapshot generator
+        let snapshot = self.snapshot_generator.get_snapshot_marker();
+        if snapshot.is_some() {
+            let snapshot_id = snapshot.unwrap();
+            // Save state and forward snapshot marker
+            let state = ParallelIteratorSourceState{
+                last_index: self.last_index,
+                terminated: self.terminated,
+            };
+            self.persistency_service.save_state(self.operator_coord, snapshot_id, state);
+            return StreamElement::Snapshot(snapshot_id);
+        }
         // TODO: with adaptive batching this does not work since it never emits FlushBatch messages
         match self.inner.next() {
-            Some(t) => StreamElement::Item(t),
+            Some(t) => {
+                if self.last_index.is_none() {
+                    self.last_index = Some(0);
+                } else {
+                    self.last_index = Some(self.last_index.unwrap() + 1);
+                }
+                StreamElement::Item(t) 
+            }
             None => {
                 self.terminated = true;
                 StreamElement::FlushAndRestart
@@ -264,8 +312,11 @@ where
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
+            last_index: self.last_index,
             terminated: false,
             operator_coord: self.operator_coord,
+            snapshot_generator: self.snapshot_generator.clone(),
+            persistency_service: self.persistency_service.clone(),
         }
     }
 }

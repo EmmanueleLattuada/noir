@@ -1,4 +1,5 @@
 use std::fmt::Display;
+use std::time::Duration;
 
 use crate::channel::{bounded, Receiver, RecvError, Sender, TryRecvError};
 
@@ -6,7 +7,10 @@ use crate::block::{BlockStructure, OperatorKind, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::source::Source;
 use crate::operator::{Data, Operator, StreamElement};
+use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
+
+use super::SnapshotGenerator;
 
 const MAX_RETRY: u8 = 8;
 
@@ -22,6 +26,8 @@ pub struct ChannelSource<Out: Data> {
     terminated: bool,
     retry_count: u8,
     operator_coord: OperatorCoord,
+    snapshot_generator: SnapshotGenerator,
+    persistency_service: PersistencyService,
 }
 
 impl<Out: Data> Display for ChannelSource<Out> {
@@ -58,6 +64,8 @@ impl<Out: Data> ChannelSource<Out> {
             // This is the first operator in the chain so operator_id = 0
             // Other fields will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, 0),
+            snapshot_generator: SnapshotGenerator::new(),
+            persistency_service: PersistencyService::default(),
         };
 
         (tx, s)
@@ -68,6 +76,14 @@ impl<Out: Data + core::fmt::Debug> Source<Out> for ChannelSource<Out> {
     fn get_max_parallelism(&self) -> Option<usize> {
         Some(1)
     }
+
+    fn set_snapshot_frequency_by_item(&mut self, item_interval: u64) {
+        self.snapshot_generator.set_item_interval(item_interval);
+    }
+
+    fn set_snapshot_frequency_by_time(&mut self, time_interval: Duration) {
+        self.snapshot_generator.set_time_interval(time_interval);
+    }
 }
 
 impl<Out: Data + core::fmt::Debug> Operator<Out> for ChannelSource<Out> {
@@ -75,6 +91,9 @@ impl<Out: Data + core::fmt::Debug> Operator<Out> for ChannelSource<Out> {
         self.operator_coord.block_id = metadata.coord.block_id;
         self.operator_coord.host_id = metadata.coord.host_id;
         self.operator_coord.replica_id = metadata.coord.replica_id;
+
+        self.persistency_service = metadata.persistency_service.clone();
+        self.persistency_service.setup();
     }
 
     fn next(&mut self) -> StreamElement<Out> {
@@ -82,6 +101,15 @@ impl<Out: Data + core::fmt::Debug> Operator<Out> for ChannelSource<Out> {
             if self.terminated {
                 return StreamElement::Terminate;
             }
+            // Check snapshot generator
+            let snapshot = self.snapshot_generator.get_snapshot_marker();
+            if snapshot.is_some() {
+                let snapshot_id = snapshot.unwrap();
+                // Save void state (this operator is stateless) and forward snapshot marker
+                self.persistency_service.save_void_state(self.operator_coord, snapshot_id);
+                return StreamElement::Snapshot(snapshot_id);
+            }
+
             let result = self.rx.try_recv();
 
             log::debug!("Channel received stuff");

@@ -69,6 +69,14 @@ impl<Out: Data> Source<Out> for FakeOperator<Out> {
     fn get_max_parallelism(&self) -> Option<usize> {
         None
     }
+
+    fn set_snapshot_frequency_by_item(&mut self, _item_interval: u64) {
+        todo!();
+    }
+
+    fn set_snapshot_frequency_by_time(&mut self, _time_interval: Duration) {
+        todo!();
+    }
 }
 
 pub(crate) struct FakeNetworkTopology<T: ExchangeData> {
