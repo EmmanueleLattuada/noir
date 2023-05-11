@@ -11,6 +11,7 @@ pub use descr::*;
 use crate::block::{GroupHasherBuilder, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::{Data, DataKey, ExchangeData, Operator, StreamElement, Timestamp};
+use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::OperatorId;
 use crate::stream::{KeyValue, KeyedStream, Stream, WindowedStream};
 
@@ -109,6 +110,8 @@ where
     prev: Prev,
     /// Operator coordinate
     operator_coord: OperatorCoord,
+    /// Persistency service
+    persistency_service: PersistencyService,
     /// The name of the actual operator that this one abstracts.
     ///
     /// It is used only for tracing purposes.
@@ -136,6 +139,22 @@ where
     }
 }
 
+/*
+pub (crate) struct WindowOperatorState<Key, In, Out, W: WindowManager> {
+    /// The manager that will build the windows.
+    manager: KeyedWindowManagerState<Key, In, Out, W>,
+    /// A buffer for storing ready items.
+    output_buffer: VecDeque<StreamElement<KeyValue<Key, Out>>>,
+}
+
+pub (crate) struct KeyedWindowManagerState<Key, In, Out, W: WindowManager> {
+    windows: HashMap<Key, W, GroupHasherBuilder>,
+    _in: PhantomData<In>,
+    _out: PhantomData<Out>,
+}
+*/
+
+
 impl<Key, In, Out, Prev, W> Operator<KeyValue<Key, Out>> for WindowOperator<Key, In, Out, Prev, W>
 where
     W: WindowManager<In = In, Out = Out> + Send,
@@ -150,6 +169,9 @@ where
         self.operator_coord.block_id = metadata.coord.block_id;
         self.operator_coord.host_id = metadata.coord.host_id;
         self.operator_coord.replica_id = metadata.coord.replica_id;
+
+        self.persistency_service = metadata.persistency_service.clone();
+        self.persistency_service.setup();
     }
 
     fn next(&mut self) -> StreamElement<KeyValue<Key, Out>> {
@@ -238,6 +260,7 @@ where
             prev,  
             // This will be set in setup method          
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
+            persistency_service: PersistencyService::default(),
             name,
             manager,
             output_buffer: Default::default(),

@@ -1,4 +1,5 @@
 use itertools::Itertools;
+use serde::{Serialize, Deserialize};
 
 use crate::network::Coord;
 use crate::operator::Timestamp;
@@ -7,7 +8,7 @@ use crate::operator::Timestamp;
 ///
 /// A watermark with timestamp `ts` is safe to be passed downstream if and only if, for every
 /// previous replica, a watermark with timestamp greater or equal to `ts` has already been received.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(super) struct WatermarkFrontier {
     /// Watermark with largest timestamp received, for each replica
     largest_watermark: Vec<Option<Timestamp>>,

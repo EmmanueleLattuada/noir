@@ -5,6 +5,7 @@ use crate::network::OperatorCoord;
 use crate::operator::fold::Fold;
 use crate::operator::sink::{Sink, StreamOutput, StreamOutputRef};
 use crate::operator::{Data, Operator, StreamElement};
+use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::stream::Stream;
 
@@ -15,6 +16,7 @@ where
 {
     prev: PreviousOperators,
     operator_coord: OperatorCoord,
+    persistency_service: PersistencyService,
     result: usize,
     output: StreamOutputRef<usize>,
 }
@@ -29,6 +31,7 @@ where
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
+            persistency_service: PersistencyService::default(),
             result,
             output,
         }
@@ -54,6 +57,9 @@ where
         self.operator_coord.block_id = metadata.coord.block_id;
         self.operator_coord.host_id = metadata.coord.host_id;
         self.operator_coord.replica_id = metadata.coord.replica_id;
+
+        self.persistency_service = metadata.persistency_service.clone();
+        self.persistency_service.setup();
     }
 
     fn next(&mut self) -> StreamElement<()> {
@@ -69,9 +75,11 @@ where
             }
             StreamElement::FlushBatch => StreamElement::FlushBatch,
             StreamElement::FlushAndRestart => StreamElement::FlushAndRestart,
-            // TODO: handle snapshot marker
-            StreamElement::Snapshot(_) => {
-                panic!("Snapshot not supported for collect operator")
+            StreamElement::Snapshot(snap_id) => {
+                // save state
+                let state = self.result as u64;
+                self.persistency_service.save_state(self.operator_coord, snap_id, state);
+                StreamElement::Snapshot(snap_id)
             }
         }
     }
@@ -184,7 +192,12 @@ mod tests {
 
     use crate::config::EnvironmentConfig;
     use crate::environment::StreamEnvironment;
-    use crate::operator::source;
+    use crate::network::OperatorCoord;
+    use crate::operator::sink::StreamOutputRef;
+    use crate::operator::sink::collect_count::CollectCountSink;
+    use crate::operator::{source, StreamElement, Operator};
+    use crate::persistency::{PersistencyService, PersistencyServices};
+    use crate::test::FakeOperator;
 
     #[test]
     fn collect_vec() {
@@ -194,4 +207,44 @@ mod tests {
         env.execute();
         assert_eq!(res.get().unwrap(), (0..10).collect_vec());
     }
+
+    #[ignore]
+    #[test]
+    fn test_collect_count_persistency_save_state() {
+        let mut fake_operator = FakeOperator::empty();
+        fake_operator.push(StreamElement::Item(1));
+        fake_operator.push(StreamElement::Item(2));
+        fake_operator.push(StreamElement::Snapshot(1));
+        fake_operator.push(StreamElement::Item(3));
+        fake_operator.push(StreamElement::Item(4));
+        fake_operator.push(StreamElement::Snapshot(2));
+
+        let output = StreamOutputRef::default();
+        let mut collect = CollectCountSink::new(fake_operator, 0, output.clone());
+        collect.operator_coord = OperatorCoord{
+            block_id: 0,
+            host_id: 0,
+            replica_id: 2,
+            operator_id: 1,
+        };
+        collect.persistency_service = PersistencyService::new(Some("redis://127.0.0.1".to_owned()));
+        collect.persistency_service.setup();
+
+        collect.next();
+        collect.next();
+        assert_eq!(collect.next(), StreamElement::Snapshot(1));
+        let state: Option<u64> = collect.persistency_service.get_state(collect.operator_coord, 1);
+        assert_eq!(state.unwrap(), 3);
+        collect.next();
+        collect.next();
+        assert_eq!(collect.next(), StreamElement::Snapshot(2));
+        let state: Option<u64> = collect.persistency_service.get_state(collect.operator_coord, 2);
+        assert_eq!(state.unwrap(), 10);
+
+        // Clean redis
+        collect.persistency_service.delete_state(collect.operator_coord, 1);
+        collect.persistency_service.delete_state(collect.operator_coord, 2);
+
+    }
+
 }

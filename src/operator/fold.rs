@@ -1,15 +1,18 @@
 use std::fmt::Display;
 use std::marker::PhantomData;
 
+use serde::{Serialize, Deserialize};
+
 use crate::block::{BlockStructure, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::{Data, ExchangeData, Operator, StreamElement, Timestamp};
+use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::stream::Stream;
 
 #[derive(Clone, Derivative)]
 #[derivative(Debug)]
-pub struct Fold<Out: Data, NewOut: Data, F, PreviousOperators>
+pub struct Fold<Out: Data, NewOut: ExchangeData, F, PreviousOperators>
 where
     F: Fn(&mut NewOut, Out) + Send + Clone,
     PreviousOperators: Operator<Out>,
@@ -24,10 +27,11 @@ where
     max_watermark: Option<Timestamp>,
     received_end: bool,
     received_end_iter: bool,
+    persistency_service: PersistencyService,
     _out: PhantomData<Out>,
 }
 
-impl<Out: Data, NewOut: Data, F, PreviousOperators> Display
+impl<Out: Data, NewOut: ExchangeData, F, PreviousOperators> Display
     for Fold<Out, NewOut, F, PreviousOperators>
 where
     F: Fn(&mut NewOut, Out) + Send + Clone,
@@ -44,7 +48,7 @@ where
     }
 }
 
-impl<Out: Data, NewOut: Data, F, PreviousOperators: Operator<Out>>
+impl<Out: Data, NewOut: ExchangeData, F, PreviousOperators: Operator<Out>>
     Fold<Out, NewOut, F, PreviousOperators>
 where
     F: Fn(&mut NewOut, Out) + Send + Clone,
@@ -63,12 +67,22 @@ where
             max_watermark: None,
             received_end: false,
             received_end_iter: false,
+            persistency_service: PersistencyService::default(),
             _out: Default::default(),
         }
     }
 }
 
-impl<Out: Data, NewOut: Data, F, PreviousOperators> Operator<NewOut>
+#[derive(Clone, Serialize, Deserialize)]
+struct FoldState<T> {
+    accumulator: Option<T>,
+    timestamp: Option<Timestamp>,
+    max_watermark: Option<Timestamp>,
+    received_end: bool,
+    received_end_iter: bool,
+}
+
+impl<Out: Data, NewOut: ExchangeData, F, PreviousOperators> Operator<NewOut>
     for Fold<Out, NewOut, F, PreviousOperators>
 where
     F: Fn(&mut NewOut, Out) + Send + Clone,
@@ -80,6 +94,9 @@ where
         self.operator_coord.block_id = metadata.coord.block_id;
         self.operator_coord.host_id = metadata.coord.host_id;
         self.operator_coord.replica_id = metadata.coord.replica_id;
+
+        self.persistency_service = metadata.persistency_service.clone();
+        self.persistency_service.setup();
     }
 
     #[inline]
@@ -109,9 +126,18 @@ where
                 }
                 // this block wont sent anything until the stream ends
                 StreamElement::FlushBatch => {}
-                // TODO: handle snapshot marker
-                StreamElement::Snapshot(_) => {
-                    panic!("Snapshot not supported for fold operator")
+                StreamElement::Snapshot(snap_id) => {
+                    // Save state and forward marker
+                    let acc = self.accumulator.clone();
+                    let state = FoldState{
+                        accumulator: acc,
+                        timestamp: self.timestamp,
+                        max_watermark: self.max_watermark,
+                        received_end: self.received_end,
+                        received_end_iter: self.received_end_iter,
+                    }; 
+                    self.persistency_service.save_state(self.operator_coord, snap_id, state);
+                    return StreamElement::Snapshot(snap_id);
                 }
             }
         }
@@ -193,7 +219,7 @@ where
     ///
     /// assert_eq!(res.get().unwrap(), vec![0 + 1 + 2 + 3 + 4]);
     /// ```
-    pub fn fold<NewOut: Data, F>(self, init: NewOut, f: F) -> Stream<NewOut, impl Operator<NewOut>>
+    pub fn fold<NewOut: ExchangeData, F>(self, init: NewOut, f: F) -> Stream<NewOut, impl Operator<NewOut>>
     where
         Out: ExchangeData,
         F: Fn(&mut NewOut, Out) + Send + Clone + 'static,
@@ -256,8 +282,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::operator::fold::Fold;
+    use crate::network::OperatorCoord;
+    use crate::operator::fold::{Fold, FoldState};
     use crate::operator::{Operator, StreamElement};
+    use crate::persistency::{PersistencyService, PersistencyServices};
     use crate::test::FakeOperator;
 
     #[test]
@@ -306,5 +334,41 @@ mod tests {
         assert_eq!(fold.next(), StreamElement::Item(3 + 4 + 5));
         assert_eq!(fold.next(), StreamElement::FlushAndRestart);
         assert_eq!(fold.next(), StreamElement::Terminate);
+    }
+
+    #[ignore]
+    #[test]
+    fn test_fold_persistency_save_state() {
+        let mut fake_operator = FakeOperator::empty();
+        fake_operator.push(StreamElement::Item(1));
+        fake_operator.push(StreamElement::Item(2));
+        fake_operator.push(StreamElement::Snapshot(1));
+        fake_operator.push(StreamElement::Item(3));
+        fake_operator.push(StreamElement::Item(4));
+        fake_operator.push(StreamElement::Snapshot(2));
+
+        let mut fold = Fold::new(fake_operator, 0, |a, b| *a += b);
+ 
+        fold.operator_coord = OperatorCoord{
+            block_id: 0,
+            host_id: 0,
+            replica_id: 1,
+            operator_id: 1,
+        };
+        fold.persistency_service = PersistencyService::new(Some("redis://127.0.0.1".to_owned()));
+        fold.persistency_service.setup();
+
+        assert_eq!(fold.next(), StreamElement::Snapshot(1));
+        let state: Option<FoldState<i32>> = fold.persistency_service.get_state(fold.operator_coord, 1);
+        assert_eq!(state.unwrap().accumulator.unwrap(), 3);
+
+        assert_eq!(fold.next(), StreamElement::Snapshot(2));
+        let state: Option<FoldState<i32>> = fold.persistency_service.get_state(fold.operator_coord, 2);
+        assert_eq!(state.unwrap().accumulator.unwrap(), 10);
+
+        // Clean redis
+        fold.persistency_service.delete_state(fold.operator_coord, 1);
+        fold.persistency_service.delete_state(fold.operator_coord, 2);
+
     }
 }

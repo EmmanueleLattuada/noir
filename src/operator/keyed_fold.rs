@@ -3,26 +3,31 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::marker::PhantomData;
+use std::hash::Hash;
+
+use serde::{Serialize, Deserialize};
 
 use crate::block::{group_by_hash, BlockStructure, NextStrategy, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::end::EndBlock;
 use crate::operator::key_by::KeyBy;
 use crate::operator::{
-    Data, DataKey, ExchangeData, ExchangeDataKey, Operator, StreamElement, Timestamp,
+    Data, ExchangeData, ExchangeDataKey, Operator, StreamElement, Timestamp,
 };
+use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::stream::{KeyValue, KeyedStream, Stream};
 
 #[derive(Derivative)]
 #[derivative(Debug, Clone)]
-pub struct KeyedFold<Key: DataKey, Out: Data, NewOut: Data, F, PreviousOperators>
+pub struct KeyedFold<Key: ExchangeDataKey, Out: Data, NewOut: ExchangeData, F, PreviousOperators>
 where
     F: Fn(&mut NewOut, Out) + Send + Clone,
     PreviousOperators: Operator<KeyValue<Key, Out>>,
 {
     prev: PreviousOperators,
     operator_coord: OperatorCoord,
+    persistency_service: PersistencyService,
     #[derivative(Debug = "ignore")]
     fold: F,
     init: NewOut,
@@ -35,7 +40,7 @@ where
     _out: PhantomData<Out>,
 }
 
-impl<Key: DataKey, Out: Data, NewOut: Data, F, PreviousOperators> Display
+impl<Key: ExchangeDataKey, Out: Data, NewOut: ExchangeData, F, PreviousOperators> Display
     for KeyedFold<Key, Out, NewOut, F, PreviousOperators>
 where
     F: Fn(&mut NewOut, Out) + Send + Clone,
@@ -52,7 +57,7 @@ where
     }
 }
 
-impl<Key: DataKey, Out: Data, NewOut: Data, F, PreviousOperators: Operator<KeyValue<Key, Out>>>
+impl<Key: ExchangeDataKey, Out: Data, NewOut: ExchangeData, F, PreviousOperators: Operator<KeyValue<Key, Out>>>
     KeyedFold<Key, Out, NewOut, F, PreviousOperators>
 where
     F: Fn(&mut NewOut, Out) + Send + Clone,
@@ -63,7 +68,7 @@ where
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0,0,0,op_id),
-
+            persistency_service: PersistencyService::default(),
             fold,
             init,
             accumulators: Default::default(),
@@ -91,7 +96,18 @@ where
     }
 }
 
-impl<Key: DataKey, Out: Data, NewOut: Data, F, PreviousOperators> Operator<KeyValue<Key, NewOut>>
+
+#[derive(Clone, Serialize, Deserialize)]
+struct KeyedFoldState<K: Hash + Eq, O> {
+    accumulators: HashMap<K, O, crate::block::GroupHasherBuilder>,
+    timestamps: HashMap<K, Timestamp, crate::block::GroupHasherBuilder>,
+    ready: Vec<StreamElement<KeyValue<K, O>>>,
+    max_watermark: Option<Timestamp>,
+    received_end: bool,
+    received_end_iter: bool,
+}
+
+impl<Key: ExchangeDataKey, Out: Data, NewOut: ExchangeData, F, PreviousOperators> Operator<KeyValue<Key, NewOut>>
     for KeyedFold<Key, Out, NewOut, F, PreviousOperators>
 where
     F: Fn(&mut NewOut, Out) + Send + Clone,
@@ -103,6 +119,9 @@ where
         self.operator_coord.block_id = metadata.coord.block_id;
         self.operator_coord.host_id = metadata.coord.host_id;
         self.operator_coord.replica_id = metadata.coord.replica_id;
+
+        self.persistency_service = metadata.persistency_service.clone();
+        self.persistency_service.setup();
     }
 
     #[inline]
@@ -129,9 +148,18 @@ where
                 }
                 // this block won't sent anything until the stream ends
                 StreamElement::FlushBatch => {}
-                // TODO: handle snapshot marker
-                StreamElement::Snapshot(_) => {
-                    panic!("Snapshot not supported for keyed_fold operator")
+                StreamElement::Snapshot(snap_id) => {
+                    // Save state and forward marker
+                    let state = KeyedFoldState{
+                        accumulators: self.accumulators.clone(),
+                        timestamps: self.timestamps.clone(),
+                        ready: self.ready.clone(),
+                        max_watermark: self.max_watermark,
+                        received_end: self.received_end,
+                        received_end_iter: self.received_end_iter,
+                    }; 
+                    self.persistency_service.save_state(self.operator_coord, snap_id, state);
+                    return StreamElement::Snapshot(snap_id);
                 }
             }
         }
@@ -261,7 +289,7 @@ where
     }
 }
 
-impl<Key: DataKey, Out: Data, OperatorChain> KeyedStream<Key, Out, OperatorChain>
+impl<Key: ExchangeDataKey, Out: Data, OperatorChain> KeyedStream<Key, Out, OperatorChain>
 where
     OperatorChain: Operator<KeyValue<Key, Out>> + 'static,
 {
@@ -302,7 +330,7 @@ where
     /// res.sort_unstable();
     /// assert_eq!(res, vec![(0, 0 + 2 + 4), (1, 1 + 3)]);
     /// ```
-    pub fn fold<NewOut: Data, F>(
+    pub fn fold<NewOut: ExchangeData, F>(
         self,
         init: NewOut,
         f: F,

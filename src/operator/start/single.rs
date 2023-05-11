@@ -72,6 +72,14 @@ impl<Out: ExchangeData> StartBlockReceiver<Out> for SingleStartBlockReceiver<Out
             .push(OperatorReceiver::new::<Out>(self.previous_block_id));
         BlockStructure::default().add_operator(operator)
     }
+
+    // Dummy type: get_state return always None
+    type ReceiverState = bool;
+
+    fn get_state(&self) -> Option<Self::ReceiverState> {
+        // No state to be persisted
+        None
+    }
 }
 
 impl<Out: ExchangeData> Clone for SingleStartBlockReceiver<Out> {

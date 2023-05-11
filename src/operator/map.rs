@@ -4,6 +4,7 @@ use std::marker::PhantomData;
 use crate::block::{BlockStructure, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::{Data, DataKey, Operator, StreamElement};
+use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::stream::{KeyValue, KeyedStream, Stream};
 
@@ -20,6 +21,8 @@ where
     f: F,
     _out: PhantomData<Out>,
     _new_out: PhantomData<NewOut>,
+
+    persistency_service: PersistencyService,
 }
 
 impl<Out: Data, NewOut: Data, F, PreviousOperators> Display
@@ -51,6 +54,7 @@ where
             f,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
+            persistency_service: Default::default(),
 
             _out: Default::default(),
             _new_out: Default::default(),
@@ -70,12 +74,22 @@ where
         self.operator_coord.block_id = metadata.coord.block_id;
         self.operator_coord.host_id = metadata.coord.host_id;
         self.operator_coord.replica_id = metadata.coord.replica_id;
-        
+
+        self.persistency_service = metadata.persistency_service.clone();
+        self.persistency_service.setup();        
     }
 
     #[inline]
     fn next(&mut self) -> StreamElement<NewOut> {
-        self.prev.next().map(&self.f)
+        let elem = self.prev.next();
+        // Save void state and forward the marker
+        match elem {
+            StreamElement::Snapshot(snap_id) => {
+                self.persistency_service.save_void_state(self.operator_coord, snap_id);
+            }
+            _ => {},
+        }
+        elem.map(&self.f)
     }
 
     fn structure(&self) -> BlockStructure {

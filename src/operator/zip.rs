@@ -2,11 +2,14 @@ use std::collections::VecDeque;
 use std::fmt::Display;
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+
 use crate::block::{BlockStructure, NextStrategy, OperatorReceiver, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::iteration::IterationStateLock;
 use crate::operator::start::{MultipleStartBlockReceiverOperator, StartBlock, TwoSidesItem};
 use crate::operator::{ExchangeData, Operator, StreamElement};
+use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{BlockId, ExecutionMetadata, OperatorId};
 use crate::stream::Stream;
 
@@ -14,6 +17,7 @@ use crate::stream::Stream;
 pub struct Zip<Out1: ExchangeData, Out2: ExchangeData> {
     prev: MultipleStartBlockReceiverOperator<Out1, Out2>,
     operator_coord: OperatorCoord,
+    persistency_service: PersistencyService,
     stash1: VecDeque<StreamElement<Out1>>,
     stash2: VecDeque<StreamElement<Out2>>,
     prev_block_id1: BlockId,
@@ -50,6 +54,7 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Zip<Out1, Out2> {
             // Since previous operator is the first in the chain, this will have op_id 1
             // Other fields will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, 1),
+            persistency_service: PersistencyService::default(),
             stash1: Default::default(),
             stash2: Default::default(),
             prev_block_id1,
@@ -58,6 +63,13 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Zip<Out1, Out2> {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+struct ZipState<O1, O2> {
+    stash1: VecDeque<StreamElement<O1>>,
+    stash2: VecDeque<StreamElement<O2>>,
+}
+
+
 impl<Out1: ExchangeData, Out2: ExchangeData> Operator<(Out1, Out2)> for Zip<Out1, Out2> {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
@@ -65,6 +77,9 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Operator<(Out1, Out2)> for Zip<Out1
         self.operator_coord.block_id = metadata.coord.block_id;
         self.operator_coord.host_id = metadata.coord.host_id;
         self.operator_coord.replica_id = metadata.coord.replica_id;
+
+        self.persistency_service = metadata.persistency_service.clone();
+        self.persistency_service.setup();
     }
 
     #[inline]
@@ -105,9 +120,14 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Operator<(Out1, Out2)> for Zip<Out1
                     return item.map(|_| unreachable!())
                 }
 
-                // TODO: handle snapshot marker
-                StreamElement::Snapshot(_) => {
-                    panic!("Snapshot not supported for zip operator")
+                StreamElement::Snapshot(snap_id) => {
+                    // Save state adn forward the marker
+                    let state = ZipState {
+                        stash1: self.stash1.clone(),
+                        stash2: self.stash2.clone(),
+                    };
+                    self.persistency_service.save_state(self.operator_coord, snap_id, state);
+                    return StreamElement::Snapshot(snap_id);
                 }
             }
         }

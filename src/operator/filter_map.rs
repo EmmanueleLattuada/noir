@@ -4,6 +4,7 @@ use std::marker::PhantomData;
 use crate::block::{BlockStructure, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::{Data, DataKey, Operator};
+use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::OperatorId;
 use crate::stream::{KeyValue, KeyedStream, Stream};
 use crate::ExecutionMetadata;
@@ -19,6 +20,7 @@ where
     prev: PreviousOperator,
     operator_coord : OperatorCoord,
     predicate: Predicate,
+    persistency_service: PersistencyService,
     _in: PhantomData<In>,
     _out: PhantomData<Out>,
 }
@@ -53,6 +55,7 @@ where
             operator_coord: OperatorCoord::new(0,0,0,op_id),
 
             predicate,
+            persistency_service: PersistencyService::default(),
             _in: Default::default(),
             _out: Default::default(),
         }
@@ -71,6 +74,9 @@ where
         self.operator_coord.block_id = metadata.coord.block_id;
         self.operator_coord.host_id = metadata.coord.host_id;
         self.operator_coord.replica_id = metadata.coord.replica_id;
+
+        self.persistency_service = metadata.persistency_service.clone();
+        self.persistency_service.setup();
     }
 
     #[inline]
@@ -91,9 +97,10 @@ where
                 StreamElement::Terminate => return StreamElement::Terminate,
                 StreamElement::FlushAndRestart => return StreamElement::FlushAndRestart,
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
-                // TODO: handle snapshot marker
-                StreamElement::Snapshot(_) => {
-                    panic!("Snapshot not supported for filter_map operator")
+                StreamElement::Snapshot(snap_id) => {
+                    // Save void state and forward snapshot marker
+                    self.persistency_service.save_void_state(self.operator_coord, snap_id);
+                    return StreamElement::Snapshot(snap_id);
                 }
             }
         }

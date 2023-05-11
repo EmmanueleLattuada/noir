@@ -4,6 +4,7 @@ use std::marker::PhantomData;
 use crate::block::{BlockStructure, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::{Data, DataKey, Operator, StreamElement};
+use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::stream::{KeyValue, KeyedStream, Stream};
 
@@ -18,6 +19,7 @@ where
     operator_coord: OperatorCoord,
     #[derivative(Debug = "ignore")]
     f: F,
+    persistency_service: PersistencyService,
     _out: PhantomData<Out>,
 }
 
@@ -34,6 +36,7 @@ where
             operator_coord: OperatorCoord::new(0,0,0,op_id),
 
             f,
+            persistency_service: PersistencyService::default(),
             _out: Default::default(),
         }
     }
@@ -61,6 +64,9 @@ where
         self.operator_coord.block_id = metadata.coord.block_id;
         self.operator_coord.host_id = metadata.coord.host_id;
         self.operator_coord.replica_id = metadata.coord.replica_id;
+
+        self.persistency_service = metadata.persistency_service.clone();
+        self.persistency_service.setup();
     }
 
     #[inline]
@@ -70,9 +76,9 @@ where
             StreamElement::Item(t) | StreamElement::Timestamped(t, _) => {
                 (self.f)(t);
             }
-            // TODO: handle snapshot marker
-            StreamElement::Snapshot(_) => {
-                panic!("Snapshot not supported for inspect operator")
+            StreamElement::Snapshot(snap_id) => {
+                // Save void state and forward snapshot marker
+                self.persistency_service.save_void_state(self.operator_coord, *snap_id);
             }
             _ => {}
         }

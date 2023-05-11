@@ -5,6 +5,7 @@ use std::marker::PhantomData;
 use crate::block::{BlockStructure, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::{Data, DataKey, Operator, StreamElement, Timestamp};
+use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::stream::{KeyValue, KeyedStream, Stream};
 
@@ -31,6 +32,7 @@ where
     frontiter: Option<<Iter as IntoIterator>::IntoIter>,
     #[cfg(feature = "timestamp")]
     timestamp: Option<Timestamp>,
+    persistency_service: PersistencyService,
     _out: PhantomData<In>,
     _iter_out: PhantomData<Out>,
 }
@@ -52,6 +54,7 @@ where
             f: self.f.clone(),
             frontiter: None,
             timestamp: self.timestamp,
+            persistency_service: self.persistency_service.clone(),
             _out: self._out,
             _iter_out: self._iter_out,
         }
@@ -98,6 +101,7 @@ where
             frontiter: None,
             #[cfg(feature = "timestamp")]
             timestamp: None,
+            persistency_service: PersistencyService::default(),
             _out: Default::default(),
             _iter_out: Default::default(),
         }
@@ -120,6 +124,9 @@ where
         self.operator_coord.block_id = metadata.coord.block_id;
         self.operator_coord.host_id = metadata.coord.host_id;
         self.operator_coord.replica_id = metadata.coord.replica_id;
+
+        self.persistency_service = metadata.persistency_service.clone();
+        self.persistency_service.setup();
     }
 
     fn next(&mut self) -> StreamElement<Out> {
@@ -156,9 +163,11 @@ where
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
                 StreamElement::Terminate => return StreamElement::Terminate,
                 StreamElement::FlushAndRestart => return StreamElement::FlushAndRestart,
-                // TODO: handle snapshot marker
-                StreamElement::Snapshot(_) => {
-                    panic!("Snapshot not supported for flat_map operator")
+                StreamElement::Snapshot(snap_id) => {
+                    // Save void state and forward snapshot marker
+                    // No state because when a snapshot marker arrives frontiter and timestamp are None 
+                    self.persistency_service.save_void_state(self.operator_coord, snap_id);
+                    return StreamElement::Snapshot(snap_id);
                 }
             }
         }
@@ -236,6 +245,7 @@ where
     #[derivative(Debug = "ignore")]
     frontiter: Option<(Key, Iter::IntoIter)>,
     timestamp: Option<Timestamp>,
+    persistency_service: PersistencyService,
     _key: PhantomData<Key>,
     _in: PhantomData<In>,
     _iter_out: PhantomData<Out>,
@@ -259,6 +269,7 @@ where
             f: self.f.clone(),
             frontiter: None,
             timestamp: self.timestamp,
+            persistency_service: self.persistency_service.clone(),
             _key: self._key,
             _in: self._in,
             _iter_out: self._iter_out,
@@ -309,6 +320,7 @@ where
             f,
             frontiter: None,
             timestamp: None,
+            persistency_service: PersistencyService::default(),
             _key: Default::default(),
             _in: Default::default(),
             _iter_out: Default::default(),
@@ -333,6 +345,9 @@ where
         self.operator_coord.block_id = metadata.coord.block_id;
         self.operator_coord.host_id = metadata.coord.host_id;
         self.operator_coord.replica_id = metadata.coord.replica_id;
+
+        self.persistency_service = metadata.persistency_service.clone();
+        self.persistency_service.setup();
     }
 
     #[inline]
@@ -371,9 +386,11 @@ where
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
                 StreamElement::Terminate => return StreamElement::Terminate,
                 StreamElement::FlushAndRestart => return StreamElement::FlushAndRestart,
-                // TODO: handle snapshot marker
-                StreamElement::Snapshot(_) => {
-                    panic!("Snapshot not supported for flat_map operator")
+                StreamElement::Snapshot(snap_id) => {
+                    // Save void state and forward snapshot marker
+                    // No state because when a snapshot marker arrives frontiter and timestamp are None 
+                    self.persistency_service.save_void_state(self.operator_coord, snap_id);
+                    return StreamElement::Snapshot(snap_id);
                 }
             }
         }

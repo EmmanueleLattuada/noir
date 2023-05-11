@@ -2,15 +2,18 @@ use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::fmt::Display;
 
+use serde::{Serialize, Deserialize};
+
 use crate::block::{BlockStructure, OperatorStructure};
 use crate::network::OperatorCoord;
-use crate::operator::{Data, Operator, StreamElement, Timestamp};
+use crate::operator::{Operator, StreamElement, Timestamp};
+use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::{KeyValue, KeyedStream, Stream};
 
-use super::DataKey;
+use super::{ExchangeData, ExchangeDataKey};
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct TimestampedItem<Out> {
     item: Out,
     timestamp: Timestamp,
@@ -37,7 +40,7 @@ impl<Out> PartialEq for TimestampedItem<Out> {
 }
 
 #[derive(Clone)]
-pub(crate) struct Reorder<Out: Data, PreviousOperators>
+pub(crate) struct Reorder<Out: ExchangeData, PreviousOperators>
 where
     PreviousOperators: Operator<Out>,
 {
@@ -48,11 +51,11 @@ where
     prev: PreviousOperators,
 
     operator_coord: OperatorCoord,
-
+    persistency_service: PersistencyService,
     received_end: bool,
 }
 
-impl<Out: Data, PreviousOperators> Display for Reorder<Out, PreviousOperators>
+impl<Out: ExchangeData, PreviousOperators> Display for Reorder<Out, PreviousOperators>
 where
     PreviousOperators: Operator<Out>,
 {
@@ -66,7 +69,7 @@ where
     }
 }
 
-impl<Out: Data, PreviousOperators> Reorder<Out, PreviousOperators>
+impl<Out: ExchangeData, PreviousOperators> Reorder<Out, PreviousOperators>
 where
     PreviousOperators: Operator<Out>,
 {
@@ -77,16 +80,23 @@ where
             scratch: Default::default(),
             last_watermark: None,
             prev,
-
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
-
+            persistency_service: PersistencyService::default(),
             received_end: false,
         }
     }
 }
 
-impl<Out: Data, PreviousOperators> Operator<Out> for Reorder<Out, PreviousOperators>
+#[derive(Clone, Serialize, Deserialize)]
+struct ReorderState<O> {
+    buffer: VecDeque<TimestampedItem<O>>,
+    scratch: Vec<TimestampedItem<O>>,
+    last_watermark: Option<Timestamp>,
+    received_end: bool,
+}
+
+impl<Out: ExchangeData, PreviousOperators> Operator<Out> for Reorder<Out, PreviousOperators>
 where
     PreviousOperators: Operator<Out>,
 {
@@ -96,6 +106,9 @@ where
         self.operator_coord.block_id = metadata.coord.block_id;
         self.operator_coord.host_id = metadata.coord.host_id;
         self.operator_coord.replica_id = metadata.coord.replica_id;
+
+        self.persistency_service = metadata.persistency_service.clone();
+        self.persistency_service.setup();
     }
 
     #[inline]
@@ -116,9 +129,16 @@ where
                     glidesort::sort_with_vec(self.buffer.make_contiguous(), &mut self.scratch);
                 }
                 StreamElement::Terminate => return StreamElement::Terminate,
-                // TODO: handle snapshot marker
-                StreamElement::Snapshot(_) => {
-                    panic!("Snapshot not supported for reorder operator")
+                StreamElement::Snapshot(snap_id) => {
+                    // Save state and forward marker
+                    let state = ReorderState {
+                        buffer: self.buffer.clone(),
+                        scratch: self.scratch.clone(),
+                        last_watermark: self.last_watermark,
+                        received_end: self.received_end,
+                    };
+                    self.persistency_service.save_state(self.operator_coord, snap_id, state);
+                    return StreamElement::Snapshot(snap_id);
                 }
             }
         }
@@ -158,11 +178,11 @@ where
     }
 }
 
-impl<Key: DataKey, Out, OperatorChain> KeyedStream<Key, Out, OperatorChain>
+impl<Key: ExchangeDataKey, Out, OperatorChain> KeyedStream<Key, Out, OperatorChain>
 where
-    Key: DataKey,
+    Key: ExchangeDataKey,
     OperatorChain: Operator<KeyValue<Key, Out>> + 'static,
-    Out: Data + Clone,
+    Out: ExchangeData + Clone,
 {
     /// # TODO
     /// Reorder timestamped items
@@ -174,7 +194,7 @@ where
 impl<Out, OperatorChain> Stream<Out, OperatorChain>
 where
     OperatorChain: Operator<Out> + 'static,
-    Out: Data + Clone,
+    Out: ExchangeData + Clone,
 {
     /// # TODO
     /// Reorder timestamped items

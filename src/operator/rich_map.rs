@@ -5,6 +5,7 @@ use std::marker::PhantomData;
 use crate::block::{BlockStructure, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::{Data, DataKey, Operator, StreamElement};
+use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::stream::{KeyValue, KeyedStream, Stream};
 
@@ -16,6 +17,7 @@ where
 {
     prev: OperatorChain,
     operator_coord: OperatorCoord,
+    persistency_service: PersistencyService,
     maps_fn: HashMap<Key, F, crate::block::GroupHasherBuilder>,
     init_map: F,
     _out: PhantomData<Out>,
@@ -32,6 +34,7 @@ where
         Self {
             prev: self.prev.clone(),
             operator_coord: self.operator_coord,
+            persistency_service: self.persistency_service.clone(),
             maps_fn: self.maps_fn.clone(),
             init_map: self.init_map.clone(),
             _out: self._out,
@@ -70,6 +73,7 @@ where
             
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
+            persistency_service: PersistencyService::default(),
 
             maps_fn: Default::default(),
             init_map: f,
@@ -91,13 +95,22 @@ where
         self.operator_coord.block_id = metadata.coord.block_id;
         self.operator_coord.host_id = metadata.coord.host_id;
         self.operator_coord.replica_id = metadata.coord.replica_id;
+
+        self.persistency_service = metadata.persistency_service.clone();
+        self.persistency_service.setup();
     }
 
     #[inline]
     fn next(&mut self) -> StreamElement<(Key, NewOut)> {
         let element = self.prev.next();
-        if matches!(element, StreamElement::FlushAndRestart) {
-            // self.maps_fn.clear();
+        match element {
+            StreamElement::Snapshot(snap_id) => {
+                self.persistency_service.save_void_state(self.operator_coord, snap_id);
+            }
+            StreamElement::FlushAndRestart => {
+                // self.maps_fn.clear();
+            }
+            _ => {}
         }
         element.map(|(key, value)| {
             let map_fn = if let Some(map_fn) = self.maps_fn.get_mut(&key) {

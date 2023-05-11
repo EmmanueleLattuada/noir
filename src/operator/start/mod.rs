@@ -1,10 +1,13 @@
+use std::collections::{HashSet, HashMap};
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
 use std::time::Duration;
 
 pub(crate) use multiple::*;
+use serde::{Serialize, Deserialize};
 pub(crate) use single::*;
 
+use super::SnapshotId;
 #[cfg(feature = "timestamp")]
 use super::Timestamp;
 use crate::block::BlockStructure;
@@ -14,6 +17,7 @@ use crate::operator::iteration::IterationStateLock;
 use crate::operator::source::Source;
 use crate::operator::start::watermark_frontier::WatermarkFrontier;
 use crate::operator::{ExchangeData, Operator, StreamElement};
+use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{BlockId, ExecutionMetadata, OperatorId};
 
 mod multiple;
@@ -43,6 +47,11 @@ pub(crate) trait StartBlockReceiver<Out>: Clone {
 
     /// Like `Operator::structure`.
     fn structure(&self) -> BlockStructure;
+
+    /// Type of the state of the receiver
+    type ReceiverState: ExchangeData + Debug;
+    /// Get the state of the receiver
+    fn get_state(&self) -> Option<Self::ReceiverState>;
 }
 
 pub(crate) type MultipleStartBlockReceiverOperator<OutL, OutR> =
@@ -69,6 +78,9 @@ pub(crate) struct StartBlock<Out: ExchangeData, Receiver: StartBlockReceiver<Out
 
     coord: Option<Coord>,
     operator_coord: OperatorCoord,
+    persistency_service: PersistencyService,
+    // Used to keep the on-going snapshots
+    on_going_snapshots: HashMap<SnapshotId, (StartBlockState<Out, Receiver>, HashSet<Coord>)>,
 
     /// The actual receiver able to fetch messages from the network.
     receiver: Receiver,
@@ -141,7 +153,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData>
     }
 }
 
-impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send> StartBlock<Out, Receiver> {
+impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send + 'static> StartBlock<Out, Receiver> {
     fn new(receiver: Receiver, state_lock: Option<Arc<IterationStateLock>>) -> Self {
         Self {
             coord: Default::default(),
@@ -150,6 +162,8 @@ impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send> StartBlock<Out
             // This is the first operator in the chain so operator_id is 0
             // Other fields will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, 0),
+            persistency_service: PersistencyService::default(),
+            on_going_snapshots: HashMap::new(),
 
             receiver,
             batch_iter: None,
@@ -171,9 +185,72 @@ impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send> StartBlock<Out
     pub(crate) fn receiver(&self) -> &Receiver {
         &self.receiver
     }
+
+    fn process_snapshot(&mut self, snap_id: SnapshotId, sender: Coord) -> Option<SnapshotId> {
+        // Check if is already arrived this snapshot id
+        if self.on_going_snapshots.contains_key(&snap_id) {
+            // Remove the sender from the set of previous replicas for this snapshot
+            self.on_going_snapshots.get_mut(&snap_id).unwrap().1.remove(&sender);
+            // Check if there are no more replicas
+            if self.on_going_snapshots.get(&snap_id).unwrap().1.len() == 0 {
+                // This snapshot is complete: now i can save it 
+                let state = self.on_going_snapshots.remove(&snap_id).unwrap().0;
+                self.persistency_service.save_state(self.operator_coord, snap_id, state);
+            }
+            // I've already forwarded the snapshot marker
+            None
+        } else {
+            // Save current state, messages will be add then 
+            let state: StartBlockState<Out, Receiver>= StartBlockState{
+                missing_flush_and_restart: self.missing_flush_and_restart as u64,
+                missing_terminate: self.missing_terminate as u64,
+                wait_for_state: self.wait_for_state,
+                state_generation: self.state_generation as u64,
+                watermark_forntier: self.watermark_frontier.clone(),
+                receiver_state: self.receiver.get_state(),
+                message_queue: Vec::default(),
+            };
+
+            // Set all previous replicas that have to send this snapshot id
+            let mut prev_replicas = HashSet::from_iter(self.receiver().prev_replicas());
+            prev_replicas.remove(&sender);
+            // Add a new entry in the map with this snapshot id
+            self.on_going_snapshots.insert(snap_id, (state, prev_replicas));
+            // Forward the snapshot marker
+            Some(snap_id)
+        }
+    }
+
+    fn add_item_to_snapshot(&mut self, item: StreamElement<Out>, sender: Coord) {
+        // Add item to message queue state 
+        for entry in self.on_going_snapshots.iter_mut() {
+            if entry.1.1.contains(&sender) {
+                entry.1.0.message_queue.push(item.clone());
+            }
+        }
+    }
+
 }
 
-impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send> Operator<Out>
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StartBlockState<Out, Receiver: StartBlockReceiver<Out>> {
+    missing_terminate: u64,
+    missing_flush_and_restart: u64,
+
+    wait_for_state: bool,
+    state_generation: u64,
+
+    watermark_forntier: WatermarkFrontier,
+    #[serde(bound(
+        serialize = "Receiver::ReceiverState: Serialize",
+        deserialize = "Receiver::ReceiverState: Deserialize<'de>",
+    ))]
+    receiver_state: Option<<Receiver as StartBlockReceiver<Out>>::ReceiverState>,
+
+    message_queue: Vec<StreamElement<Out>>,
+}
+
+impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send + 'static> Operator<Out>
     for StartBlock<Out, Receiver>
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
@@ -196,6 +273,9 @@ impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send> Operator<Out>
         self.operator_coord.block_id = metadata.coord.block_id;
         self.operator_coord.host_id = metadata.coord.host_id;
         self.operator_coord.replica_id = metadata.coord.replica_id;
+
+        self.persistency_service = metadata.persistency_service.clone();
+        self.persistency_service.setup();
     }
 
     fn next(&mut self) -> StreamElement<Out> {
@@ -228,6 +308,7 @@ impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send> Operator<Out>
                     Some(item) => {
                         match item {
                             StreamElement::Watermark(ts) => {
+                                self.add_item_to_snapshot(item, sender);
                                 // update the frontier and return a watermark if necessary
                                 match self.watermark_frontier.update(sender, ts) {
                                     Some(ts) => StreamElement::Watermark(ts), // ts is safe
@@ -235,6 +316,7 @@ impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send> Operator<Out>
                                 }
                             }
                             StreamElement::FlushAndRestart => {
+                                self.add_item_to_snapshot(item, sender);
                                 // mark this replica as ended and let the frontier ignore it from now on
                                 #[cfg(feature = "timestamp")]
                                 {
@@ -244,6 +326,7 @@ impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send> Operator<Out>
                                 continue;
                             }
                             StreamElement::Terminate => {
+                                self.add_item_to_snapshot(item, sender);
                                 self.missing_terminate -= 1;
                                 log::debug!(
                                     "{} received a Terminate, {} more to come",
@@ -252,11 +335,17 @@ impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send> Operator<Out>
                                 );
                                 continue;
                             }
-                            // TODO: handle snapshot marker
-                            StreamElement::Snapshot(_) => {
-                                panic!("Snapshot not supported for start operator")
+                            StreamElement::Snapshot(snapshot_id) => {
+                                let to_forward = self.process_snapshot(snapshot_id, sender);
+                                if to_forward.is_none() {
+                                    continue;
+                                }
+                                item
                             }
-                            _ => item,
+                            _ => {
+                                self.add_item_to_snapshot(item.clone(), sender);
+                                item
+                            },
                         }
                     }
                 };
@@ -311,7 +400,7 @@ impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send> Operator<Out>
     }
 }
 
-impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send> Source<Out>
+impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send + 'static> Source<Out>
     for StartBlock<Out, Receiver>
 {
     fn get_max_parallelism(&self) -> Option<usize> {

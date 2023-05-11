@@ -5,6 +5,7 @@ use crate::block::{BlockStructure, OperatorKind, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::sink::Sink;
 use crate::operator::{Data, DataKey, Operator, StreamElement};
+use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::stream::{KeyValue, KeyedStream, Stream};
 
@@ -17,6 +18,7 @@ where
 {
     prev: PreviousOperators,
     operator_coord: OperatorCoord,
+    persistency_service: PersistencyService,
     #[derivative(Debug = "ignore")]
     f: F,
     _out: PhantomData<Out>,
@@ -33,6 +35,7 @@ where
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
+            persistency_service: PersistencyService::default(),
             f,
             _out: PhantomData,
         }
@@ -61,6 +64,9 @@ where
         self.operator_coord.block_id = metadata.coord.block_id;
         self.operator_coord.host_id = metadata.coord.host_id;
         self.operator_coord.replica_id = metadata.coord.replica_id;
+
+        self.persistency_service =metadata.persistency_service.clone();
+        self.persistency_service.setup();
     }
 
     fn next(&mut self) -> StreamElement<()> {
@@ -73,9 +79,10 @@ where
                 StreamElement::Terminate => return StreamElement::Terminate,
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
                 StreamElement::FlushAndRestart => return StreamElement::FlushAndRestart,
-                // TODO: handle snapshot marker
-                StreamElement::Snapshot(_) => {
-                    panic!("Snapshot not supported for for_each operator")
+                StreamElement::Snapshot(snap_id) => {
+                    // No state is keeped: this can only provide at-least-one semantic
+                    self.persistency_service.save_void_state(self.operator_coord, snap_id);
+                    return StreamElement::Snapshot(snap_id);
                 }
             }
         }

@@ -6,6 +6,7 @@ use crate::block::{
 };
 use crate::network::{Coord, ReceiverEndpoint, OperatorCoord};
 use crate::operator::{ExchangeData, KeyerFn, Operator, StreamElement};
+use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{BlockId, ExecutionMetadata, OperatorId};
 
 /// The list with the interesting senders of a single block.
@@ -38,6 +39,7 @@ where
     senders: Vec<(ReceiverEndpoint, Batcher<Out>)>,
     feedback_id: Option<BlockId>,
     ignore_block_ids: Vec<BlockId>,
+    persistency_service: PersistencyService,
 }
 
 impl<Out: ExchangeData, OperatorChain, IndexFn> Display for EndBlock<Out, OperatorChain, IndexFn>
@@ -76,6 +78,7 @@ where
             senders: Default::default(),
             feedback_id: None,
             ignore_block_ids: Default::default(),
+            persistency_service: PersistencyService::default(),
         }
     }
 
@@ -146,6 +149,9 @@ where
         self.operator_coord.block_id = metadata.coord.block_id;
         self.operator_coord.host_id = metadata.coord.host_id;
         self.operator_coord.replica_id = metadata.coord.replica_id;
+
+        self.persistency_service = metadata.persistency_service.clone();
+        self.persistency_service.setup();
     }
 
     fn next(&mut self) -> StreamElement<()> {
@@ -154,8 +160,16 @@ where
         match &message {
             // Broadcast messages
             StreamElement::Watermark(_)
+            | StreamElement::Snapshot(_)
             | StreamElement::Terminate
             | StreamElement::FlushAndRestart => {
+                match &message {
+                    // Save void state
+                    StreamElement::Snapshot(snap_id) => {
+                        self.persistency_service.save_void_state(self.operator_coord, *snap_id);
+                    }
+                    _ => {}
+                }
                 for block in self.block_senders.iter() {
                     for &sender_idx in block.indexes.iter() {
                         let sender = &mut self.senders[sender_idx];
@@ -180,10 +194,6 @@ where
                     let sender_idx = block.indexes[index];
                     self.senders[sender_idx].1.enqueue(message.clone());
                 }
-            }
-            // TODO: handle snapshot marker
-            StreamElement::Snapshot(_) => {
-                panic!("Snapshot not supported for end operator")
             }
             StreamElement::FlushBatch => {}
         };

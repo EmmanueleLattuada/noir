@@ -4,6 +4,7 @@ use crate::block::{BlockStructure, OperatorKind, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::sink::{Sink, StreamOutput, StreamOutputRef};
 use crate::operator::{ExchangeData, ExchangeDataKey, Operator, StreamElement};
+use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::stream::{KeyValue, KeyedStream, Stream};
 
@@ -14,6 +15,7 @@ where
 {
     prev: PreviousOperators,
     operator_coord: OperatorCoord,
+    persistency_service: PersistencyService,
     result: Option<Vec<Out>>,
     output: StreamOutputRef<Vec<Out>>,
 }
@@ -28,6 +30,7 @@ where
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
+            persistency_service: PersistencyService::default(),
             result,
             output,
         }
@@ -53,6 +56,9 @@ where
         self.operator_coord.block_id = metadata.coord.block_id;
         self.operator_coord.host_id = metadata.coord.host_id;
         self.operator_coord.replica_id = metadata.coord.replica_id;
+
+        self.persistency_service = metadata.persistency_service.clone();
+        self.persistency_service.setup();
     }
 
     fn next(&mut self) -> StreamElement<()> {
@@ -73,9 +79,11 @@ where
             }
             StreamElement::FlushBatch => StreamElement::FlushBatch,
             StreamElement::FlushAndRestart => StreamElement::FlushAndRestart,
-            // TODO: handle snapshot marker
-            StreamElement::Snapshot(_) => {
-                panic!("Snapshot not supported for collect operator")
+            StreamElement::Snapshot(snap_id) => {
+                // save state
+                let state = self.result.clone();
+                self.persistency_service.save_state(self.operator_coord, snap_id, state);
+                StreamElement::Snapshot(snap_id)
             }
         }
     }
@@ -187,7 +195,14 @@ mod tests {
 
     use crate::config::EnvironmentConfig;
     use crate::environment::StreamEnvironment;
-    use crate::operator::source;
+    use crate::network::OperatorCoord;
+    use crate::operator::sink::StreamOutputRef;
+    use crate::operator::sink::collect_vec::CollectVecSink;
+    use crate::operator::{source, StreamElement};
+    use crate::persistency::PersistencyService;
+    use crate::test::FakeOperator;
+    use crate::operator::Operator;
+    use crate::persistency::PersistencyServices;
 
     #[test]
     fn collect_vec() {
@@ -196,5 +211,44 @@ mod tests {
         let res = env.stream(source).collect_vec();
         env.execute();
         assert_eq!(res.get().unwrap(), (0..10).collect_vec());
+    }
+
+    #[ignore]
+    #[test]
+    fn test_collect_vec_persistency_save_state() {
+        let mut fake_operator = FakeOperator::empty();
+        fake_operator.push(StreamElement::Item(1));
+        fake_operator.push(StreamElement::Item(2));
+        fake_operator.push(StreamElement::Snapshot(1));
+        fake_operator.push(StreamElement::Item(3));
+        fake_operator.push(StreamElement::Item(4));
+        fake_operator.push(StreamElement::Snapshot(2));
+
+        let output = StreamOutputRef::default();
+        let mut collect = CollectVecSink::new(fake_operator, Some(Vec::new()), output.clone());
+        collect.operator_coord = OperatorCoord{
+            block_id: 0,
+            host_id: 0,
+            replica_id: 2,
+            operator_id: 2,
+        };
+        collect.persistency_service = PersistencyService::new(Some("redis://127.0.0.1".to_owned()));
+        collect.persistency_service.setup();
+
+        collect.next();
+        collect.next();
+        assert_eq!(collect.next(), StreamElement::Snapshot(1));
+        let state: Option<Option<Vec<i32>>> = collect.persistency_service.get_state(collect.operator_coord, 1);
+        assert_eq!(state.unwrap().unwrap(), [1, 2]);
+        collect.next();
+        collect.next();
+        assert_eq!(collect.next(), StreamElement::Snapshot(2));
+        let state: Option<Option<Vec<i32>>> = collect.persistency_service.get_state(collect.operator_coord, 2);
+        assert_eq!(state.unwrap().unwrap(), [1, 2, 3, 4]);
+
+        // Clean redis
+        collect.persistency_service.delete_state(collect.operator_coord, 1);
+        collect.persistency_service.delete_state(collect.operator_coord, 2);
+
     }
 }

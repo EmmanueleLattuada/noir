@@ -1,11 +1,15 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
+use std::hash::Hash;
+
+use serde::{Serialize, Deserialize};
 
 use crate::block::{BlockStructure, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::merge::MergeElement;
 use crate::operator::reorder::Reorder;
 use crate::operator::{ExchangeData, ExchangeDataKey, Operator, StreamElement, Timestamp};
+use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::stream::{KeyValue, KeyedStream, Stream};
 
@@ -28,6 +32,7 @@ where
 {
     prev: OperatorChain,
     operator_coord: OperatorCoord,
+    persistency_service: PersistencyService,
     /// Elements of the left side to be processed.
     left: VecDeque<(Timestamp, KeyValue<Key, Out>)>,
     /// Elements of the right side that might still be matched.
@@ -77,6 +82,7 @@ where
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
 
+            persistency_service: PersistencyService::default(),
             left: Default::default(),
             right: Default::default(),
             buffer: Default::default(),
@@ -142,6 +148,22 @@ where
     }
 }
 
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct IntervalJoinState<K: Hash + Eq, O, O2> {
+    /// Elements of the left side to be processed.
+    left: VecDeque<(Timestamp, KeyValue<K, O>)>,
+    /// Elements of the right side that might still be matched.
+    right: HashMap<K, VecDeque<(Timestamp, O2)>, crate::block::GroupHasherBuilder>,
+    /// Elements ready to be sent downstream.
+    buffer: VecDeque<(Timestamp, OutputElement<K, O, O2>)>,
+    /// Timestamp of the last element (item or watermark).
+    last_seen: Timestamp,
+    /// Whether the operator has received a `FlushAndRestart` message.
+    received_restart: bool,
+}
+
+
 impl<Key, Out, Out2, OperatorChain> Operator<KeyValue<Key, (Out, Out2)>>
     for IntervalJoin<Key, Out, Out2, OperatorChain>
 where
@@ -156,6 +178,9 @@ where
         self.operator_coord.block_id = metadata.coord.block_id;
         self.operator_coord.host_id = metadata.coord.host_id;
         self.operator_coord.replica_id = metadata.coord.replica_id;
+
+        self.persistency_service = metadata.persistency_service.clone();
+        self.persistency_service.setup();
     }
 
     fn next(&mut self) -> StreamElement<(Key, (Out, Out2))> {
@@ -191,9 +216,17 @@ where
                 StreamElement::Item(_) => panic!("Interval Join only supports timestamped streams"),
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
                 StreamElement::Terminate => return StreamElement::Terminate,
-                // TODO: handle snapshot marker
-                StreamElement::Snapshot(_) => {
-                    panic!("Snapshot not supported for interval_join operator")
+                StreamElement::Snapshot(snap_id) => {
+                    // Save state and forward marker
+                    let state = IntervalJoinState {
+                        left: self.left.clone(),
+                        right: self.right.clone(),
+                        buffer: self.buffer.clone(),
+                        last_seen: self.last_seen,
+                        received_restart: self.received_restart,
+                    };
+                    self.persistency_service.save_state(self.operator_coord, snap_id, state);
+                    return StreamElement::Snapshot(snap_id);
                 }
             }
 

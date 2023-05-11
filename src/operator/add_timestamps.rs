@@ -1,9 +1,12 @@
 use std::fmt::Display;
 use std::marker::PhantomData;
 
+use serde::{Serialize, Deserialize};
+
 use crate::block::{BlockStructure, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::{Data, DataKey, Operator, StreamElement, Timestamp};
+use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::stream::{KeyValue, KeyedStream, Stream};
 
@@ -20,6 +23,13 @@ where
     watermark_gen: WatermarkGen,
     pending_watermark: Option<Timestamp>,
     _out: PhantomData<Out>,
+
+    persistency_service: PersistencyService
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct AddTimestampState{
+    pending_watermark: Option<Timestamp>,
 }
 
 impl<Out: Data, TimestampGen, WatermarkGen, OperatorChain> Display
@@ -47,6 +57,7 @@ where
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0,0,0,op_id),
+            persistency_service: Default::default(),
 
             timestamp_gen,
             watermark_gen,
@@ -69,6 +80,9 @@ where
         self.operator_coord.block_id = metadata.coord.block_id;
         self.operator_coord.host_id = metadata.coord.host_id;
         self.operator_coord.replica_id = metadata.coord.replica_id;
+
+        self.persistency_service = metadata.persistency_service.clone();
+        self.persistency_service.setup();
     }
 
     #[inline]
@@ -88,9 +102,11 @@ where
             StreamElement::FlushAndRestart
             | StreamElement::FlushBatch
             | StreamElement::Terminate => elem,
-            // TODO: handle snapshot marker
-            StreamElement::Snapshot(_) => {
-                panic!("Snapshot not supported for add_timestamps operator")
+            StreamElement::Snapshot(snap_id) => {
+                // Save state and forward marker
+                let state = AddTimestampState{pending_watermark: self.pending_watermark};
+                self.persistency_service.save_state(self.operator_coord, snap_id, state);
+                return StreamElement::Snapshot(snap_id)
             }
             _ => panic!("AddTimestamp received invalid variant: {}", elem.variant()),
         }
@@ -117,6 +133,7 @@ where
 {
     prev: OperatorChain,
     operator_coord: OperatorCoord,
+    persistency_service: PersistencyService,
     _out: PhantomData<Out>,
 }
 
@@ -137,6 +154,7 @@ where
         let op_id = prev.get_op_id() + 1;
         Self {
             prev,
+            persistency_service: PersistencyService::default(),
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
             _out: Default::default(),
@@ -154,6 +172,9 @@ where
         self.operator_coord.block_id = metadata.coord.block_id;
         self.operator_coord.host_id = metadata.coord.host_id;
         self.operator_coord.replica_id = metadata.coord.replica_id;
+
+        self.persistency_service = metadata.persistency_service.clone();
+        self.persistency_service.setup();
     }
 
     #[inline]
@@ -162,9 +183,10 @@ where
             match self.prev.next() {
                 StreamElement::Watermark(_) => continue,
                 StreamElement::Timestamped(item, _) => return StreamElement::Item(item),
-                // TODO: handle snapshot marker
-                StreamElement::Snapshot(_) => {
-                    panic!("Snapshot not supported for collect operator")
+                StreamElement::Snapshot(snapshot_id) => {
+                    // Save void state and forward snapshot marker
+                    self.persistency_service.save_void_state(self.operator_coord, snapshot_id);
+                    return StreamElement::Snapshot(snapshot_id)
                 }
                 el => return el,
             }

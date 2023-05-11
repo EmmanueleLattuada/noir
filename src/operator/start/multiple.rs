@@ -359,4 +359,57 @@ impl<OutL: ExchangeData, OutR: ExchangeData> StartBlockReceiver<TwoSidesItem<Out
 
         BlockStructure::default().add_operator(operator)
     }
+
+    type ReceiverState = MultipleReceiverState<TwoSidesItem<OutL, OutR>>;
+
+    fn get_state(&self) -> Option<Self::ReceiverState> {
+        let left = SideReceiverState {
+            missing_flush_and_restart: self.left.missing_flush_and_restart as u64,
+            missing_terminate: self.left.missing_terminate as u64,
+            cached: self.left.cached,
+            cache: self.left.cache.clone(),
+            cache_full: self.left.cache_full,
+            cache_pointer: self.left.cache_pointer as u64,
+        };
+        let right = SideReceiverState {
+            missing_flush_and_restart: self.right.missing_flush_and_restart as u64,
+            missing_terminate: self.right.missing_terminate as u64,
+            cached: self.right.cached,
+            cache: self.right.cache.clone(),
+            cache_full: self.right.cache_full,
+            cache_pointer: self.right.cache_pointer as u64,
+        };
+        let state = MultipleReceiverState {
+            left,
+            right,
+            first_message: self.first_message,
+        };
+        Some(state)
+    }
+}
+
+
+
+#[derive(Clone, Serialize, Deserialize)]
+struct SideReceiverState<Item> {
+    missing_flush_and_restart: u64,
+    missing_terminate: u64,
+    cached: bool,
+    cache: Vec<NetworkMessage<Item>>,
+    cache_full: bool,
+    cache_pointer: u64,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub (crate) struct MultipleReceiverState<Item>{
+    left: SideReceiverState<Item>,
+    right: SideReceiverState<Item>,
+    first_message: bool,
+}
+
+
+impl<Item> std::fmt::Debug for MultipleReceiverState<Item>{
+    fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        todo!()
+    }
 }

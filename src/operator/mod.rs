@@ -45,6 +45,7 @@ pub(crate) mod reorder;
 pub(crate) mod rich_filter_map;
 pub(crate) mod rich_flat_map;
 pub(crate) mod rich_map;
+pub(crate) mod rich_map_persistent;
 pub(crate) mod rich_map_custom;
 pub(crate) mod route;
 pub(crate) mod shuffle;
