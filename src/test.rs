@@ -11,6 +11,8 @@ use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::CoordUInt;
 use crate::{BatchMode, EnvironmentConfig};
 
+pub(crate) const REDIS_TEST_COFIGURATION: &str ="redis://127.0.0.1";
+
 /// A fake operator that can be used to unit-test the operators.
 #[derive(Debug, Clone)]
 pub struct FakeOperator<Out: Data> {

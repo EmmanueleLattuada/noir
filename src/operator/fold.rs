@@ -286,7 +286,7 @@ mod tests {
     use crate::operator::fold::{Fold, FoldState};
     use crate::operator::{Operator, StreamElement};
     use crate::persistency::{PersistencyService, PersistencyServices};
-    use crate::test::FakeOperator;
+    use crate::test::{FakeOperator, REDIS_TEST_COFIGURATION};
 
     #[test]
     fn test_fold_without_timestamps() {
@@ -355,7 +355,7 @@ mod tests {
             replica_id: 1,
             operator_id: 1,
         };
-        fold.persistency_service = PersistencyService::new(Some("redis://127.0.0.1".to_owned()));
+        fold.persistency_service = PersistencyService::new(Some(String::from(REDIS_TEST_COFIGURATION)));
         fold.persistency_service.setup();
 
         assert_eq!(fold.next(), StreamElement::Snapshot(1));

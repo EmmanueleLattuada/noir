@@ -397,7 +397,7 @@ impl PersistencyServices for RedisHandler{
 mod tests {
     use serde::{Serialize, Deserialize};
 
-    use crate::{network::OperatorCoord};
+    use crate::{network::OperatorCoord, test::REDIS_TEST_COFIGURATION};
 
     use super::{PersistencyService, PersistencyServices};
 
@@ -429,7 +429,7 @@ mod tests {
         state1.values.push(2);
         state1.values.push(3);
 
-        let mut pers_handler = PersistencyService::new(Some("redis://127.0.0.1".to_string()));
+        let mut pers_handler = PersistencyService::new(Some(String::from(REDIS_TEST_COFIGURATION)));
         pers_handler.setup();
 
         pers_handler.save_state(op_coord1, 1, state1.clone());
@@ -482,7 +482,7 @@ mod tests {
             operator_id: 2,
         };
 
-        let mut pers_handler = PersistencyService::new(Some("redis://127.0.0.1".to_string()));
+        let mut pers_handler = PersistencyService::new(Some(String::from(REDIS_TEST_COFIGURATION).to_string()));
         pers_handler.setup();
 
         pers_handler.save_void_state(op_coord1, 1);
@@ -522,7 +522,7 @@ mod tests {
             operator_id: 1,
         };
 
-        let mut pers_handler = PersistencyService::new(Some("redis://127.0.0.1".to_string()));
+        let mut pers_handler = PersistencyService::new(Some(String::from(REDIS_TEST_COFIGURATION)));
         pers_handler.setup();
 
         // Snap_id = 0

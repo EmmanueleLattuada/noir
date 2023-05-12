@@ -200,7 +200,7 @@ mod tests {
     use crate::operator::sink::collect_vec::CollectVecSink;
     use crate::operator::{source, StreamElement};
     use crate::persistency::PersistencyService;
-    use crate::test::FakeOperator;
+    use crate::test::{FakeOperator, REDIS_TEST_COFIGURATION};
     use crate::operator::Operator;
     use crate::persistency::PersistencyServices;
 
@@ -232,7 +232,7 @@ mod tests {
             replica_id: 2,
             operator_id: 2,
         };
-        collect.persistency_service = PersistencyService::new(Some("redis://127.0.0.1".to_owned()));
+        collect.persistency_service = PersistencyService::new(Some(String::from(REDIS_TEST_COFIGURATION)));
         collect.persistency_service.setup();
 
         collect.next();
