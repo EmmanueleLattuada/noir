@@ -180,7 +180,17 @@ impl<OutL: ExchangeData, OutR: ExchangeData> MultipleStartBlockReceiver<OutL, Ou
             .collect::<Vec<_>>();
         let message = NetworkMessage::new_batch(data, sender);
         if side.cached {
-            side.cache.push(message.clone());
+            // Remove StreamElement::Snapshot from messages to cache
+            let data = message
+                .clone()
+                .into_iter()
+                .filter(|item| !matches!(item, StreamElement::Snapshot(_)))
+                .collect::<Vec<_>>();
+            let filtered_message = NetworkMessage::new_batch(data, sender);
+            if filtered_message.num_items() > 0 {
+                side.cache.push(filtered_message);
+            }
+
             // the elements are already out, ignore the cache for this round
             side.cache_pointer = side.cache.len();
         }
@@ -391,7 +401,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> StartBlockReceiver<TwoSidesItem<Out
 
 
 #[derive(Clone, Serialize, Deserialize)]
-struct SideReceiverState<Item> {
+pub (crate) struct SideReceiverState<Item> {
     missing_flush_and_restart: u64,
     missing_terminate: u64,
     cached: bool,
@@ -411,5 +421,607 @@ pub (crate) struct MultipleReceiverState<Item>{
 impl<Item> std::fmt::Debug for MultipleReceiverState<Item>{
     fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         todo!()
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use crate::{network::NetworkMessage, test::{FakeNetworkTopology, REDIS_TEST_COFIGURATION}, operator::{StartBlock, TwoSidesItem, StreamElement, Operator, SideReceiverState, MultipleReceiverState, start::{StartBlockState, watermark_frontier::WatermarkFrontier}, MultipleStartBlockReceiver}, persistency::{PersistencyService, PersistencyServices}};
+
+    #[test]
+    fn test_multiple_start_persistency() {
+        let mut t = FakeNetworkTopology::new(2, 1);
+        let (from1, sender1) = t.senders_mut()[0].pop().unwrap();
+        let (from2, sender2) = t.senders_mut()[1].pop().unwrap();
+
+        let mut start_block = StartBlock::<TwoSidesItem<i32, i32>, _>::multiple(
+            from1.block_id,
+            from2.block_id,
+            true,
+            false,
+            None,
+        );
+       
+        let mut metadata = t.metadata();
+        metadata.persistency_service = PersistencyService::new(Some(String::from(REDIS_TEST_COFIGURATION)));
+        start_block.setup(&mut metadata);
+
+        // Set a fake unique operator id to not have conflicts with other tests
+        // If 2 opreators have the same coord and persist their state the tests fail
+        start_block.operator_coord.operator_id = 102;
+
+        sender1
+            .send(NetworkMessage::new_single(
+                StreamElement::Item(1),
+                from1,
+            ))
+            .unwrap();
+
+        sender1
+            .send(NetworkMessage::new_single(
+                StreamElement::Snapshot(1),
+                from1,
+            ))
+            .unwrap();
+
+        sender1
+            .send(NetworkMessage::new_single(
+                StreamElement::Item(2),
+                from1,
+            ))
+            .unwrap();
+
+        assert_eq!(StreamElement::Item(TwoSidesItem::Left(1)), start_block.next());
+        assert_eq!(StreamElement::Snapshot(1), start_block.next());
+        assert_eq!(StreamElement::Item(TwoSidesItem::Left(2)), start_block.next());
+
+        sender2
+            .send(NetworkMessage::new_single(
+                StreamElement::Item(3),
+                from2,
+            ))
+            .unwrap();
+
+        sender2
+            .send(NetworkMessage::new_single(
+                StreamElement::Item(4),
+                from2,
+            ))
+            .unwrap(); 
+
+        sender2
+            .send(NetworkMessage::new_single(
+                StreamElement::Snapshot(1),
+                from2,
+            ))
+            .unwrap(); 
+
+        sender2
+            .send(NetworkMessage::new_single(
+                StreamElement::Item(5),
+                from2,
+            ))
+            .unwrap();     
+
+        
+        assert_eq!(StreamElement::Item(TwoSidesItem::Right(3)), start_block.next());
+        assert_eq!(StreamElement::Item(TwoSidesItem::Right(4)), start_block.next());
+        assert_eq!(StreamElement::Item(TwoSidesItem::Right(5)), start_block.next());
+        
+        let left_side: SideReceiverState<TwoSidesItem<i32, i32>> = SideReceiverState{
+            missing_flush_and_restart: 1,
+            missing_terminate: 1,
+            cached: true,
+            cache: vec![NetworkMessage::new_single(
+                            StreamElement::Item(TwoSidesItem::Left(1)),
+                            from1,
+                        ),
+                    ],
+            cache_full: false,
+            cache_pointer: 1,
+        };
+
+        let right_side: SideReceiverState<TwoSidesItem<i32, i32>> = SideReceiverState{
+            missing_flush_and_restart: 1,
+            missing_terminate: 1,
+            cached: false,
+            cache: vec![],
+            cache_full: false,
+            cache_pointer: 0,
+        };
+
+        let recv_state = MultipleReceiverState {
+            left: left_side,
+            right: right_side,
+            first_message: false,
+        };
+
+        let state: StartBlockState<TwoSidesItem<i32, i32>, MultipleStartBlockReceiver<i32, i32>> = StartBlockState {
+            missing_flush_and_restart: 2,
+            missing_terminate: 2,
+            wait_for_state: false,
+            state_generation: 0,
+            watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
+            receiver_state: Some(recv_state),
+            message_queue: vec![
+                StreamElement::Item(TwoSidesItem::Right(3)), 
+                StreamElement::Item(TwoSidesItem::Right(4)),
+            ],
+        };
+
+        let retrived_state: StartBlockState<TwoSidesItem<i32, i32>, MultipleStartBlockReceiver<i32, i32>> = start_block.persistency_service.get_state(start_block.operator_coord, 1).unwrap();
+
+        assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
+        assert_eq!(state.missing_terminate, retrived_state.missing_terminate);
+        assert_eq!(state.wait_for_state, retrived_state.wait_for_state);
+        assert_eq!(state.state_generation, retrived_state.state_generation);
+        assert_eq!(state.watermark_forntier.get_frontier(), retrived_state.watermark_forntier.get_frontier());
+        assert_eq!(state.message_queue, retrived_state.message_queue);
+        // Check receiver state
+        let receiver = state.receiver_state.unwrap();
+        let retrived_receiver = retrived_state.receiver_state.unwrap();
+        assert_eq!(receiver.first_message, retrived_receiver.first_message);
+        assert_eq!(receiver.left.missing_flush_and_restart, retrived_receiver.left.missing_flush_and_restart);
+        assert_eq!(receiver.left.missing_terminate, retrived_receiver.left.missing_terminate);
+        assert_eq!(receiver.left.cached, retrived_receiver.left.cached);
+        assert_eq!(receiver.left.cache_full, retrived_receiver.left.cache_full);
+        assert_eq!(receiver.left.cache_pointer, retrived_receiver.left.cache_pointer);
+        assert_eq!(receiver.left.cache, retrived_receiver.left.cache);
+        assert_eq!(receiver.right.missing_flush_and_restart, retrived_receiver.right.missing_flush_and_restart);
+        assert_eq!(receiver.right.missing_terminate, retrived_receiver.right.missing_terminate);
+        assert_eq!(receiver.right.cached, retrived_receiver.right.cached);
+        assert_eq!(receiver.right.cache_full, retrived_receiver.right.cache_full);
+        assert_eq!(receiver.right.cache_pointer, retrived_receiver.right.cache_pointer);
+        assert_eq!(receiver.right.cache, retrived_receiver.right.cache);
+
+        
+        // Clean redis
+        start_block.persistency_service.delete_state(start_block.operator_coord, 1);
+
+    }
+
+    #[test]
+    fn test_multiple_start_persistency_multiple_snapshot() {
+        let mut t = FakeNetworkTopology::new(2, 1);
+        let (from1, sender1) = t.senders_mut()[0].pop().unwrap();
+        let (from2, sender2) = t.senders_mut()[1].pop().unwrap();
+
+        let mut start_block = StartBlock::<TwoSidesItem<i32, i32>, _>::multiple(
+            from1.block_id,
+            from2.block_id,
+            true,
+            false,
+            None,
+        );
+       
+        let mut metadata = t.metadata();
+        metadata.persistency_service = PersistencyService::new(Some(String::from(REDIS_TEST_COFIGURATION)));
+        start_block.setup(&mut metadata);
+
+        // Set a fake unique operator id to not have conflicts with other tests
+        // If 2 opreators have the same coord and persist their state the tests fail
+        start_block.operator_coord.operator_id = 103;
+
+        sender1
+            .send(NetworkMessage::new_single(
+                StreamElement::Item(1),
+                from1,
+            ))
+            .unwrap();
+
+        sender1
+            .send(NetworkMessage::new_single(
+                StreamElement::Snapshot(1),
+                from1,
+            ))
+            .unwrap();
+
+        sender1
+            .send(NetworkMessage::new_single(
+                StreamElement::Item(2),
+                from1,
+            ))
+            .unwrap();
+
+            sender1
+            .send(NetworkMessage::new_single(
+                StreamElement::Snapshot(2),
+                from1,
+            ))
+            .unwrap();
+
+        sender1
+            .send(NetworkMessage::new_single(
+                StreamElement::Item(3),
+                from1,
+            ))
+            .unwrap();
+
+        assert_eq!(StreamElement::Item(TwoSidesItem::Left(1)), start_block.next());
+        assert_eq!(StreamElement::Snapshot(1), start_block.next());
+        assert_eq!(StreamElement::Item(TwoSidesItem::Left(2)), start_block.next());
+        assert_eq!(StreamElement::Snapshot(2), start_block.next());
+        assert_eq!(StreamElement::Item(TwoSidesItem::Left(3)), start_block.next());
+
+        sender2
+            .send(NetworkMessage::new_single(
+                StreamElement::Item(5),
+                from2,
+            ))
+            .unwrap();
+
+        sender2
+            .send(NetworkMessage::new_single(
+                StreamElement::Item(6),
+                from2,
+            ))
+            .unwrap(); 
+
+        sender2
+            .send(NetworkMessage::new_single(
+                StreamElement::Snapshot(1),
+                from2,
+            ))
+            .unwrap(); 
+
+        sender2
+            .send(NetworkMessage::new_single(
+                StreamElement::Item(7),
+                from2,
+            ))
+            .unwrap(); 
+
+        sender2
+            .send(NetworkMessage::new_single(
+                StreamElement::Snapshot(2),
+                from2,
+            ))
+            .unwrap(); 
+
+        sender2
+            .send(NetworkMessage::new_single(
+                StreamElement::Item(8),
+                from2,
+            ))
+            .unwrap();    
+
+        
+        assert_eq!(StreamElement::Item(TwoSidesItem::Right(5)), start_block.next());
+        assert_eq!(StreamElement::Item(TwoSidesItem::Right(6)), start_block.next());
+        assert_eq!(StreamElement::Item(TwoSidesItem::Right(7)), start_block.next());
+        
+        
+        let left_side: SideReceiverState<TwoSidesItem<i32, i32>> = SideReceiverState{
+            missing_flush_and_restart: 1,
+            missing_terminate: 1,
+            cached: true,
+            cache: vec![NetworkMessage::new_single(
+                            StreamElement::Item(TwoSidesItem::Left(1)),
+                            from1,
+                        ),
+                    ],
+            cache_full: false,
+            cache_pointer: 1,
+        };
+
+        let right_side: SideReceiverState<TwoSidesItem<i32, i32>> = SideReceiverState{
+            missing_flush_and_restart: 1,
+            missing_terminate: 1,
+            cached: false,
+            cache: vec![],
+            cache_full: false,
+            cache_pointer: 0,
+        };
+
+        let recv_state = MultipleReceiverState {
+            left: left_side,
+            right: right_side,
+            first_message: false,
+        };
+
+        let state: StartBlockState<TwoSidesItem<i32, i32>, MultipleStartBlockReceiver<i32, i32>> = StartBlockState {
+            missing_flush_and_restart: 2,
+            missing_terminate: 2,
+            wait_for_state: false,
+            state_generation: 0,
+            watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
+            receiver_state: Some(recv_state),
+            message_queue: vec![
+                StreamElement::Item(TwoSidesItem::Right(5)), 
+                StreamElement::Item(TwoSidesItem::Right(6)),
+            ],
+        };
+
+        let retrived_state: StartBlockState<TwoSidesItem<i32, i32>, MultipleStartBlockReceiver<i32, i32>> = start_block.persistency_service.get_state(start_block.operator_coord, 1).unwrap();
+
+        assert_eq!(state.message_queue, retrived_state.message_queue);
+        // Check receiver state
+        let receiver = state.receiver_state.unwrap();
+        let retrived_receiver = retrived_state.receiver_state.unwrap();
+        assert_eq!(receiver.first_message, retrived_receiver.first_message);
+        assert_eq!(receiver.left.cache_pointer, retrived_receiver.left.cache_pointer);
+        assert_eq!(receiver.left.cache, retrived_receiver.left.cache);
+        assert_eq!(receiver.right.cache_pointer, retrived_receiver.right.cache_pointer);
+        assert_eq!(receiver.right.cache, retrived_receiver.right.cache);
+
+        assert_eq!(StreamElement::Item(TwoSidesItem::Right(8)), start_block.next());
+        
+        
+        let left_side: SideReceiverState<TwoSidesItem<i32, i32>> = SideReceiverState{
+            missing_flush_and_restart: 1,
+            missing_terminate: 1,
+            cached: true,
+            cache: vec![NetworkMessage::new_single(
+                            StreamElement::Item(TwoSidesItem::Left(1)),
+                            from1,
+                        ),
+                        NetworkMessage::new_single(
+                            StreamElement::Item(TwoSidesItem::Left(2)),
+                            from1,
+                        ),
+                    ],
+            cache_full: false,
+            cache_pointer: 2,
+        };
+
+        let right_side: SideReceiverState<TwoSidesItem<i32, i32>> = SideReceiverState{
+            missing_flush_and_restart: 1,
+            missing_terminate: 1,
+            cached: false,
+            cache: vec![],
+            cache_full: false,
+            cache_pointer: 0,
+        };
+
+        let recv_state = MultipleReceiverState {
+            left: left_side,
+            right: right_side,
+            first_message: false,
+        };
+
+        let state: StartBlockState<TwoSidesItem<i32, i32>, MultipleStartBlockReceiver<i32, i32>> = StartBlockState {
+            missing_flush_and_restart: 2,
+            missing_terminate: 2,
+            wait_for_state: false,
+            state_generation: 0,
+            watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
+            receiver_state: Some(recv_state),
+            message_queue: vec![
+                StreamElement::Item(TwoSidesItem::Right(5)),
+                StreamElement::Item(TwoSidesItem::Right(6)),
+                StreamElement::Item(TwoSidesItem::Right(7)),
+            ],
+        };
+
+        let retrived_state: StartBlockState<TwoSidesItem<i32, i32>, MultipleStartBlockReceiver<i32, i32>> = start_block.persistency_service.get_state(start_block.operator_coord, 2).unwrap();
+
+        assert_eq!(state.message_queue, retrived_state.message_queue);
+        // Check receiver state
+        let receiver = state.receiver_state.unwrap();
+        let retrived_receiver = retrived_state.receiver_state.unwrap();
+        assert_eq!(receiver.first_message, retrived_receiver.first_message);
+        assert_eq!(receiver.left.cache_pointer, retrived_receiver.left.cache_pointer);
+        assert_eq!(receiver.left.cache, retrived_receiver.left.cache);
+        assert_eq!(receiver.right.cache_pointer, retrived_receiver.right.cache_pointer);
+        assert_eq!(receiver.right.cache, retrived_receiver.right.cache);
+
+        
+        // Clean redis
+        start_block.persistency_service.delete_state(start_block.operator_coord, 1);
+        start_block.persistency_service.delete_state(start_block.operator_coord, 2);
+
+    }
+
+    #[test]
+    fn test_multiple_start_persistency_multiple_snapshot_with_cache() {
+        let mut t = FakeNetworkTopology::new(2, 1);
+        let (from1, sender1) = t.senders_mut()[0].pop().unwrap();
+        let (from2, sender2) = t.senders_mut()[1].pop().unwrap();
+
+        let mut start_block = StartBlock::<TwoSidesItem<i32, i32>, _>::multiple(
+            from1.block_id,
+            from2.block_id,
+            true,
+            false,
+            None,
+        );
+       
+        let mut metadata = t.metadata();
+        metadata.persistency_service = PersistencyService::new(Some(String::from(REDIS_TEST_COFIGURATION)));
+        start_block.setup(&mut metadata);
+
+        // Set a fake unique operator id to not have conflicts with other tests
+        // If 2 opreators have the same coord and persist their state the tests fail
+        start_block.operator_coord.operator_id = 104;
+
+        sender1
+            .send(NetworkMessage::new_batch(
+                vec![
+                    StreamElement::Item(1),
+                    StreamElement::Snapshot(1),
+                    StreamElement::Item(2),
+                    StreamElement::Snapshot(2),
+                    StreamElement::Item(3),
+                    StreamElement::FlushAndRestart,
+                    StreamElement::Terminate,
+                ],
+                from1,
+            ))
+            .unwrap();
+
+        assert_eq!(StreamElement::Item(TwoSidesItem::Left(1)), start_block.next());
+        assert_eq!(StreamElement::Snapshot(1), start_block.next());
+        assert_eq!(StreamElement::Item(TwoSidesItem::Left(2)), start_block.next());
+        assert_eq!(StreamElement::Snapshot(2), start_block.next());
+        assert_eq!(StreamElement::Item(TwoSidesItem::Left(3)), start_block.next());
+        assert_eq!(StreamElement::Item(TwoSidesItem::LeftEnd), start_block.next());
+
+        sender2
+            .send(NetworkMessage::new_batch(
+                vec![
+                    StreamElement::Item(5),
+                    StreamElement::Snapshot(1),
+                    StreamElement::Item(6),
+                    StreamElement::Snapshot(2),
+                    StreamElement::FlushAndRestart,
+                ],
+                from2,
+            ))
+            .unwrap();    
+
+        
+        assert_eq!(StreamElement::Item(TwoSidesItem::Right(5)), start_block.next());
+        assert_eq!(StreamElement::Item(TwoSidesItem::Right(6)), start_block.next());
+        assert_eq!(StreamElement::Item(TwoSidesItem::RightEnd), start_block.next());
+               
+        
+        let left_side: SideReceiverState<TwoSidesItem<i32, i32>> = SideReceiverState{
+            missing_flush_and_restart: 0,
+            missing_terminate: 0,
+            cached: true,
+            cache: vec![NetworkMessage::new_batch( vec![
+                            StreamElement::Item(TwoSidesItem::Left(1)),
+                            StreamElement::Item(TwoSidesItem::Left(2)),
+                            StreamElement::Item(TwoSidesItem::Left(3)),
+                            StreamElement::Item(TwoSidesItem::LeftEnd),
+                            StreamElement::FlushAndRestart
+                            ],
+                            from1,
+                        ),
+                    ],
+            cache_full: false,
+            cache_pointer: 1,
+        };
+
+        let right_side: SideReceiverState<TwoSidesItem<i32, i32>> = SideReceiverState{
+            missing_flush_and_restart: 1,
+            missing_terminate: 1,
+            cached: false,
+            cache: vec![],
+            cache_full: false,
+            cache_pointer: 0,
+        };
+
+        let recv_state = MultipleReceiverState {
+            left: left_side,
+            right: right_side,
+            first_message: false,
+        };
+
+        let state: StartBlockState<TwoSidesItem<i32, i32>, MultipleStartBlockReceiver<i32, i32>> = StartBlockState {
+            missing_flush_and_restart: 1,
+            missing_terminate: 2,
+            wait_for_state: false,
+            state_generation: 0,
+            watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
+            receiver_state: Some(recv_state),
+            message_queue: vec![
+                StreamElement::Item(TwoSidesItem::Right(5)),
+                StreamElement::Item(TwoSidesItem::Right(6)),
+            ],
+        };
+
+        let retrived_state: StartBlockState<TwoSidesItem<i32, i32>, MultipleStartBlockReceiver<i32, i32>> = start_block.persistency_service.get_state(start_block.operator_coord, 2).unwrap();
+
+        assert_eq!(state.message_queue, retrived_state.message_queue);
+        // Check receiver state
+        let receiver = state.receiver_state.unwrap();
+        let retrived_receiver = retrived_state.receiver_state.unwrap();
+        assert_eq!(receiver.first_message, retrived_receiver.first_message);
+        assert_eq!(receiver.left.cache_pointer, retrived_receiver.left.cache_pointer);
+        assert_eq!(receiver.left.cache, retrived_receiver.left.cache);
+        assert_eq!(receiver.right.cache_pointer, retrived_receiver.right.cache_pointer);
+        assert_eq!(receiver.right.cache, retrived_receiver.right.cache);
+
+        
+        // Call next() to reply stream from cache
+        assert_eq!(StreamElement::FlushAndRestart, start_block.next());
+        sender2
+            .send(NetworkMessage::new_single(
+                StreamElement::Snapshot(3),
+                from2,
+            ))
+            .unwrap(); 
+        
+        assert_eq!(StreamElement::Snapshot(3), start_block.next());
+        assert_eq!(StreamElement::Item(TwoSidesItem::Left(1)), start_block.next());
+        
+
+        // Extract manually the state
+        let retrived_state = start_block.on_going_snapshots.get(&3).unwrap().clone().0;
+        
+        let left_side: SideReceiverState<TwoSidesItem<i32, i32>> = SideReceiverState{
+            missing_flush_and_restart: 1,
+            missing_terminate: 0,
+            cached: true,
+            cache: vec![NetworkMessage::new_batch(vec![
+                            StreamElement::Item(TwoSidesItem::Left(1)),
+                            StreamElement::Item(TwoSidesItem::Left(2)),
+                            StreamElement::Item(TwoSidesItem::Left(3)),
+                            StreamElement::Item(TwoSidesItem::LeftEnd),
+                            StreamElement::FlushAndRestart
+                            ],
+                            from1,
+                        ),
+                    ],
+            cache_full: true,
+            cache_pointer: 0,
+        };
+
+        let right_side: SideReceiverState<TwoSidesItem<i32, i32>> = SideReceiverState{
+            missing_flush_and_restart: 1,
+            missing_terminate: 1,
+            cached: false,
+            cache: vec![],
+            cache_full: false,
+            cache_pointer: 0,
+        };
+
+        let recv_state = MultipleReceiverState {
+            left: left_side,
+            right: right_side,
+            first_message: false,
+        };
+
+        let state: StartBlockState<TwoSidesItem<i32, i32>, MultipleStartBlockReceiver<i32, i32>> = StartBlockState {
+            missing_flush_and_restart: 2,
+            missing_terminate: 2,
+            wait_for_state: true,
+            state_generation: 2,
+            watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
+            receiver_state: Some(recv_state),
+            message_queue: vec![
+                StreamElement::Item(TwoSidesItem::Left(1)),
+            ],
+        };
+
+        assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
+        assert_eq!(state.missing_terminate, retrived_state.missing_terminate);
+        assert_eq!(state.wait_for_state, retrived_state.wait_for_state);
+        assert_eq!(state.state_generation, retrived_state.state_generation);
+        assert_eq!(state.watermark_forntier.get_frontier(), retrived_state.watermark_forntier.get_frontier());
+        assert_eq!(state.message_queue, retrived_state.message_queue);
+        // Check receiver state
+        let receiver = state.receiver_state.unwrap();
+        let retrived_receiver = retrived_state.receiver_state.unwrap();
+        assert_eq!(receiver.first_message, retrived_receiver.first_message);
+        assert_eq!(receiver.left.missing_flush_and_restart, retrived_receiver.left.missing_flush_and_restart);
+        assert_eq!(receiver.left.missing_terminate, retrived_receiver.left.missing_terminate);
+        assert_eq!(receiver.left.cached, retrived_receiver.left.cached);
+        assert_eq!(receiver.left.cache_full, retrived_receiver.left.cache_full);
+        assert_eq!(receiver.left.cache_pointer, retrived_receiver.left.cache_pointer);
+        assert_eq!(receiver.left.cache, retrived_receiver.left.cache);
+        assert_eq!(receiver.right.missing_flush_and_restart, retrived_receiver.right.missing_flush_and_restart);
+        assert_eq!(receiver.right.missing_terminate, retrived_receiver.right.missing_terminate);
+        assert_eq!(receiver.right.cached, retrived_receiver.right.cached);
+        assert_eq!(receiver.right.cache_full, retrived_receiver.right.cache_full);
+        assert_eq!(receiver.right.cache_pointer, retrived_receiver.right.cache_pointer);
+        assert_eq!(receiver.right.cache, retrived_receiver.right.cache);
+
+        // Clean redis
+        start_block.persistency_service.delete_state(start_block.operator_coord, 1);
+        start_block.persistency_service.delete_state(start_block.operator_coord, 2);
+
     }
 }

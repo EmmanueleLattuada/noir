@@ -421,8 +421,11 @@ impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send + 'static> Sour
 #[cfg(test)]
 mod tests {
     use crate::network::NetworkMessage;
-    use crate::operator::{Operator, StartBlock, StreamElement, Timestamp, TwoSidesItem};
-    use crate::test::FakeNetworkTopology;
+    use crate::operator::start::StartBlockState;
+    use crate::operator::start::watermark_frontier::WatermarkFrontier;
+    use crate::operator::{Operator, StartBlock, StreamElement, Timestamp, TwoSidesItem, SingleStartBlockReceiver};
+    use crate::persistency::{PersistencyService, PersistencyServices};
+    use crate::test::{FakeNetworkTopology, REDIS_TEST_COFIGURATION};
 
     #[cfg(feature = "timestamp")]
     fn ts(millis: u64) -> Timestamp {
@@ -726,4 +729,196 @@ mod tests {
 
         assert_eq!(StreamElement::Terminate, start_block.next());
     }
+
+    #[test]
+    fn test_single_start_persistency() {
+        let mut t = FakeNetworkTopology::new(1, 2);
+        let (from1, sender1) = t.senders_mut()[0].pop().unwrap();
+        let (from2, sender2) = t.senders_mut()[0].pop().unwrap();
+
+        let mut start_block =
+            StartBlock::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None);
+
+        let mut metadata = t.metadata();
+        metadata.persistency_service = PersistencyService::new(Some(String::from(REDIS_TEST_COFIGURATION)));
+        start_block.setup(&mut metadata);
+
+        // Set a fake unique operator id to not have conflicts with other tests
+        // If 2 opreators have the same coord and persist their state the tests fail
+        start_block.operator_coord.operator_id = 100;
+
+
+        sender1
+            .send(NetworkMessage::new_batch(
+                vec![
+                    StreamElement::Item(1), 
+                    StreamElement::Snapshot(1),
+                    StreamElement::Item(2), 
+                    ],
+                from1,
+            ))
+            .unwrap();
+
+        assert_eq!(StreamElement::Item(1), start_block.next());
+        assert_eq!(StreamElement::Snapshot(1), start_block.next());
+        assert_eq!(StreamElement::Item(2), start_block.next());
+
+        sender2
+            .send(NetworkMessage::new_batch(
+                vec![
+                    StreamElement::Item(3), 
+                    StreamElement::Item(4), 
+                    StreamElement::Snapshot(1),
+                    StreamElement::Item(5),
+                    ],
+                from2,
+            ))
+            .unwrap();
+
+        assert_eq!(StreamElement::Item(3), start_block.next());
+        assert_eq!(StreamElement::Item(4), start_block.next());
+        assert_eq!(StreamElement::Item(5), start_block.next());
+
+        let state: StartBlockState<i32, SingleStartBlockReceiver<i32>> = StartBlockState {
+            missing_flush_and_restart: 2,
+            missing_terminate: 2,
+            wait_for_state: false,
+            state_generation: 0,
+            watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
+            receiver_state: None,
+            message_queue: vec![
+                StreamElement::Item(3), 
+                StreamElement::Item(4),
+            ],
+        };
+
+        let retrived_state: StartBlockState<i32, SingleStartBlockReceiver<i32>> = start_block.persistency_service.get_state(start_block.operator_coord, 1).unwrap();
+
+        assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
+        assert_eq!(state.missing_terminate, retrived_state.missing_terminate);
+        assert_eq!(state.wait_for_state, retrived_state.wait_for_state);
+        assert_eq!(state.state_generation, retrived_state.state_generation);
+        assert_eq!(state.watermark_forntier.get_frontier(), retrived_state.watermark_forntier.get_frontier());
+        assert_eq!(state.receiver_state, retrived_state.receiver_state);
+        assert_eq!(state.message_queue, retrived_state.message_queue);
+        
+        // Clean redis
+        start_block.persistency_service.delete_state(start_block.operator_coord, 1);
+
+    }
+
+    
+    #[test]
+    fn test_single_start_persistency_multiple_snapshot() {
+        let mut t = FakeNetworkTopology::new(1, 2);
+        let (from1, sender1) = t.senders_mut()[0].pop().unwrap();
+        let (from2, sender2) = t.senders_mut()[0].pop().unwrap();
+
+        let mut start_block =
+            StartBlock::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None);
+
+        let mut metadata = t.metadata();
+        metadata.persistency_service = PersistencyService::new(Some(String::from(REDIS_TEST_COFIGURATION)));
+        start_block.setup(&mut metadata);
+
+        // Set a fake unique operator id to not have conflicts with other tests
+        // If 2 opreators have the same coord and persist their state the tests fail
+        start_block.operator_coord.operator_id = 101;
+
+
+        sender1
+            .send(NetworkMessage::new_batch(
+                vec![
+                    StreamElement::Item(1), 
+                    StreamElement::Snapshot(1),
+                    StreamElement::Item(2),
+                    StreamElement::Snapshot(2),
+                    StreamElement::Item(3), 
+                    ],
+                from1,
+            ))
+            .unwrap();
+
+        assert_eq!(StreamElement::Item(1), start_block.next());
+        assert_eq!(StreamElement::Snapshot(1), start_block.next());
+        assert_eq!(StreamElement::Item(2), start_block.next());
+        assert_eq!(StreamElement::Snapshot(2), start_block.next());
+        assert_eq!(StreamElement::Item(3), start_block.next());
+
+        sender2
+            .send(NetworkMessage::new_batch(
+                vec![
+                    StreamElement::Item(5), 
+                    StreamElement::Item(6), 
+                    StreamElement::Snapshot(1),
+                    StreamElement::Item(7),
+                    StreamElement::Snapshot(2),
+                    StreamElement::Item(8),
+                    ],
+                from2,
+            ))
+            .unwrap();
+
+        assert_eq!(StreamElement::Item(5), start_block.next());
+        assert_eq!(StreamElement::Item(6), start_block.next());
+        assert_eq!(StreamElement::Item(7), start_block.next());
+
+        let state: StartBlockState<i32, SingleStartBlockReceiver<i32>> = StartBlockState {
+            missing_flush_and_restart: 2,
+            missing_terminate: 2,
+            wait_for_state: false,
+            state_generation: 0,
+            watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
+            receiver_state: None,
+            message_queue: vec![
+                StreamElement::Item(5), 
+                StreamElement::Item(6),
+            ],
+        };
+
+        let retrived_state: StartBlockState<i32, SingleStartBlockReceiver<i32>> = start_block.persistency_service.get_state(start_block.operator_coord, 1).unwrap();
+
+        assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
+        assert_eq!(state.missing_terminate, retrived_state.missing_terminate);
+        assert_eq!(state.wait_for_state, retrived_state.wait_for_state);
+        assert_eq!(state.state_generation, retrived_state.state_generation);
+        assert_eq!(state.watermark_forntier.get_frontier(), retrived_state.watermark_forntier.get_frontier());
+        assert_eq!(state.receiver_state, retrived_state.receiver_state);
+        assert_eq!(state.message_queue, retrived_state.message_queue);
+
+        assert_eq!(StreamElement::Item(8), start_block.next());
+
+        let state: StartBlockState<i32, SingleStartBlockReceiver<i32>> = StartBlockState {
+            missing_flush_and_restart: 2,
+            missing_terminate: 2,
+            wait_for_state: false,
+            state_generation: 0,
+            watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
+            receiver_state: None,
+            message_queue: vec![
+                StreamElement::Item(5), 
+                StreamElement::Item(6),
+                StreamElement::Item(7),
+            ],
+        };
+
+        let retrived_state: StartBlockState<i32, SingleStartBlockReceiver<i32>> = start_block.persistency_service.get_state(start_block.operator_coord, 2).unwrap();
+
+        assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
+        assert_eq!(state.missing_terminate, retrived_state.missing_terminate);
+        assert_eq!(state.wait_for_state, retrived_state.wait_for_state);
+        assert_eq!(state.state_generation, retrived_state.state_generation);
+        assert_eq!(state.watermark_forntier.get_frontier(), retrived_state.watermark_forntier.get_frontier());
+        assert_eq!(state.receiver_state, retrived_state.receiver_state);
+        assert_eq!(state.message_queue, retrived_state.message_queue);
+        
+        // Clean redis
+        start_block.persistency_service.delete_state(start_block.operator_coord, 1);
+        start_block.persistency_service.delete_state(start_block.operator_coord, 2);
+
+    }
+
+   
+
+
 }
