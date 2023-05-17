@@ -14,7 +14,7 @@ use super::{ExchangeData, ExchangeDataKey};
 #[derive(Debug)]
 struct RichMapPersistent<Key: ExchangeDataKey, Out: Data, NewOut: Data, F, State: ExchangeData, OperatorChain>
 where
-    F: Fn(KeyValue<&Key, Out>, State) -> (NewOut, State) + Send + Clone,
+    F: Fn(KeyValue<&Key, Out>, &mut State) -> NewOut + Send + Clone,
     OperatorChain: Operator<KeyValue<Key, Out>>,
 {
     prev: OperatorChain,
@@ -30,7 +30,7 @@ where
 impl<Key: ExchangeDataKey, Out: Data, NewOut: Data, F: Clone, State: ExchangeData, OperatorChain: Clone> Clone
     for RichMapPersistent<Key, Out, NewOut, F, State, OperatorChain>
 where
-    F: Fn(KeyValue<&Key, Out>, State) -> (NewOut, State) + Send + Clone,
+    F: Fn(KeyValue<&Key, Out>, &mut State) -> NewOut + Send + Clone,
     OperatorChain: Operator<KeyValue<Key, Out>>,
 {
     fn clone(&self) -> Self {
@@ -50,7 +50,7 @@ where
 impl<Key: ExchangeDataKey, Out: Data, NewOut: Data, F, State: ExchangeData, OperatorChain> Display
     for RichMapPersistent<Key, Out, NewOut, F, State, OperatorChain>
 where
-    F: Fn(KeyValue<&Key, Out>, State) -> (NewOut, State) + Send + Clone,
+    F: Fn(KeyValue<&Key, Out>, &mut State) -> NewOut + Send + Clone,
     OperatorChain: Operator<KeyValue<Key, Out>>,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -67,7 +67,7 @@ where
 impl<Key: ExchangeDataKey, Out: Data, NewOut: Data, F, State: ExchangeData, OperatorChain>
     RichMapPersistent<Key, Out, NewOut, F, State, OperatorChain>
 where
-    F: Fn(KeyValue<&Key, Out>, State) -> (NewOut, State) + Send + Clone,
+    F: Fn(KeyValue<&Key, Out>, &mut State) -> NewOut + Send + Clone,
     OperatorChain: Operator<KeyValue<Key, Out>>,
 {
     fn new(prev: OperatorChain, f: F, state: State) -> Self {
@@ -91,7 +91,7 @@ where
 impl<Key: ExchangeDataKey, Out: Data, NewOut: Data, F, State: ExchangeData, OperatorChain> Operator<KeyValue<Key, NewOut>>
     for RichMapPersistent<Key, Out, NewOut, F, State, OperatorChain>
 where
-    F: Fn(KeyValue<&Key, Out>, State) -> (NewOut, State) + Send + Clone,
+    F: Fn(KeyValue<&Key, Out>, &mut State) -> NewOut + Send + Clone,
     OperatorChain: Operator<KeyValue<Key, Out>>,
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
@@ -111,24 +111,24 @@ where
         match element {
             StreamElement::Item((key, value)) => {
                 let state = if let Some(state) = self.states_by_key.get_mut(&key) {
-                    state.clone()
+                    state
                 } else {
                     // the key is not present in the hashmap
-                    self.init_state.clone()
+                    self.states_by_key.insert(key.clone(), self.init_state.clone());
+                    self.states_by_key.get_mut(&key).unwrap()
                 };
-                let (new_value, new_state) = (self.f)((&key, value), state);
-                self.states_by_key.insert(key.clone(), new_state);
+                let new_value = (self.f)((&key, value), state);
                 StreamElement::Item((key, new_value))
             }
             StreamElement::Timestamped((key, value), ts) => {
                 let state = if let Some(state) = self.states_by_key.get_mut(&key) {
-                    state.clone()
+                    state
                 } else {
                     // the key is not present in the hashmap
-                    self.init_state.clone()
+                    self.states_by_key.insert(key.clone(), self.init_state.clone());
+                    self.states_by_key.get_mut(&key).unwrap()
                 };
-                let (new_value, new_state) = (self.f)((&key, value), state);
-                self.states_by_key.insert(key.clone(), new_state);
+                let new_value = (self.f)((&key, value), state);
                 StreamElement::Timestamped((key, new_value), ts)
             }
             StreamElement::Snapshot(snap_id) => {
@@ -170,14 +170,12 @@ impl<Out: Data, OperatorChain> Stream<Out, OperatorChain>
 where
     OperatorChain: Operator<Out> + 'static,
 {
-    /// Map the elements of the stream into new elements. The mapping function can be stateful.
+    /// Map the elements of the stream into new elements.
     ///
-    /// This is equivalent to [`Stream::map`] but with a stateful function.
+    /// This is the persistent version of rich_map, the initial state must be passed as 
+    /// parameter and the mapping Fn has access to a mutable reference of the state.
     ///
-    /// This is the persistent version of rich_map, the state must be passed as parameter
-    /// and the mapping Fn must take care of the state updating.
-    ///
-    /// The mapping function is _cloned_ inside each replica, and they will not share state between
+    /// The initial state is _cloned_ inside each replica, and they will not share state between
     /// each other. If you want that only a single replica handles all the items you may want to
     /// change the parallelism of this operator with [`Stream::max_parallelism`].
     ///
@@ -194,10 +192,9 @@ where
     /// let s = env.stream(IteratorSource::new((1..=5)));
     /// let sum = 0;
     /// let res = s.rich_map_persistent(sum, {
-    ///    move |x, sum| {
-    ///        let mut new_sum = sum;
-    ///        new_sum += x;
-    ///        (new_sum, new_sum)
+    ///    |x, sum| {
+    ///        *sum += x;
+    ///        *sum
     ///    }
     /// }).collect_vec();
     ///
@@ -216,10 +213,9 @@ where
     /// let s = env.stream(IteratorSource::new((1..=5)));
     /// let state = 0;
     /// let res = s.rich_map_persistent(state, {
-    ///     move |x, state| {
-    ///         let mut id = state;
-    ///         id += 1;
-    ///         ((id - 1, x), id)
+    ///     |x, state| {
+    ///         *state += 1;
+    ///         (*state - 1, x)
     ///     }
     /// }).collect_vec();
     ///
@@ -229,7 +225,7 @@ where
     /// ```
     pub fn rich_map_persistent<NewOut: Data, F, State: ExchangeData>(self, state: State, f: F) -> Stream<NewOut, impl Operator<NewOut>>
     where
-        F: Fn(Out, State) -> (NewOut, State) + Send + Clone + 'static,
+        F: Fn(Out, &mut State) -> NewOut + Send + Clone + 'static,
     {
         self.key_by(|_| ())
             .add_operator(|prev| RichMapPersistent::new(prev, move |(_, value), state| f(value, state), state))
@@ -241,17 +237,20 @@ impl<Key: ExchangeDataKey, Out: Data, OperatorChain> KeyedStream<Key, Out, Opera
 where
     OperatorChain: Operator<KeyValue<Key, Out>> + 'static,
 {
-    /// Map the elements of the stream into new elements. The mapping function can be stateful.
+    /// Map the elements of the stream into new elements. 
+    /// 
+    /// This is the persistent version of rich_map, the initial state must be passed as 
+    /// parameter and the mapping Fn has access to a mutable reference of the state.
     ///
-    /// This is exactly like [`Stream::rich_map`], but the function is cloned for each key. This
-    /// means that each key will have a unique mapping function (and therefore a unique state).
+    /// This is exactly like [`Stream::rich_map`], but the state is cloned for each key.
+    /// This means that each key will have a unique state.
     pub fn rich_map_persistent<NewOut: Data, F, State: ExchangeData>(
         self,
         state: State,
         f: F,
     ) -> KeyedStream<Key, NewOut, impl Operator<KeyValue<Key, NewOut>>>
     where
-        F: Fn(KeyValue<&Key, Out>, State) -> (NewOut, State) + Send + Clone + 'static,
+        F: Fn(KeyValue<&Key, Out>, &mut State) -> NewOut + Send + Clone + 'static,
     {
         self.add_operator(|prev| RichMapPersistent::new(prev, f, state))
     }
@@ -263,7 +262,6 @@ mod tests {
 
     use crate::{operator::{rich_map_persistent::RichMapPersistent, StreamElement, Operator}, test::{FakeOperator, REDIS_TEST_COFIGURATION}, network::OperatorCoord, persistency::{PersistencyService, PersistencyServices}};  
 
-    #[ignore]
     #[test]
     fn test_rich_map_persistent_persistency() {
         let mut fake_operator = FakeOperator::empty();
@@ -276,10 +274,9 @@ mod tests {
 
         let state = 0;
         let f = {
-            move |x, sum| {
-                let mut new_sum = sum;
-                new_sum += x;
-                (new_sum, new_sum)
+            |x, sum: &mut i32| {
+                *sum += x;
+                *sum
             }
         };
         let mut rich_map_persistent = RichMapPersistent::new(fake_operator, move |(_, value), state| f(value, state), state);
@@ -310,7 +307,7 @@ mod tests {
         rich_map_persistent.persistency_service.delete_state(rich_map_persistent.operator_coord, 2);
     }
 
-    #[ignore]
+
     #[test]
     fn test_rich_map_persistent_diff_key_persistency() {
         let mut fake_operator = FakeOperator::empty();
@@ -323,10 +320,9 @@ mod tests {
 
         let state = 0;
         let f = {
-            move |x, sum| {
-                let mut new_sum = sum;
-                new_sum += x;
-                (new_sum, new_sum)
+            |x, sum: &mut i32| {
+                *sum += x;
+                *sum
             }
         };
         let mut rich_map_persistent = RichMapPersistent::new(fake_operator, move |(_key, value), state| f(value, state), state);

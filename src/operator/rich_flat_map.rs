@@ -58,14 +58,14 @@ where
 
 
     /// Apply a mapping operation to each element of the stream, the resulting stream will be the
-    /// flattened values of the result of the mapping. The mapping function can be stateful.
+    /// flattened values of the result of the mapping.
     ///
     /// This is equivalent to [`Stream::flat_map`] but with a stateful function.
     ///
-    /// This is the persistent version of rich_flat_map, the state must be passed as parameter
-    /// and the mapping Fn must take care of the state updating.
+    /// This is the persistent version of rich_flat_map, the initial state must be passed as 
+    /// parameter and the mapping Fn has access to a mutable reference of the state.
     ///
-    /// The mapping function is _cloned_ inside each replica, and they will not share state between
+    /// The initial state is _cloned_ inside each replica, and they will not share state between
     /// each other. If you want that only a single replica handles all the items you may want to
     /// change the parallelism of this operator with [`Stream::max_parallelism`].
     ///
@@ -80,13 +80,13 @@ where
     /// let s = env.stream(IteratorSource::new((0..=3)));
     /// let state = Vec::new();
     /// let res = s.rich_flat_map_persistent(state, {
-    ///     move |y, mut state| { 
+    ///     |y, state| { 
     ///         let new_pairs = state
     ///             .iter()
     ///             .map(|&x: &u32| (x, y))
     ///             .collect::<Vec<_>>();
     ///         state.push(y);
-    ///         (new_pairs, state)
+    ///         new_pairs
     ///     }
     /// }).collect_vec();
     ///
@@ -102,7 +102,7 @@ where
     where
         MapOut: IntoIterator<Item = NewOut>,
         <MapOut as IntoIterator>::IntoIter: Clone + Send + 'static,
-        F: Fn(Out, State) -> (MapOut, State) + Send + Clone + 'static,
+        F: Fn(Out, &mut State) -> MapOut + Send + Clone + 'static,
     {
         self.rich_map_persistent(state, f).flatten()
     }
@@ -135,13 +135,13 @@ where
     OperatorChain: Operator<KeyValue<Key, Out>> + 'static,
 {
     /// Apply a mapping operation to each element of the stream, the resulting stream will be the
-    /// flattened values of the result of the mapping. The mapping function can be stateful.
+    /// flattened values of the result of the mapping.
     ///
-    /// This is the persistent version of rich_flat_map, the state must be passed as parameter
-    /// and the mapping Fn must take care of the state updating.
+    /// This is the persistent version of rich_flat_map, the initial state must be passed as 
+    /// parameter and the mapping Fn has access to a mutable reference of the state.
     /// 
-    /// This is exactly like [`Stream::rich_flat_map`], but the function is cloned for each key.
-    /// This means that each key will have a unique mapping function (and therefore a unique state).
+    /// This is exactly like [`Stream::rich_flat_map`], but the initial state is cloned for each key.
+    /// This means that each key will have a unique state.
     pub fn rich_flat_map_persistent<NewOut: Data, MapOut: Data, F, State: ExchangeData>(
         self,
         state: State,
@@ -150,7 +150,7 @@ where
     where
         MapOut: IntoIterator<Item = NewOut>,
         <MapOut as IntoIterator>::IntoIter: Clone + Send + 'static,
-        F: Fn(KeyValue<&Key, Out>, State) -> (MapOut, State) + Clone + Send + 'static,
+        F: Fn(KeyValue<&Key, Out>, &mut State) -> MapOut + Clone + Send + 'static,
     {
         self.rich_map_persistent(state, f).flatten()
     }

@@ -52,14 +52,14 @@ where
     }
 
     /// Remove from the stream all the elements for which the provided function returns `None` and
-    /// keep the elements that returned `Some(_)`. The mapping function can be stateful.
+    /// keep the elements that returned `Some(_)`.
     ///
     /// This is equivalent to [`Stream::filter_map`] but with a stateful function.
     ///
-    /// This is the persistent version of rich_flat_map, the state must be passed as parameter
-    /// and the mapping Fn must take care of the state updating.
+    /// This is the persistent version of rich_flat_map, the initial state must be passed as 
+    /// parameter and the mapping Fn has access to a mutable reference of the state.
     ///
-    /// The mapping function is _cloned_ inside each replica, and they will not share state between
+    /// The initial state is _cloned_ inside each replica, and they will not share state between
     /// each other. If you want that only a single replica handles all the items you may want to
     /// change the parallelism of this operator with [`Stream::max_parallelism`].
     ///
@@ -71,15 +71,15 @@ where
     /// # use noir::{StreamEnvironment, EnvironmentConfig};
     /// # use noir::operator::source::IteratorSource;
     /// # let mut env = StreamEnvironment::new(EnvironmentConfig::local(1));
-    /// let s = env.stream(IteratorSource::new(std::array::IntoIter::new([1, 2, -5, 3, 1])));
+    /// let s = env.stream(IteratorSource::new(IntoIterator::into_iter([1, 2, -5, 3, 1])));
     /// let sum = 0;
     /// let res = s.rich_filter_map_persistent(sum, {
-    ///     move |x, mut sum| {
-    ///         sum += x;
-    ///         if sum >= 0 {
-    ///             (Some(sum), sum)
+    ///     |x, sum| {
+    ///         *sum += x;
+    ///         if *sum >= 0 {
+    ///             Some(*sum)
     ///         } else {
-    ///             (None, sum)
+    ///             None
     ///         }
     ///     }
     /// }).collect_vec();
@@ -90,7 +90,7 @@ where
     /// ```
     pub fn rich_filter_map_persistent<NewOut: Data, F, State: ExchangeData>(self, state: State, f: F) -> Stream<NewOut, impl Operator<NewOut>>
     where
-        F: Fn(Out, State) -> (Option<NewOut>, State) + Send + Clone + 'static,
+        F: Fn(Out, &mut State) -> Option<NewOut> + Send + Clone + 'static,
     {
         self.rich_map_persistent(state, f).filter(|x| x.is_some()).map(|x| x.unwrap())
     }
@@ -126,18 +126,18 @@ where
     /// Remove from the stream all the elements for which the provided function returns `None` and
     /// keep the elements that returned `Some(_)`. The mapping function can be stateful.
     ///
-    /// This is the persistent version of rich_flat_map, the state must be passed as parameter
-    /// and the mapping Fn must take care of the state updating.
+    /// This is the persistent version of rich_filter_map, the initial state must be passed as 
+    /// parameter and the mapping Fn has access to a mutable reference of the state.
     /// 
-    /// This is exactly like [`Stream::rich_filter_map`], but the function is cloned for each key.
-    /// This means that each key will have a unique mapping function (and therefore a unique state).
+    /// This is exactly like [`Stream::rich_filter_map`], but the initial state is cloned for each key.
+    /// This means that each key will have a unique state.
     pub fn rich_filter_map_persistent<NewOut: Data, F, State: ExchangeData>(
         self,
         state: State,
         f: F,
     ) -> KeyedStream<Key, NewOut, impl Operator<KeyValue<Key, NewOut>>>
     where
-        F: Fn(KeyValue<&Key, Out>, State) -> (Option<NewOut>, State) + Send + Clone + 'static,
+        F: Fn(KeyValue<&Key, Out>, &mut State) -> Option<NewOut> + Send + Clone + 'static,
     {
         self.rich_map_persistent(state, f)
             .filter(|(_, x)| x.is_some())
