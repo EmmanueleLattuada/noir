@@ -13,6 +13,8 @@ pub use crate::operator::join::ship::{JoinStreamShipBroadcastRight, JoinStreamSh
 use crate::operator::{Data, DataKey, ExchangeData, KeyerFn, Operator};
 use crate::stream::{KeyValue, KeyedStream, Stream};
 
+use super::ExchangeDataKey;
+
 mod keyed_join;
 mod local_hash;
 mod local_sort_merge;
@@ -123,7 +125,7 @@ where
         impl Operator<KeyValue<Key, InnerJoinTuple<Out, Out2>>>,
     >
     where
-        Key: DataKey,
+        Key: ExchangeDataKey,
         OperatorChain2: Operator<Out2> + 'static,
         Keyer1: Fn(&Out) -> Key + KeyerFn<Key, Out>,
         Keyer2: Fn(&Out2) -> Key + KeyerFn<Key, Out2>,
@@ -175,7 +177,7 @@ where
         impl Operator<KeyValue<Key, LeftJoinTuple<Out, Out2>>>,
     >
     where
-        Key: DataKey,
+        Key: ExchangeDataKey,
         OperatorChain2: Operator<Out2> + 'static,
         Keyer1: Fn(&Out) -> Key + KeyerFn<Key, Out>,
         Keyer2: Fn(&Out2) -> Key + KeyerFn<Key, Out2>,
@@ -228,7 +230,7 @@ where
         impl Operator<KeyValue<Key, OuterJoinTuple<Out, Out2>>>,
     >
     where
-        Key: DataKey,
+        Key: ExchangeDataKey,
         OperatorChain2: Operator<Out2> + 'static,
         Keyer1: Fn(&Out) -> Key + KeyerFn<Key, Out>,
         Keyer2: Fn(&Out2) -> Key + KeyerFn<Key, Out2>,

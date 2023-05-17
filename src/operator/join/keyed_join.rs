@@ -4,6 +4,8 @@ use std::{
     marker::PhantomData,
 };
 
+use serde::{Serialize, Deserialize};
+
 use crate::{
     block::{NextStrategy, OperatorStructure},
     network::{Coord, OperatorCoord},
@@ -11,7 +13,7 @@ use crate::{
         Data, DataKey, ExchangeData, MultipleStartBlockReceiverOperator, Operator, StartBlock,
         StreamElement, TwoSidesItem,
     },
-    KeyValue, KeyedStream, scheduler::OperatorId,
+    KeyValue, KeyedStream, scheduler::OperatorId, persistency::{PersistencyService, PersistencyServices},
 };
 
 use super::{InnerJoinTuple, JoinVariant, OuterJoinTuple};
@@ -19,7 +21,7 @@ use super::{InnerJoinTuple, JoinVariant, OuterJoinTuple};
 type TwoSidesTuple<K, V1, V2> = TwoSidesItem<KeyValue<K, V1>, KeyValue<K, V2>>;
 
 /// This type keeps the elements of a side of the join.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct SideHashMap<Key: DataKey, Out> {
     /// The actual items on this side, grouped by key.
     ///
@@ -50,6 +52,7 @@ impl<Key: DataKey, Out> Default for SideHashMap<Key, Out> {
 struct JoinKeyedOuter<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> {
     prev: MultipleStartBlockReceiverOperator<KeyValue<K, V1>, KeyValue<K, V2>>,
     operator_coord: OperatorCoord,
+    persistency_service: PersistencyService,
     variant: JoinVariant,
     _k: PhantomData<K>,
     _v1: PhantomData<V1>,
@@ -78,6 +81,7 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> JoinKeyedOut
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
+            persistency_service: PersistencyService::default(),
             variant,
             _k: PhantomData,
             _v1: PhantomData,
@@ -206,6 +210,13 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> Display
     }
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+struct JoinKeyedOuterState<K: DataKey, V1, V2> {    
+    left: SideHashMap<K, V1>,
+    right: SideHashMap<K, V2>,
+    buffer: VecDeque<KeyValue<K, OuterJoinTuple<V1, V2>>>,
+}
+
 impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
     Operator<KeyValue<K, OuterJoinTuple<V1, V2>>> for JoinKeyedOuter<K, V1, V2>
 {
@@ -216,6 +227,9 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
         self.operator_coord.block_id = metadata.coord.block_id;
         self.operator_coord.host_id = metadata.coord.host_id;
         self.operator_coord.replica_id = metadata.coord.replica_id;
+
+        self.persistency_service = metadata.persistency_service.clone();
+        self.persistency_service.setup();
     }
 
     fn next(&mut self) -> crate::operator::StreamElement<KeyValue<K, OuterJoinTuple<V1, V2>>> {
@@ -241,9 +255,14 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
                 }
                 StreamElement::Terminate => return StreamElement::Terminate,
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
-                // TODO: handle snapshot marker
-                StreamElement::Snapshot(_) => {
-                    panic!("Snapshot not supported for join operator")
+                StreamElement::Snapshot(snapshot_id) => {
+                    let state = JoinKeyedOuterState{
+                        left: self.left.clone(),
+                        right: self.right.clone(),
+                        buffer: self.buffer.clone(),
+                    };
+                    self.persistency_service.save_state(self.operator_coord, snapshot_id, state);
+                    return StreamElement::Snapshot(snapshot_id);
                 }
                 StreamElement::Watermark(_) | StreamElement::Timestamped(_, _) => {
                     panic!("Cannot yet join timestamped streams")
@@ -274,6 +293,7 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
 struct JoinKeyedInner<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> {
     prev: MultipleStartBlockReceiverOperator<KeyValue<K, V1>, KeyValue<K, V2>>,
     operator_coord: OperatorCoord,
+    persistency_service: PersistencyService,
     _k: PhantomData<K>,
     _v1: PhantomData<V1>,
     _v2: PhantomData<V2>,
@@ -320,6 +340,7 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
+            persistency_service: PersistencyService::default(),
             _k: PhantomData,
             _v1: PhantomData,
             _v2: PhantomData,
@@ -374,6 +395,15 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
     }
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+struct JoinKeyedInnerState<K: DataKey, V1, V2> {
+    left: HashMap<K, Vec<V1>, crate::block::CoordHasherBuilder>,
+    right: HashMap<K, Vec<V2>, crate::block::CoordHasherBuilder>,
+    left_ended: bool,
+    right_ended: bool,
+    buffer: VecDeque<KeyValue<K, InnerJoinTuple<V1, V2>>>,
+}
+
 impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeData + Debug>
     Operator<KeyValue<K, InnerJoinTuple<V1, V2>>> for JoinKeyedInner<K, V1, V2>
 {
@@ -384,6 +414,9 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
         self.operator_coord.block_id = metadata.coord.block_id;
         self.operator_coord.host_id = metadata.coord.host_id;
         self.operator_coord.replica_id = metadata.coord.replica_id;
+
+        self.persistency_service = metadata.persistency_service.clone();
+        self.persistency_service.setup();
     }
 
     fn next(&mut self) -> crate::operator::StreamElement<KeyValue<K, InnerJoinTuple<V1, V2>>> {
@@ -403,9 +436,16 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
                 }
                 StreamElement::Terminate => return StreamElement::Terminate,
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
-                // TODO: handle snapshot marker
-                StreamElement::Snapshot(_) => {
-                    panic!("Snapshot not supported for join operator")
+                StreamElement::Snapshot(snapshot_id) => {
+                    let state = JoinKeyedInnerState{
+                        left: self.left.clone(),
+                        right: self.right.clone(),
+                        left_ended: self.left_ended,
+                        right_ended: self.right_ended,
+                        buffer: self.buffer.clone(),
+                    };
+                    self.persistency_service.save_state(self.operator_coord, snapshot_id, state);
+                    return StreamElement::Snapshot(snapshot_id);
                 }
                 StreamElement::Watermark(_) | StreamElement::Timestamped(_, _) => {
                     panic!("Cannot yet join timestamped streams")

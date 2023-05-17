@@ -4,17 +4,20 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Display;
 use std::marker::PhantomData;
 
+use serde::{Serialize, Deserialize};
+
 use crate::block::{BlockStructure, OperatorStructure};
 use crate::network::{Coord, OperatorCoord};
 use crate::operator::join::ship::{ShipBroadcastRight, ShipHash, ShipStrategy};
 use crate::operator::join::{InnerJoinTuple, JoinVariant, LeftJoinTuple, OuterJoinTuple};
 use crate::operator::start::{MultipleStartBlockReceiverOperator, TwoSidesItem};
-use crate::operator::{DataKey, ExchangeData, KeyerFn, Operator, StreamElement};
+use crate::operator::{DataKey, ExchangeData, KeyerFn, Operator, StreamElement, ExchangeDataKey};
+use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::stream::{KeyValue, KeyedStream, Stream};
 
 /// This type keeps the elements of a side of the join.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct SideHashMap<Key: DataKey, Out> {
     /// The actual items on this side, grouped by key.
     ///
@@ -58,6 +61,7 @@ struct JoinLocalHash<
     coord: Coord,
 
     operator_coord: OperatorCoord,
+    persistency_service: PersistencyService,
 
     /// The content of the left side.
     left: SideHashMap<Key, Out1>,
@@ -110,6 +114,7 @@ impl<
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
+            persistency_service: PersistencyService::default(),
             coord: Default::default(),
             left: Default::default(),
             right: Default::default(),
@@ -188,8 +193,16 @@ impl<
     }
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+struct JoinLocalHashState<Key: DataKey, Out1, Out2> {
+    left: SideHashMap<Key, Out1>,
+    right: SideHashMap<Key, Out2>,
+    buffer: VecDeque<KeyValue<Key, OuterJoinTuple<Out1, Out2>>>,
+}
+
+
 impl<
-        Key: DataKey,
+        Key: ExchangeDataKey,
         Out1: ExchangeData,
         Out2: ExchangeData,
         Keyer1: KeyerFn<Key, Out1>,
@@ -205,6 +218,9 @@ impl<
         self.operator_coord.block_id = metadata.coord.block_id;
         self.operator_coord.host_id = metadata.coord.host_id;
         self.operator_coord.replica_id = metadata.coord.replica_id;
+
+        self.persistency_service = metadata.persistency_service.clone();
+        self.persistency_service.setup();
     }
 
     fn next(&mut self) -> StreamElement<(Key, OuterJoinTuple<Out1, Out2>)> {
@@ -274,9 +290,14 @@ impl<
                 }
                 StreamElement::Terminate => return StreamElement::Terminate,
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
-                // TODO: handle snapshot marker
-                StreamElement::Snapshot(_) => {
-                    panic!("Snapshot not supported for join operator")
+                StreamElement::Snapshot(snap_id) => {
+                    let state = JoinLocalHashState{
+                        left: self.left.clone(),
+                        right: self.right.clone(),
+                        buffer: self.buffer.clone(),
+                    };
+                    self.persistency_service.save_state(self.operator_coord, snap_id, state);
+                    return StreamElement::Snapshot(snap_id);
                 }
                 StreamElement::Watermark(_) | StreamElement::Timestamped(_, _) => {
                     panic!("Cannot yet join timestamped streams")
@@ -351,7 +372,7 @@ where
     }
 }
 
-impl<Key: DataKey, Out1: ExchangeData, Out2: ExchangeData, Keyer1, Keyer2>
+impl<Key: ExchangeDataKey, Out1: ExchangeData, Out2: ExchangeData, Keyer1, Keyer2>
     JoinStreamLocalHash<Key, Out1, Out2, Keyer1, Keyer2, ShipHash>
 where
     Keyer1: KeyerFn<Key, Out1>,
@@ -439,7 +460,7 @@ where
     }
 }
 
-impl<Key: DataKey, Out1: ExchangeData, Out2: ExchangeData, Keyer1, Keyer2>
+impl<Key: ExchangeDataKey, Out1: ExchangeData, Out2: ExchangeData, Keyer1, Keyer2>
     JoinStreamLocalHash<Key, Out1, Out2, Keyer1, Keyer2, ShipBroadcastRight>
 where
     Keyer1: KeyerFn<Key, Out1>,

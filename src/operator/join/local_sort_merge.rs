@@ -4,12 +4,15 @@ use std::collections::VecDeque;
 use std::fmt::Display;
 use std::marker::PhantomData;
 
+use serde::{Serialize, Deserialize};
+
 use crate::block::{BlockStructure, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::join::ship::{ShipBroadcastRight, ShipHash, ShipStrategy};
 use crate::operator::join::{InnerJoinTuple, JoinVariant, LeftJoinTuple, OuterJoinTuple};
 use crate::operator::start::{MultipleStartBlockReceiverOperator, TwoSidesItem};
-use crate::operator::{Data, ExchangeData, KeyerFn, Operator, StreamElement};
+use crate::operator::{Data, ExchangeData, KeyerFn, Operator, StreamElement, DataKey, ExchangeDataKey};
+use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::stream::{KeyValue, KeyedStream, Stream};
 use crate::worker::replica_coord;
@@ -30,6 +33,7 @@ struct JoinLocalSortMerge<
     prev: OperatorChain,
 
     operator_coord: OperatorCoord,
+    persistency_service: PersistencyService,
 
     keyer1: Keyer1,
     keyer2: Keyer2,
@@ -85,6 +89,7 @@ impl<
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
+            persistency_service: PersistencyService::default(),
             keyer1,
             keyer2,
             left_ended: false,
@@ -158,8 +163,20 @@ impl<
     }
 }
 
+
+#[derive(Clone, Serialize, Deserialize)]
+struct JoinLocalSortMergeState<Key: DataKey, Out1, Out2> {
+    left_ended: bool,
+    right_ended: bool,
+    left: Vec<KeyValue<Key, Out1>>,
+    right: Vec<KeyValue<Key, Out2>>,
+    buffer: VecDeque<KeyValue<Key, OuterJoinTuple<Out1, Out2>>>,
+    last_left_key: Option<Key>,
+}
+
+
 impl<
-        Key: Data + Ord,
+        Key: ExchangeDataKey + Ord,
         Out1: ExchangeData,
         Out2: ExchangeData,
         Keyer1: KeyerFn<Key, Out1>,
@@ -174,6 +191,8 @@ impl<
         self.operator_coord.block_id = metadata.coord.block_id;
         self.operator_coord.host_id = metadata.coord.host_id;
         self.operator_coord.replica_id = metadata.coord.replica_id;
+
+        self.persistency_service.setup();
     }
 
     fn next(&mut self) -> StreamElement<(Key, (Option<Out1>, Option<Out2>))> {
@@ -205,9 +224,17 @@ impl<
                 StreamElement::Timestamped(_, _) | StreamElement::Watermark(_) => {
                     panic!("Cannot join timestamp streams")
                 }
-                // TODO: handle snapshot marker
-                StreamElement::Snapshot(_) => {
-                    panic!("Snapshot not supported for join operator")
+                StreamElement::Snapshot(snapshot_id) => {
+                    let state = JoinLocalSortMergeState{
+                        left_ended: self.left_ended,
+                        right_ended: self.right_ended,
+                        left: self.left.clone(),
+                        right: self.right.clone(),
+                        buffer: self.buffer.clone(),
+                        last_left_key: self.last_left_key.clone(),
+                    };
+                    self.persistency_service.save_state(self.operator_coord, snapshot_id, state);
+                    return StreamElement::Snapshot(snapshot_id);
                 }
                 StreamElement::FlushAndRestart => {
                     assert!(self.left_ended, "{} left missing", replica_coord().unwrap());
@@ -290,7 +317,7 @@ where
     }
 }
 
-impl<Key: Data + Ord, Out1: ExchangeData, Out2: ExchangeData, Keyer1, Keyer2>
+impl<Key: ExchangeDataKey + Ord, Out1: ExchangeData, Out2: ExchangeData, Keyer1, Keyer2>
     JoinStreamLocalSortMerge<Key, Out1, Out2, Keyer1, Keyer2, ShipHash>
 where
     Keyer1: KeyerFn<Key, Out1>,
@@ -378,7 +405,7 @@ where
     }
 }
 
-impl<Key: Data + Ord, Out1: ExchangeData, Out2: ExchangeData, Keyer1, Keyer2>
+impl<Key: ExchangeDataKey + Ord, Out1: ExchangeData, Out2: ExchangeData, Keyer1, Keyer2>
     JoinStreamLocalSortMerge<Key, Out1, Out2, Keyer1, Keyer2, ShipBroadcastRight>
 where
     Keyer1: KeyerFn<Key, Out1>,
