@@ -35,6 +35,19 @@ impl<A> Slot<A> {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ProcessingTimeWindowManagerState<AS>{
+    ws: VecDeque<SlotState<AS>>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct SlotState<AS> {
+    acc: AS,
+    //start: Instant, 
+    //end: Instant,
+    active: bool,
+}
+
 impl<A: WindowAccumulator> WindowManager for ProcessingTimeWindowManager<A>
 where
     A::In: Data,
@@ -43,6 +56,8 @@ where
     type In = A::In;
     type Out = A::Out;
     type Output = Vec<WindowResult<A::Out>>;
+
+    type ManagerState = ProcessingTimeWindowManagerState<A::AccumulatorState>;
 
     #[inline]
     fn process(&mut self, el: StreamElement<A::In>) -> Self::Output {
@@ -84,6 +99,42 @@ where
             .filter(|w| w.active)
             .map(|w| WindowResult::Item(w.acc.output()))
             .collect()
+    }
+
+    fn get_state(&self) -> Self::ManagerState {
+        let win = VecDeque::from_iter(
+            self.ws
+                .clone()
+                .iter()
+                .map(|slot| SlotState {
+                    //start: slot.start.clone(),
+                    //end: slot.end.clone(),
+                    acc: slot.acc.get_state(),
+                    active: slot.active,
+                })
+            );
+        ProcessingTimeWindowManagerState {
+            ws: win,
+        }
+    }
+
+    fn set_state(&mut self, state: Self::ManagerState) {
+        let win = VecDeque::from_iter(
+            state.ws
+                .clone()
+                .iter()
+                .map(|slot| {
+                    let mut saved_slot = Slot {
+                        start: Instant::now(),  // FIX THIS
+                        end: Instant::now(),    // FIX THIS
+                        acc: self.init.clone(),
+                        active: slot.active,
+                    };
+                    saved_slot.acc.set_state(slot.acc.clone());
+                    saved_slot
+            })
+            );
+        self.ws = win;
     }
 }
 

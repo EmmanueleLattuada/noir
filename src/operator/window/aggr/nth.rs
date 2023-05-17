@@ -1,13 +1,14 @@
 use super::super::*;
-use crate::operator::{Data, DataKey, Operator};
+use crate::operator::{ExchangeData, ExchangeDataKey, Operator};
 use crate::stream::{KeyValue, KeyedStream, WindowedStream};
 
 #[derive(Clone)]
 pub(crate) struct First<T>(Option<T>);
 
-impl<T: Data> WindowAccumulator for First<T> {
+impl<T: ExchangeData> WindowAccumulator for First<T> {
     type In = T;
     type Out = T;
+    type AccumulatorState = Option<T>;
 
     #[inline]
     fn process(&mut self, el: Self::In) {
@@ -21,14 +22,24 @@ impl<T: Data> WindowAccumulator for First<T> {
         self.0
             .expect("First::output() called before any element was processed")
     }
+
+    fn get_state(&self) -> Self::AccumulatorState {
+        self.0.clone()
+    }
+
+    fn set_state(&mut self, state: Self::AccumulatorState) {
+        self.0 = state;
+    }
 }
 
 #[derive(Clone)]
 pub(crate) struct Last<T>(Option<T>);
 
-impl<T: Data> WindowAccumulator for Last<T> {
+impl<T: ExchangeData> WindowAccumulator for Last<T> {
     type In = T;
     type Out = T;
+
+    type AccumulatorState = Option<T>;
 
     #[inline]
     fn process(&mut self, el: Self::In) {
@@ -40,14 +51,22 @@ impl<T: Data> WindowAccumulator for Last<T> {
         self.0
             .expect("First::output() called before any element was processed")
     }
+
+    fn get_state(&self) -> Self::AccumulatorState {
+        self.0.clone()
+    }
+
+    fn set_state(&mut self, state: Self::AccumulatorState) {
+        self.0 = state;
+    }
 }
 
 impl<Key, Out, WindowDescr, OperatorChain> WindowedStream<Key, Out, OperatorChain, Out, WindowDescr>
 where
     WindowDescr: WindowBuilder<Out>,
     OperatorChain: Operator<KeyValue<Key, Out>> + 'static,
-    Key: DataKey,
-    Out: Data,
+    Key: ExchangeDataKey,
+    Out: ExchangeData,
 {
     pub fn first(self) -> KeyedStream<Key, Out, impl Operator<KeyValue<Key, Out>>> {
         let acc = First(None);
@@ -59,8 +78,8 @@ impl<Key, Out, WindowDescr, OperatorChain> WindowedStream<Key, Out, OperatorChai
 where
     WindowDescr: WindowBuilder<Out>,
     OperatorChain: Operator<KeyValue<Key, Out>> + 'static,
-    Key: DataKey,
-    Out: Data,
+    Key: ExchangeDataKey,
+    Out: ExchangeData,
 {
     pub fn last(self) -> KeyedStream<Key, Out, impl Operator<KeyValue<Key, Out>>> {
         let acc = Last(None);

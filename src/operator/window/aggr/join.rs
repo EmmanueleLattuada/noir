@@ -1,17 +1,19 @@
 use super::super::*;
 use crate::operator::merge::MergeElement;
-use crate::operator::{Data, DataKey, Operator};
+use crate::operator::{DataKey, Operator};
 use crate::stream::{KeyValue, KeyedStream};
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Join<L, R> {
     left: Vec<L>,
     right: Vec<R>,
 }
 
-impl<L: Data, R: Data> WindowAccumulator for Join<L, R> {
+impl<L: ExchangeData, R: ExchangeData> WindowAccumulator for Join<L, R> {
     type In = MergeElement<L, R>;
     type Out = ProductIterator<L, R>; // TODO: may have more efficient formulations
+
+    type AccumulatorState = Join<L, R>;
 
     #[inline]
     fn process(&mut self, el: Self::In) {
@@ -28,9 +30,18 @@ impl<L: Data, R: Data> WindowAccumulator for Join<L, R> {
             std::mem::take(&mut self.right),
         )
     }
+
+    fn get_state(&self) -> Self::AccumulatorState {
+        self.clone()
+    }
+
+    fn set_state(&mut self, state: Self::AccumulatorState) {
+        self.left = state.left;
+        self.right = state.right;
+    }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct ProductIterator<L, R> {
     left: Vec<L>,
     right: Vec<R>,

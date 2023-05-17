@@ -49,6 +49,18 @@ impl<A: WindowAccumulator> CountWindowManager<A> {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+pub struct CountWindowManagerState<AS> {
+    ws: VecDeque<SlotState<AS>>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct SlotState<AS> {
+    count: u64,
+    acc: AS,
+    ts: Option<Timestamp>,
+}
+
 impl<A: WindowAccumulator> WindowManager for CountWindowManager<A>
 where
     A::In: Data,
@@ -57,6 +69,7 @@ where
     type In = A::In;
     type Out = A::Out;
     type Output = Option<WindowResult<A::Out>>;
+    type ManagerState = CountWindowManagerState<A::AccumulatorState>;
 
     #[inline]
     fn process(&mut self, el: StreamElement<A::In>) -> Self::Output {
@@ -91,6 +104,40 @@ where
             }
             _ => None,
         }
+    }
+
+    fn get_state(&self) -> Self::ManagerState {
+        let win = VecDeque::from_iter(
+            self.ws
+                .clone()
+                .iter()
+                .map(|slot| SlotState {
+                    count: slot.count as u64,
+                    acc: slot.acc.get_state(),
+                    ts: slot.ts.clone(),
+                })
+            );
+        CountWindowManagerState {
+            ws: win
+        }
+    }
+
+    fn set_state(&mut self, state: Self::ManagerState) {
+        let win = VecDeque::from_iter(
+            state.ws
+                .clone()
+                .iter()
+                .map(|slot| {
+                    let mut saved_slot = Slot {
+                        count: slot.count as usize,
+                        acc: self.init.clone(),
+                        ts: slot.ts.clone(),
+                    };
+                    saved_slot.acc.set_state(slot.acc.clone());
+                    saved_slot
+            })
+            );
+        self.ws = win;
     }
 }
 

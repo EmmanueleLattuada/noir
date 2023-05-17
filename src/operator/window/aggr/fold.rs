@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use crate::operator::{Data, DataKey, Operator};
+use crate::operator::Operator;
 use crate::stream::{KeyValue, KeyedStream, WindowedStream};
 
 use super::super::*;
@@ -31,12 +31,13 @@ where
 impl<I, S, F> WindowAccumulator for Fold<I, S, F>
 where
     I: Clone + Send + 'static,
-    S: Clone + Send + 'static,
+    S: ExchangeData,
     F: FnMut(&mut S, I) + Clone + Send + 'static,
 {
     type In = I;
 
     type Out = S;
+    type AccumulatorState = S;
 
     fn process(&mut self, el: Self::In) {
         (self.f)(&mut self.state, el);
@@ -44,6 +45,14 @@ where
 
     fn output(self) -> Self::Out {
         self.state
+    }
+
+    fn get_state(&self) -> Self::AccumulatorState {
+        self.state.clone()
+    }
+
+    fn set_state(&mut self, state: Self::AccumulatorState) {
+        self.state = state;
     }
 }
 
@@ -67,11 +76,12 @@ where
 
 impl<I, F> WindowAccumulator for FoldFirst<I, F>
 where
-    I: Clone + Send + 'static,
+    I: ExchangeData,
     F: FnMut(&mut I, I) + Clone + Send + 'static,
 {
     type In = I;
     type Out = I;
+    type AccumulatorState = Option<I>;
 
     #[inline]
     fn process(&mut self, el: Self::In) {
@@ -86,14 +96,22 @@ where
         self.state
             .expect("FoldFirst output called when it has received no elements!")
     }
+
+    fn get_state(&self) -> Self::AccumulatorState {
+        self.state.clone()
+    }
+
+    fn set_state(&mut self, state: Self::AccumulatorState) {
+        self.state = state;
+    }
 }
 
 impl<Key, Out, WindowDescr, OperatorChain> WindowedStream<Key, Out, OperatorChain, Out, WindowDescr>
 where
     WindowDescr: WindowBuilder<Out>,
     OperatorChain: Operator<KeyValue<Key, Out>> + 'static,
-    Key: DataKey,
-    Out: Data,
+    Key: ExchangeDataKey,
+    Out: ExchangeData,
 {
     /// Folds the elements of each window into an accumulator value
     ///
@@ -123,7 +141,7 @@ where
     /// res.sort_unstable();
     /// assert_eq!(res, vec![(0, 0 * 2), (1, 1 * 3)]);
     /// ```
-    pub fn fold<NewOut: Data, F>(
+    pub fn fold<NewOut: ExchangeData, F>(
         self,
         init: NewOut,
         fold: F,

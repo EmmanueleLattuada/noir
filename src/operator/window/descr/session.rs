@@ -26,6 +26,18 @@ impl<A> Slot<A> {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SessionWindowManagerState<AS>{
+    gap: Duration,
+    w: Option<SlotState<AS>>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct SlotState<AS> {
+    acc: AS,
+    //last: Instant,
+}
+
 impl<A: WindowAccumulator> WindowManager for SessionWindowManager<A>
 where
     A::In: Data,
@@ -34,6 +46,7 @@ where
     type In = A::In;
     type Out = A::Out;
     type Output = Option<WindowResult<A::Out>>;
+    type ManagerState = SessionWindowManagerState<A::AccumulatorState>;
 
     #[inline]
     fn process(&mut self, el: StreamElement<A::In>) -> Self::Output {
@@ -61,6 +74,37 @@ where
             }
             _ => ret,
         }
+    }
+
+    fn get_state(&self) -> Self::ManagerState {
+        let w = match self.w.clone() {
+            Some(slot) => {
+                Some(SlotState {
+                    acc: slot.acc.get_state(),
+                    //last: slot.last.clone(),
+                })
+            }
+            None => None
+        };
+        SessionWindowManagerState {
+            gap: self.gap.clone(),
+            w,
+        }
+    }
+
+    fn set_state(&mut self, state: Self::ManagerState) {
+        self.gap = state.gap.clone();
+        self.w = match state.w.clone() {
+            Some(slot) => {
+                let mut saved_slot = Slot {
+                    acc: self.init.clone(),
+                    last: Instant::now(),   // FIX THIS
+                };
+                saved_slot.acc.set_state(slot.acc);
+                Some(saved_slot)
+            }
+            None => None
+        };
     }
 }
 

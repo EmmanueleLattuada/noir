@@ -35,7 +35,7 @@ impl<A: WindowAccumulator> EventTimeWindowManager<A> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct Slot<A> {
     acc: A,
     start: Timestamp,
@@ -55,6 +55,13 @@ impl<A> Slot<A> {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+pub struct EventTimeWindowManagerState<AS>
+{
+    last_watermark: Option<Timestamp>,
+    ws: VecDeque<Slot<AS>>,
+}
+
 impl<A: WindowAccumulator> WindowManager for EventTimeWindowManager<A>
 where
     A::In: Data,
@@ -63,6 +70,7 @@ where
     type In = A::In;
     type Out = A::Out;
     type Output = Vec<WindowResult<A::Out>>;
+    type ManagerState = EventTimeWindowManagerState<A::AccumulatorState>;
 
     #[inline]
     fn process(&mut self, el: StreamElement<A::In>) -> Self::Output {
@@ -104,6 +112,44 @@ where
 
     fn recycle(&self) -> bool {
         self.ws.is_empty()
+    }
+
+    fn get_state(&self) -> Self::ManagerState {
+        let win = VecDeque::from_iter(
+            self.ws
+                .clone()
+                .iter()
+                .map(|slot| Slot {
+                    start: slot.start.clone(),
+                    end: slot.end.clone(),
+                    acc: slot.acc.get_state(),
+                    active: slot.active,
+                })
+            );
+        EventTimeWindowManagerState {
+            ws: win,
+            last_watermark: self.last_watermark.clone(),
+        }
+    }
+
+    fn set_state(&mut self, state: Self::ManagerState) {
+        self.last_watermark = state.last_watermark;
+        let win = VecDeque::from_iter(
+            state.ws
+                .clone()
+                .iter()
+                .map(|slot| {
+                    let mut saved_slot = Slot {
+                        start: slot.start.clone(),
+                        end: slot.end.clone(),
+                        acc: self.init.clone(),
+                        active: slot.active,
+                    };
+                    saved_slot.acc.set_state(slot.acc.clone());
+                    saved_slot
+            })
+            );
+        self.ws = win;
     }
 }
 

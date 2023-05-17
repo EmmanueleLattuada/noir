@@ -23,7 +23,7 @@ where
     w: Option<Slot<A>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Slot<A> {
     acc: A,
     close: Option<Timestamp>,
@@ -36,6 +36,11 @@ impl<A> Slot<A> {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+pub struct TransactionWindowManagerState<AS>{
+    w: Option<Slot<AS>>,
+}
+
 impl<A: WindowAccumulator, F: Fn(&A::In) -> TxCommand + Clone + Send + 'static> WindowManager
     for TransactionWindowManager<A, F>
 where
@@ -45,6 +50,7 @@ where
     type In = A::In;
     type Out = A::Out;
     type Output = Option<WindowResult<A::Out>>;
+    type ManagerState = TransactionWindowManagerState<A::AccumulatorState>;
 
     #[inline]
     fn process(&mut self, el: StreamElement<A::In>) -> Self::Output {
@@ -90,6 +96,35 @@ where
 
     fn recycle(&self) -> bool {
         self.w.is_none()
+    }
+
+    fn get_state(&self) -> Self::ManagerState {
+        let w = match self.w.clone() {
+            Some(slot) => {
+                Some(Slot {
+                    acc: slot.acc.get_state(),
+                    close: slot.close.clone(),
+                })
+            }
+            None => None
+        };
+        TransactionWindowManagerState {
+            w,
+        }
+    }
+
+    fn set_state(&mut self, state: Self::ManagerState) {
+        self.w = match state.w.clone() {
+            Some(slot) => {
+                let mut saved_slot = Slot {
+                    acc: self.init.clone(),
+                    close: slot.close.clone(),   // FIX THIS
+                };
+                saved_slot.acc.set_state(slot.acc);
+                Some(saved_slot)
+            }
+            None => None
+        };
     }
 }
 

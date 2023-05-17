@@ -5,6 +5,7 @@ use std::fmt::Display;
 use std::marker::PhantomData;
 
 pub use descr::*;
+use serde::{Serialize, Deserialize};
 // pub use aggregator::*;
 // pub use description::*;
 
@@ -14,6 +15,8 @@ use crate::operator::{Data, DataKey, ExchangeData, Operator, StreamElement, Time
 use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::OperatorId;
 use crate::stream::{KeyValue, KeyedStream, Stream, WindowedStream};
+
+use super::ExchangeDataKey;
 
 mod aggr;
 mod descr;
@@ -30,9 +33,12 @@ pub trait WindowBuilder<T> {
 pub trait WindowAccumulator: Clone + Send + 'static {
     type In: Data;
     type Out: Data;
+    type AccumulatorState: ExchangeData;
 
     fn process(&mut self, el: Self::In);
     fn output(self) -> Self::Out;
+    fn get_state(&self) -> Self::AccumulatorState;
+    fn set_state(&mut self, state: Self::AccumulatorState);
 }
 
 #[derive(Clone)]
@@ -47,6 +53,7 @@ pub trait WindowManager: Clone + Send {
     type In: Data;
     type Out: Data;
     type Output: IntoIterator<Item = WindowResult<Self::Out>>;
+    type ManagerState: ExchangeData;
     /// Process an input element updating any interest window.
     /// Output the results that have become ready after processing this element.
     fn process(&mut self, el: StreamElement<Self::In>) -> Self::Output;
@@ -54,6 +61,10 @@ pub trait WindowManager: Clone + Send {
     fn recycle(&self) -> bool {
         false
     }
+    /// Get the state
+    fn get_state(&self) -> Self::ManagerState;
+    /// Set the state
+    fn set_state(&mut self, state: Self::ManagerState);
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,29 +150,26 @@ where
     }
 }
 
-/*
-pub (crate) struct WindowOperatorState<Key, In, Out, W: WindowManager> {
-    /// The manager that will build the windows.
-    manager: KeyedWindowManagerState<Key, In, Out, W>,
-    /// A buffer for storing ready items.
+#[derive(Clone, Serialize, Deserialize)]
+pub (crate) struct WindowOperatorState<Key: DataKey, Out, ManagerState> {
+    manager: KeyedWindowManagerState<Key, ManagerState>,
     output_buffer: VecDeque<StreamElement<KeyValue<Key, Out>>>,
 }
 
-pub (crate) struct KeyedWindowManagerState<Key, In, Out, W: WindowManager> {
-    windows: HashMap<Key, W, GroupHasherBuilder>,
-    _in: PhantomData<In>,
-    _out: PhantomData<Out>,
+#[derive(Clone, Serialize, Deserialize)]
+pub (crate) struct KeyedWindowManagerState<Key: DataKey, ManagerState> {
+    windows: HashMap<Key, ManagerState>,
 }
-*/
+
 
 
 impl<Key, In, Out, Prev, W> Operator<KeyValue<Key, Out>> for WindowOperator<Key, In, Out, Prev, W>
 where
     W: WindowManager<In = In, Out = Out> + Send,
     Prev: Operator<KeyValue<Key, In>>,
-    Key: DataKey,
-    In: Data,
-    Out: Data,
+    Key: ExchangeDataKey,
+    In: ExchangeData,
+    Out: ExchangeData,
 {
     fn setup(&mut self, metadata: &mut crate::ExecutionMetadata) {
         self.prev.setup(metadata);
@@ -199,9 +207,23 @@ where
                     );
                 }
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
-                // TODO: handle snapshot marker
-                StreamElement::Snapshot(_) => {
-                    panic!("Snapshot not supported for window operator")
+                StreamElement::Snapshot(snap_id) => {
+                    let windows = HashMap::from_iter(
+                        self.manager.windows
+                            .clone()
+                            .iter()
+                            .map(|(key, manager)| (key.clone(), manager.get_state()))
+                    );
+                    let manager_state = KeyedWindowManagerState {
+                        windows,
+                    };
+                    let state = WindowOperatorState {
+                        manager: manager_state,
+                        output_buffer: self.output_buffer.clone(),
+                    };
+                    self.persistency_service.save_state(self.operator_coord, snap_id, state);
+                    return StreamElement::Snapshot(snap_id);
+
                 }
                 el => {
                     let (_, el) = el.take_key();
@@ -272,8 +294,8 @@ impl<Key, Out, WindowDescr, OperatorChain> WindowedStream<Key, Out, OperatorChai
 where
     WindowDescr: WindowBuilder<Out>,
     OperatorChain: Operator<KeyValue<Key, Out>> + 'static,
-    Key: DataKey,
-    Out: Data,
+    Key: ExchangeDataKey,
+    Out: ExchangeData,
 {
     /// Add a new generic window operator to a `KeyedWindowedStream`,
     /// after adding a Reorder operator.
@@ -284,7 +306,7 @@ where
         accumulator: A,
     ) -> KeyedStream<Key, NewOut, impl Operator<KeyValue<Key, NewOut>>>
     where
-        NewOut: Data,
+        NewOut: ExchangeData,
         A: WindowAccumulator<In = Out, Out = NewOut>,
     {
         let stream = self.inner;
