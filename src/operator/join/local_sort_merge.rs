@@ -192,7 +192,23 @@ impl<
         self.operator_coord.host_id = metadata.coord.host_id;
         self.operator_coord.replica_id = metadata.coord.replica_id;
 
+        self.persistency_service = metadata.persistency_service.clone();
         self.persistency_service.setup();
+        let snapshot_id = self.persistency_service.restart_from_snapshot();
+        if snapshot_id.is_some() {
+            // Get and resume the persisted state
+            let opt_state: Option<JoinLocalSortMergeState<Key, Out1, Out2>> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
+            if let Some(state) = opt_state {
+                self.left_ended = state.left_ended;
+                self.right_ended = state.right_ended;
+                self.left = state.left;
+                self.right = state.right;
+                self.buffer = state.buffer;
+                self.last_left_key = state.last_left_key;
+            } else {
+                panic!("No persisted state founded for op: {0}", self.operator_coord);
+            } 
+        }
     }
 
     fn next(&mut self) -> StreamElement<(Key, (Option<Out1>, Option<Out2>))> {

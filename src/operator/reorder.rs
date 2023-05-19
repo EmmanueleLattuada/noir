@@ -109,6 +109,19 @@ where
 
         self.persistency_service = metadata.persistency_service.clone();
         self.persistency_service.setup();
+        let snapshot_id = self.persistency_service.restart_from_snapshot();
+        if snapshot_id.is_some() {
+            // Get and resume the persisted state
+            let opt_state: Option<ReorderState<Out>> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
+            if let Some(state) = opt_state {
+                self.buffer = state.buffer;
+                self.scratch = state.scratch;
+                self.last_watermark = state.last_watermark;
+                self.received_end = state.received_end;
+            } else {
+                panic!("No persisted state founded for op: {0}", self.operator_coord);
+            } 
+        }
     }
 
     #[inline]

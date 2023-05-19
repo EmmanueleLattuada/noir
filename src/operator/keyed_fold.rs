@@ -122,6 +122,21 @@ where
 
         self.persistency_service = metadata.persistency_service.clone();
         self.persistency_service.setup();
+        let snapshot_id = self.persistency_service.restart_from_snapshot();
+        if snapshot_id.is_some() {
+            // Get and resume the persisted state
+            let opt_state: Option<KeyedFoldState<Key, NewOut>> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
+            if let Some(state) = opt_state {
+                self.accumulators = state.accumulators;
+                self.timestamps = state.timestamps;
+                self.ready = state.ready;
+                self.max_watermark = state.max_watermark;
+                self.received_end = state.received_end;
+                self.received_end_iter = state.received_end_iter;
+            } else {
+                panic!("No persisted state founded for op: {0}", self.operator_coord);
+            } 
+        }
     }
 
     #[inline]

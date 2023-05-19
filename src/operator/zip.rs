@@ -80,6 +80,17 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Operator<(Out1, Out2)> for Zip<Out1
 
         self.persistency_service = metadata.persistency_service.clone();
         self.persistency_service.setup();
+        let snapshot_id = self.persistency_service.restart_from_snapshot();
+        if snapshot_id.is_some() {
+            // Get and resume the persisted state
+            let opt_state: Option<ZipState<Out1, Out2>> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
+            if let Some(state) = opt_state {
+                self.stash1 = state.stash1;
+                self.stash2 = state.stash2;
+            } else {
+                panic!("No persisted state founded for op: {0}", self.operator_coord);
+            } 
+        }
     }
 
     #[inline]

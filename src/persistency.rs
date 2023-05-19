@@ -79,6 +79,7 @@ pub(crate) trait PersistencyServices {
 pub struct PersistencyService {
     handler: RedisHandler,
     active: bool,
+    restart_from: Option<SnapshotId>,
 }
 
 impl PersistencyService {
@@ -89,15 +90,21 @@ impl PersistencyService {
             return Self { 
                 handler: handler, 
                 active: true,
+                restart_from: None,
             }
         } else {
             return Self { 
                 handler: RedisHandler::default(), 
                 active: false,
+                restart_from: None,
             }
         }
         
-    }    
+    }
+
+    pub (crate) fn restart_from_snapshot(&self) -> Option<SnapshotId> {
+        self.restart_from.clone()
+    }
 
 }
 

@@ -300,6 +300,25 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
         let global_id = metadata.global_id;
         let instances = metadata.replicas.len();
 
+        self.operator_coord.block_id = metadata.coord.block_id;
+        self.operator_coord.host_id = metadata.coord.host_id;
+        self.operator_coord.replica_id = metadata.coord.replica_id;
+
+        self.persistency_service = metadata.persistency_service.clone();
+        self.persistency_service.setup();
+        let snapshot_id = self.persistency_service.restart_from_snapshot();
+        let mut last_position = None;
+        if snapshot_id.is_some() {
+            // Get the persisted state
+            let opt_state: Option<CsvSourceState> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
+            if let Some(state) = opt_state {
+                self.terminated = state.terminated;
+                last_position = Some(state.current);
+            } else {
+                panic!("No persisted state founded for op: {0}", self.operator_coord);
+            } 
+        }
+
         let file = File::options()
             .read(true)
             .write(false)
@@ -340,6 +359,11 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
         } else {
             start + range_size
         };
+
+        // Set start to last position (from persisted state), if any
+        if last_position.is_some() {
+            start = last_position.unwrap();
+        }
 
         // Align start byte
         if global_id != 0 {
@@ -401,12 +425,6 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
 
         self.csv_reader = Some(csv_reader);
 
-        self.operator_coord.block_id = metadata.coord.block_id;
-        self.operator_coord.host_id = metadata.coord.host_id;
-        self.operator_coord.replica_id = metadata.coord.replica_id;
-
-        self.persistency_service = metadata.persistency_service.clone();
-        self.persistency_service.setup();
     }
 
     fn next(&mut self) -> StreamElement<Out> {

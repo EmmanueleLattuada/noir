@@ -230,6 +230,18 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
 
         self.persistency_service = metadata.persistency_service.clone();
         self.persistency_service.setup();
+        let snapshot_id = self.persistency_service.restart_from_snapshot();
+        if snapshot_id.is_some() {
+            // Get and resume the persisted state
+            let opt_state: Option<JoinKeyedOuterState<K, V1, V2>> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
+            if let Some(state) = opt_state {
+                self.left = state.left;
+                self.right = state.right;
+                self.buffer = state.buffer;
+            } else {
+                panic!("No persisted state founded for op: {0}", self.operator_coord);
+            } 
+        }
     }
 
     fn next(&mut self) -> crate::operator::StreamElement<KeyValue<K, OuterJoinTuple<V1, V2>>> {
@@ -417,6 +429,20 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
 
         self.persistency_service = metadata.persistency_service.clone();
         self.persistency_service.setup();
+        let snapshot_id = self.persistency_service.restart_from_snapshot();
+        if snapshot_id.is_some() {
+            // Get and resume the persisted state
+            let opt_state: Option<JoinKeyedInnerState<K, V1, V2>> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
+            if let Some(state) = opt_state {
+                self.left_ended = state.left_ended;
+                self.right_ended = state.right_ended;
+                self.left = state.left;
+                self.right = state.right;
+                self.buffer = state.buffer;
+            } else {
+                panic!("No persisted state founded for op: {0}", self.operator_coord);
+            } 
+        }
     }
 
     fn next(&mut self) -> crate::operator::StreamElement<KeyValue<K, InnerJoinTuple<V1, V2>>> {

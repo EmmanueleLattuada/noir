@@ -1,4 +1,4 @@
-use std::collections::{HashSet, HashMap};
+use std::collections::{HashSet, HashMap, VecDeque};
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
 use std::time::Duration;
@@ -52,6 +52,8 @@ pub(crate) trait StartBlockReceiver<Out>: Clone {
     type ReceiverState: ExchangeData + Debug;
     /// Get the state of the receiver
     fn get_state(&self) -> Option<Self::ReceiverState>;
+    /// Set the state of the receiver
+    fn set_state(&mut self, receiver_state: Option<Self::ReceiverState>);
 }
 
 pub(crate) type MultipleStartBlockReceiverOperator<OutL, OutR> =
@@ -81,6 +83,7 @@ pub(crate) struct StartBlock<Out: ExchangeData, Receiver: StartBlockReceiver<Out
     persistency_service: PersistencyService,
     // Used to keep the on-going snapshots
     on_going_snapshots: HashMap<SnapshotId, (StartBlockState<Out, Receiver>, HashSet<Coord>)>,
+    persisted_message_queue: VecDeque<(Coord, StreamElement<Out>)>,
 
     /// The actual receiver able to fetch messages from the network.
     receiver: Receiver,
@@ -164,6 +167,7 @@ impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send + 'static> Star
             operator_coord: OperatorCoord::new(0, 0, 0, 0),
             persistency_service: PersistencyService::default(),
             on_going_snapshots: HashMap::new(),
+            persisted_message_queue: VecDeque::new(),
 
             receiver,
             batch_iter: None,
@@ -208,7 +212,7 @@ impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send + 'static> Star
                 state_generation: self.state_generation as u64,
                 watermark_forntier: self.watermark_frontier.clone(),
                 receiver_state: self.receiver.get_state(),
-                message_queue: Vec::default(),
+                message_queue: VecDeque::default(),
             };
 
             // Set all previous replicas that have to send this snapshot id
@@ -225,7 +229,7 @@ impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send + 'static> Star
         // Add item to message queue state 
         for entry in self.on_going_snapshots.iter_mut() {
             if entry.1.1.contains(&sender) {
-                entry.1.0.message_queue.push(item.clone());
+                entry.1.0.message_queue.push_back((sender, item.clone()));
             }
         }
     }
@@ -247,7 +251,7 @@ struct StartBlockState<Out, Receiver: StartBlockReceiver<Out>> {
     ))]
     receiver_state: Option<<Receiver as StartBlockReceiver<Out>>::ReceiverState>,
 
-    message_queue: Vec<StreamElement<Out>>,
+    message_queue: VecDeque<(Coord, StreamElement<Out>)>,
 }
 
 impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send + 'static> Operator<Out>
@@ -276,6 +280,24 @@ impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send + 'static> Oper
 
         self.persistency_service = metadata.persistency_service.clone();
         self.persistency_service.setup();
+        let snapshot_id = self.persistency_service.restart_from_snapshot();
+        if snapshot_id.is_some() {
+            // Get and resume the persisted state
+            let opt_state: Option<StartBlockState<Out, Receiver>> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
+            if let Some(state) = opt_state {
+                self.missing_terminate = state.missing_terminate as usize;
+                self.missing_flush_and_restart = state.missing_flush_and_restart as usize;
+                self.wait_for_state = state.wait_for_state;
+                self.state_generation = state.state_generation as usize;
+                self.watermark_frontier = state.watermark_forntier;
+                self.receiver.set_state(state.receiver_state);
+                // TODO: review this
+               self.persisted_message_queue = state.message_queue;                
+                
+            } else {
+                panic!("No persisted state founded for op: {0}", self.operator_coord);
+            } 
+        }
     }
 
     fn next(&mut self) -> StreamElement<Out> {
@@ -297,6 +319,42 @@ impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send + 'static> Oper
                 self.state_generation += 2;
                 return StreamElement::FlushAndRestart;
             }
+
+            // Process persisted message queue, if any
+            if let Some((sender, item)) = self.persisted_message_queue.pop_front() {
+                let to_return = match item {
+                    StreamElement::Watermark(ts) => {
+                        // update the frontier and return a watermark if necessary
+                        match self.watermark_frontier.update(sender, ts) {
+                            Some(ts) => StreamElement::Watermark(ts), // ts is safe
+                            None => continue,
+                        }
+                    }
+                    StreamElement::FlushAndRestart => {
+                        // mark this replica as ended and let the frontier ignore it from now on
+                        #[cfg(feature = "timestamp")]
+                        {
+                            self.watermark_frontier.update(sender, Timestamp::MAX);
+                        }
+                        self.missing_flush_and_restart -= 1;
+                        continue;
+                    }
+                    StreamElement::Terminate => {
+                        self.missing_terminate -= 1;
+                        log::debug!(
+                            "{} received a Terminate, {} more to come",
+                            coord,
+                            self.missing_terminate
+                        );
+                        continue;
+                    }
+                    _ => {
+                        item
+                    },
+                };
+                return to_return;
+            }
+
 
             if let Some((sender, ref mut inner)) = self.batch_iter {
                 let msg = match inner.next() {
@@ -420,6 +478,8 @@ impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send + 'static> Sour
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+
     use crate::network::NetworkMessage;
     use crate::operator::start::StartBlockState;
     use crate::operator::start::watermark_frontier::WatermarkFrontier;
@@ -786,10 +846,10 @@ mod tests {
             state_generation: 0,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: None,
-            message_queue: vec![
-                StreamElement::Item(3), 
-                StreamElement::Item(4),
-            ],
+            message_queue: VecDeque::from([
+                (from2, StreamElement::Item(3)), 
+                (from2, StreamElement::Item(4)),
+            ]),
         };
 
         let retrived_state: StartBlockState<i32, SingleStartBlockReceiver<i32>> = start_block.persistency_service.get_state(start_block.operator_coord, 1).unwrap();
@@ -870,10 +930,10 @@ mod tests {
             state_generation: 0,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: None,
-            message_queue: vec![
-                StreamElement::Item(5), 
-                StreamElement::Item(6),
-            ],
+            message_queue: VecDeque::from([
+                (from2, StreamElement::Item(5)), 
+                (from2, StreamElement::Item(6)),
+            ]),
         };
 
         let retrived_state: StartBlockState<i32, SingleStartBlockReceiver<i32>> = start_block.persistency_service.get_state(start_block.operator_coord, 1).unwrap();
@@ -895,11 +955,11 @@ mod tests {
             state_generation: 0,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: None,
-            message_queue: vec![
-                StreamElement::Item(5), 
-                StreamElement::Item(6),
-                StreamElement::Item(7),
-            ],
+            message_queue: VecDeque::from([
+                (from2, StreamElement::Item(5)), 
+                (from2, StreamElement::Item(6)),
+                (from2, StreamElement::Item(7)),
+            ]),
         };
 
         let retrived_state: StartBlockState<i32, SingleStartBlockReceiver<i32>> = start_block.persistency_service.get_state(start_block.operator_coord, 2).unwrap();

@@ -180,6 +180,27 @@ where
 
         self.persistency_service = metadata.persistency_service.clone();
         self.persistency_service.setup();
+        let snapshot_id = self.persistency_service.restart_from_snapshot();
+        if snapshot_id.is_some() {
+            // Get and resume the persisted state
+            let opt_state: Option<WindowOperatorState<Key, Out, W::ManagerState>> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
+            if let Some(state) = opt_state {
+                self.output_buffer = state.output_buffer;                
+                state.manager.windows
+                    .iter()
+                    .for_each(|(key, manager_state)| {
+                        let mut new_man = self.manager.init.clone();
+                        new_man.set_state(manager_state.clone());
+                        self
+                            .manager
+                            .windows
+                            .insert(key.clone(), new_man);
+
+                    });
+            } else {
+                panic!("No persisted state founded for op: {0}", self.operator_coord);
+            } 
+        }
     }
 
     fn next(&mut self) -> StreamElement<KeyValue<Key, Out>> {

@@ -118,6 +118,14 @@ impl<Source: IntoParallelSource> IteratorGenerator<Source> {
             _ => unreachable!("next on non-Iterator variant"),
         }
     }
+
+    /// If the `generate` method has been called, get the n-th element from the iterator.
+    fn nth(&mut self, n: usize) -> Option<Source::Item> {
+        match self {
+            IteratorGenerator::Iterator(iter) => iter.nth(n) ,
+            _ => unreachable!("nth on non-Iterator variant"),
+        }
+    }
 }
 
 impl<Source: IntoParallelSource> Clone for IteratorGenerator<Source> {
@@ -256,6 +264,19 @@ where
 
         self.persistency_service = metadata.persistency_service.clone();
         self.persistency_service.setup();
+        let snapshot_id = self.persistency_service.restart_from_snapshot();
+        if snapshot_id.is_some() {
+            // Get and resume the persisted state
+            let opt_state: Option<ParallelIteratorSourceState> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
+            if let Some(state) = opt_state {
+                self.terminated = state.terminated;
+                if state.last_index.is_some() {
+                    self.inner.nth(state.last_index.unwrap() as usize);
+                }
+            } else {
+                panic!("No persisted state founded for op: {0}", self.operator_coord);
+            } 
+        }
     }
 
     fn next(&mut self) -> StreamElement<Source::Item> {

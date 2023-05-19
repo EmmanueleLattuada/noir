@@ -109,6 +109,25 @@ impl Operator<String> for FileSource {
         let global_id = metadata.global_id;
         let instances = metadata.replicas.len();
 
+        self.operator_coord.block_id = metadata.coord.block_id;
+        self.operator_coord.host_id = metadata.coord.host_id;
+        self.operator_coord.replica_id = metadata.coord.replica_id;
+
+        self.persistency_service = metadata.persistency_service.clone();
+        self.persistency_service.setup();
+        let snapshot_id = self.persistency_service.restart_from_snapshot();
+        let mut last_position = None;
+        if snapshot_id.is_some() {
+            // Get the persisted state
+            let opt_state: Option<FileSourceState> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
+            if let Some(state) = opt_state {
+                self.terminated = state.terminated;
+                last_position = Some(state.current);
+            } else {
+                panic!("No persisted state founded for op: {0}", self.operator_coord);
+            } 
+        }
+
         let file = File::open(&self.path).unwrap_or_else(|err| {
             panic!(
                 "FileSource: error while opening file {:?}: {:?}",
@@ -118,13 +137,18 @@ impl Operator<String> for FileSource {
         let file_size = file.metadata().unwrap().len() as usize;
 
         let range_size = file_size / instances;
-        let start = range_size * global_id as usize;
+        let mut start = range_size * global_id as usize;
         self.current = start;
         self.end = if global_id as usize == instances - 1 {
             file_size
         } else {
             start + range_size
         };
+
+        // Set start to last position (from persisted state), if any
+        if last_position.is_some() {
+            start = last_position.unwrap() as usize;
+        }
 
         let mut reader = BufReader::new(file);
         // Seek reader to the first byte to be read
@@ -142,13 +166,6 @@ impl Operator<String> for FileSource {
         self.coord = Some(metadata.coord);
         self.reader = Some(reader);
 
-        self.operator_coord.block_id = metadata.coord.block_id;
-        self.operator_coord.host_id = metadata.coord.host_id;
-        self.operator_coord.replica_id = metadata.coord.replica_id;
-
-
-        self.persistency_service = metadata.persistency_service.clone();
-        self.persistency_service.setup();
     }
 
     fn next(&mut self) -> StreamElement<String> {

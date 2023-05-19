@@ -80,6 +80,8 @@ impl<Out: ExchangeData> StartBlockReceiver<Out> for SingleStartBlockReceiver<Out
         // No state to be persisted
         None
     }
+
+    fn set_state(&mut self, _receiver_state: Option<Self::ReceiverState>) {}
 }
 
 impl<Out: ExchangeData> Clone for SingleStartBlockReceiver<Out> {

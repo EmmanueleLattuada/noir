@@ -396,6 +396,23 @@ impl<OutL: ExchangeData, OutR: ExchangeData> StartBlockReceiver<TwoSidesItem<Out
         };
         Some(state)
     }
+
+    fn set_state(&mut self, receiver_state: Option<Self::ReceiverState>) {
+        let state = receiver_state.unwrap();
+        self.first_message = state.first_message;
+        self.left.missing_flush_and_restart = state.left.missing_flush_and_restart as usize;
+        self.left.missing_terminate = state.left.missing_terminate as usize;
+        self.left.cached = state.left.cached;
+        self.left.cache = state.left.cache;
+        self.left.cache_full = state.left.cache_full;
+        self.left.cache_pointer = state.left.cache_pointer as usize;
+        self.right.missing_flush_and_restart = state.right.missing_flush_and_restart as usize;
+        self.right.missing_terminate = state.right.missing_terminate as usize;
+        self.right.cached = state.right.cached;
+        self.right.cache = state.right.cache;
+        self.right.cache_full = state.right.cache_full;
+        self.right.cache_pointer = state.right.cache_pointer as usize;
+    }
 }
 
 
@@ -427,6 +444,8 @@ impl<Item> std::fmt::Debug for MultipleReceiverState<Item>{
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+
     use crate::{network::NetworkMessage, test::{FakeNetworkTopology, REDIS_TEST_COFIGURATION}, operator::{StartBlock, TwoSidesItem, StreamElement, Operator, SideReceiverState, MultipleReceiverState, start::{StartBlockState, watermark_frontier::WatermarkFrontier}, MultipleStartBlockReceiver}, persistency::{PersistencyService, PersistencyServices}};
 
     #[test]
@@ -544,10 +563,10 @@ mod tests {
             state_generation: 0,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: Some(recv_state),
-            message_queue: vec![
-                StreamElement::Item(TwoSidesItem::Right(3)), 
-                StreamElement::Item(TwoSidesItem::Right(4)),
-            ],
+            message_queue: VecDeque::from([
+                (from2, StreamElement::Item(TwoSidesItem::Right(3))), 
+                (from2, StreamElement::Item(TwoSidesItem::Right(4))),
+            ]),
         };
 
         let retrived_state: StartBlockState<TwoSidesItem<i32, i32>, MultipleStartBlockReceiver<i32, i32>> = start_block.persistency_service.get_state(start_block.operator_coord, 1).unwrap();
@@ -727,10 +746,10 @@ mod tests {
             state_generation: 0,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: Some(recv_state),
-            message_queue: vec![
-                StreamElement::Item(TwoSidesItem::Right(5)), 
-                StreamElement::Item(TwoSidesItem::Right(6)),
-            ],
+            message_queue: VecDeque::from([
+                (from2, StreamElement::Item(TwoSidesItem::Right(5))), 
+                (from2, StreamElement::Item(TwoSidesItem::Right(6))),
+            ]),
         };
 
         let retrived_state: StartBlockState<TwoSidesItem<i32, i32>, MultipleStartBlockReceiver<i32, i32>> = start_block.persistency_service.get_state(start_block.operator_coord, 1).unwrap();
@@ -787,11 +806,11 @@ mod tests {
             state_generation: 0,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: Some(recv_state),
-            message_queue: vec![
-                StreamElement::Item(TwoSidesItem::Right(5)),
-                StreamElement::Item(TwoSidesItem::Right(6)),
-                StreamElement::Item(TwoSidesItem::Right(7)),
-            ],
+            message_queue: VecDeque::from([
+                (from2, StreamElement::Item(TwoSidesItem::Right(5))),
+                (from2, StreamElement::Item(TwoSidesItem::Right(6))),
+                (from2, StreamElement::Item(TwoSidesItem::Right(7))),
+            ]),
         };
 
         let retrived_state: StartBlockState<TwoSidesItem<i32, i32>, MultipleStartBlockReceiver<i32, i32>> = start_block.persistency_service.get_state(start_block.operator_coord, 2).unwrap();
@@ -916,10 +935,10 @@ mod tests {
             state_generation: 0,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: Some(recv_state),
-            message_queue: vec![
-                StreamElement::Item(TwoSidesItem::Right(5)),
-                StreamElement::Item(TwoSidesItem::Right(6)),
-            ],
+            message_queue: VecDeque::from([
+                (from2, StreamElement::Item(TwoSidesItem::Right(5))),
+                (from2, StreamElement::Item(TwoSidesItem::Right(6))),
+            ]),
         };
 
         let retrived_state: StartBlockState<TwoSidesItem<i32, i32>, MultipleStartBlockReceiver<i32, i32>> = start_block.persistency_service.get_state(start_block.operator_coord, 2).unwrap();
@@ -991,9 +1010,9 @@ mod tests {
             state_generation: 2,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: Some(recv_state),
-            message_queue: vec![
-                StreamElement::Item(TwoSidesItem::Left(1)),
-            ],
+            message_queue: VecDeque::from([
+                (from1, StreamElement::Item(TwoSidesItem::Left(1))),
+            ]),
         };
 
         assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
