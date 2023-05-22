@@ -102,6 +102,37 @@ impl PersistencyService {
         
     }
 
+    /// Method to compute the last complete snapshot.
+    /// You must includes all coordinates of each operator in the graph to have a correct result.
+    /// To retrive the result use restart_from_snapshot() method
+    pub (crate) fn compute_last_complete_snapshot(&mut self, operators: Vec<OperatorCoord>) {
+        let mut op_iter = operators.into_iter();
+        let mut last_snap = self.get_last_snapshot(op_iter.next().unwrap_or_else(||
+            panic!("No operators provided")
+        ));
+        if last_snap.is_none() {
+            // This operator never received a snapshot marker, so there isn't a complete vaild snapshot
+            self.restart_from = None;
+            return;
+        }
+        for op in op_iter {
+            let opt_snap = self.get_last_snapshot(op);
+            match opt_snap {
+                Some(snap_id) => {
+                    if snap_id < last_snap.unwrap() {
+                        last_snap = Some(snap_id);
+                    }
+                },
+                None => {
+                    // This operator never received a snapshot marker, so there isn't a complete vaild snapshot
+                    self.restart_from = None;
+                    return;
+                }
+            }
+        }
+        self.restart_from = last_snap;
+    }
+    /// Return last complete snapshot. Use compute_last_complete_snapshot() first to compute it.
     pub (crate) fn restart_from_snapshot(&self) -> Option<SnapshotId> {
         self.restart_from.clone()
     }
@@ -416,7 +447,6 @@ mod tests {
         str: String,
     }
 
-    #[ignore]
     #[test]
     fn test_save_get_remove_state(){
         let op_coord1 = OperatorCoord {
@@ -477,9 +507,9 @@ mod tests {
         let last = pers_handler.get_last_snapshot(op_coord1);
         assert_eq!(None, last);
 
-    }
-
-    #[ignore]    
+    }    
+ 
+    
     #[test]
     fn test_save_void_state() {
         let op_coord1 = OperatorCoord {
@@ -526,7 +556,7 @@ mod tests {
             block_id: 1,
             host_id: 1,
             replica_id: 1,
-            operator_id: 1,
+            operator_id: 3,
         };
 
         let mut pers_handler = PersistencyService::new(Some(String::from(REDIS_TEST_COFIGURATION)));
@@ -565,13 +595,14 @@ mod tests {
 
     }
 
+    #[ignore]
     #[test]
     fn test_no_persistency() {
         let op_coord1 = OperatorCoord {
             block_id: 1,
             host_id: 1,
             replica_id: 1,
-            operator_id: 1,
+            operator_id: 4
         };
 
         let mut pers_handler = PersistencyService::new(None);
@@ -593,6 +624,63 @@ mod tests {
         assert!(result.is_err());
 
     }
-    
+
+
+    #[test]
+    fn test_compute_last_complete_snapshot(){
+        let op_coord1 = OperatorCoord {
+            block_id: 1,
+            host_id: 1,
+            replica_id: 1,
+            operator_id: 5,
+        };
+        let op_coord2 = OperatorCoord {
+            block_id: 1,
+            host_id: 1,
+            replica_id: 1,
+            operator_id: 6,
+        };
+        let op_coord3 = OperatorCoord {
+            block_id: 1,
+            host_id: 1,
+            replica_id: 1,
+            operator_id: 7,
+        };
+        let mut pers_handler = PersistencyService::new(Some(String::from(REDIS_TEST_COFIGURATION)));
+        pers_handler.setup();
+
+        assert_eq!(pers_handler.restart_from_snapshot(), None);
+        pers_handler.compute_last_complete_snapshot(vec![op_coord1, op_coord2, op_coord3]);
+        assert_eq!(pers_handler.restart_from_snapshot(), None);
+
+        let fake_state = true;
+        pers_handler.save_state(op_coord1, 1, fake_state);
+        pers_handler.save_state(op_coord2, 1, fake_state);
+        pers_handler.compute_last_complete_snapshot(vec![op_coord1, op_coord2, op_coord3]);
+        assert_eq!(pers_handler.restart_from_snapshot(), None);
+
+        pers_handler.save_state(op_coord3, 1, fake_state);
+        pers_handler.compute_last_complete_snapshot(vec![op_coord1, op_coord2, op_coord3]);
+        assert_eq!(pers_handler.restart_from_snapshot(), Some(1));
+
+        pers_handler.save_state(op_coord1, 2, fake_state);
+        pers_handler.save_state(op_coord3, 2, fake_state);
+        pers_handler.compute_last_complete_snapshot(vec![op_coord1, op_coord2, op_coord3]);
+        assert_eq!(pers_handler.restart_from_snapshot(), Some(1));
+
+        pers_handler.save_state(op_coord2, 2, fake_state);
+        pers_handler.compute_last_complete_snapshot(vec![op_coord1, op_coord2, op_coord3]);
+        assert_eq!(pers_handler.restart_from_snapshot(), Some(2));
+
+        // Clean
+        pers_handler.delete_state(op_coord1, 1);
+        pers_handler.delete_state(op_coord2, 1);
+        pers_handler.delete_state(op_coord3, 1);
+        // Clean
+        pers_handler.delete_state(op_coord1, 2);
+        pers_handler.delete_state(op_coord2, 2);
+        pers_handler.delete_state(op_coord3, 2);
+
+    }
 
 }
