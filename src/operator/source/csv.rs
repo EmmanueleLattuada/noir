@@ -292,7 +292,6 @@ impl<Out: Data + for<'a> Deserialize<'a>> Source<Out> for CsvSource<Out> {
 #[derive(Clone, Serialize, Deserialize)]
 struct CsvSourceState{
     current: u64,
-    terminated: bool,
 }
 
 impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
@@ -306,17 +305,18 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
 
         self.persistency_service = metadata.persistency_service.clone();
         self.persistency_service.setup();
-        let snapshot_id = self.persistency_service.restart_from_snapshot();
+        let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
         let mut last_position = None;
-        if snapshot_id.is_some() {
+        if let Some(snap_id) = snapshot_id {
             // Get the persisted state
-            let opt_state: Option<CsvSourceState> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
+            let opt_state: Option<CsvSourceState> = self.persistency_service.get_state(self.operator_coord, snap_id);
             if let Some(state) = opt_state {
-                self.terminated = state.terminated;
+                self.terminated = snap_id.terminate();
                 last_position = Some(state.current);
             } else {
                 panic!("No persisted state founded for op: {0}", self.operator_coord);
             } 
+            self.snapshot_generator.restart_from(snap_id);
         }
 
         let file = File::options()
@@ -428,14 +428,21 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
     }
 
     fn next(&mut self) -> StreamElement<Out> {
-        if self.terminated {
-            return StreamElement::Terminate;
-        }
         let csv_reader = self
             .csv_reader
             .as_mut()
             .expect("CsvSource was not initialized");
 
+        if self.terminated {
+            if self.persistency_service.is_active(){
+                 // Save terminated state
+                 let state = CsvSourceState {
+                    current: csv_reader.position().byte(),
+                };         
+                self.persistency_service.save_terminated_state(self.operator_coord, state);
+            }
+            return StreamElement::Terminate;
+        }
         // Check snapshot generator
         let snapshot = self.snapshot_generator.get_snapshot_marker();
         if snapshot.is_some() {
@@ -443,7 +450,6 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
             // Save state and forward snapshot marker
             let state = CsvSourceState {
                 current: csv_reader.position().byte(),
-                terminated: self.terminated,
             };         
             self.persistency_service.save_state(self.operator_coord, snapshot_id, state);
             return StreamElement::Snapshot(snapshot_id);

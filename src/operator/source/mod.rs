@@ -46,7 +46,7 @@ pub (crate) struct SnapshotGenerator {
 impl SnapshotGenerator {
     pub (crate) fn new() -> Self {
         Self {
-            snapshot_id: 1,
+            snapshot_id: SnapshotId::new(1),
             snap_time_interval: None,
             timer: SystemTime::now(),
             snap_item_interval: None,
@@ -80,12 +80,19 @@ impl SnapshotGenerator {
         self.snap_item_interval = Some(item_interval);
     }
 
+    /// Afeter calling this method the snapshot generation will start from last_snapshot + 1
+    pub (crate) fn restart_from(&mut self, last_snapshot: SnapshotId) {
+        self.snapshot_id = last_snapshot + 1;
+    }
+
 }
 
 
 #[cfg(test)]
 mod tests {
     use std::{time::Duration, thread::sleep};
+
+    use crate::operator::SnapshotId;
 
     use super::SnapshotGenerator;
 
@@ -97,11 +104,11 @@ mod tests {
         assert_eq!(g1.get_snapshot_marker(), None);
         assert_eq!(g1.get_snapshot_marker(), None);
         assert_eq!(g1.get_snapshot_marker(), None);
-        assert_eq!(g1.get_snapshot_marker(), Some(1));
+        assert_eq!(g1.get_snapshot_marker(), Some(SnapshotId::new(1)));
         assert_eq!(g1.get_snapshot_marker(), None);
         assert_eq!(g1.get_snapshot_marker(), None);
         assert_eq!(g1.get_snapshot_marker(), None);
-        assert_eq!(g1.get_snapshot_marker(), Some(2));
+        assert_eq!(g1.get_snapshot_marker(), Some(SnapshotId::new(2)));
     
     }
 
@@ -113,10 +120,10 @@ mod tests {
         assert_eq!(g1.get_snapshot_marker(), None);
         assert_eq!(g1.get_snapshot_marker(), None);
         sleep(Duration::new(2, 0));
-        assert_eq!(g1.get_snapshot_marker(), Some(1));
+        assert_eq!(g1.get_snapshot_marker(), Some(SnapshotId::new(1)));
         assert_eq!(g1.get_snapshot_marker(), None);
         sleep(Duration::new(2, 0));
-        assert_eq!(g1.get_snapshot_marker(), Some(2));
+        assert_eq!(g1.get_snapshot_marker(), Some(SnapshotId::new(2)));
     
     }
 
@@ -129,14 +136,14 @@ mod tests {
         assert_eq!(g1.get_snapshot_marker(), None);
         assert_eq!(g1.get_snapshot_marker(), None);
         sleep(Duration::new(2, 0));
-        assert_eq!(g1.get_snapshot_marker(), Some(1));
+        assert_eq!(g1.get_snapshot_marker(), Some(SnapshotId::new(1)));
         assert_eq!(g1.get_snapshot_marker(), None);
         sleep(Duration::new(2, 0));
-        assert_eq!(g1.get_snapshot_marker(), Some(2));
+        assert_eq!(g1.get_snapshot_marker(), Some(SnapshotId::new(2)));
         assert_eq!(g1.get_snapshot_marker(), None);
         assert_eq!(g1.get_snapshot_marker(), None);
         assert_eq!(g1.get_snapshot_marker(), None);
-        assert_eq!(g1.get_snapshot_marker(), Some(3));
+        assert_eq!(g1.get_snapshot_marker(), Some(SnapshotId::new(3)));
     
     }    
 

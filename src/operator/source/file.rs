@@ -101,7 +101,6 @@ impl Source<String> for FileSource {
 #[derive(Clone, Serialize, Deserialize)]
 struct FileSourceState {
     current: u64,
-    terminated: bool,
 }
 
 impl Operator<String> for FileSource {
@@ -115,17 +114,18 @@ impl Operator<String> for FileSource {
 
         self.persistency_service = metadata.persistency_service.clone();
         self.persistency_service.setup();
-        let snapshot_id = self.persistency_service.restart_from_snapshot();
+        let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
         let mut last_position = None;
-        if snapshot_id.is_some() {
+        if let Some(snap_id) = snapshot_id {
             // Get the persisted state
-            let opt_state: Option<FileSourceState> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
+            let opt_state: Option<FileSourceState> = self.persistency_service.get_state(self.operator_coord, snap_id);
             if let Some(state) = opt_state {
-                self.terminated = state.terminated;
+                self.terminated = snap_id.terminate();
                 last_position = Some(state.current);
             } else {
                 panic!("No persisted state founded for op: {0}", self.operator_coord);
             } 
+            self.snapshot_generator.restart_from(snap_id);
         }
 
         let file = File::open(&self.path).unwrap_or_else(|err| {
@@ -170,6 +170,13 @@ impl Operator<String> for FileSource {
 
     fn next(&mut self) -> StreamElement<String> {
         if self.terminated {
+            if self.persistency_service.is_active() {
+                // Save terminated state
+                let state = FileSourceState{
+                    current: self.current as u64,
+                }; 
+                self.persistency_service.save_terminated_state(self.operator_coord, state);            
+            }
             log::debug!("{} emitting terminate", self.coord.unwrap());
             return StreamElement::Terminate;
         }
@@ -180,7 +187,6 @@ impl Operator<String> for FileSource {
             // Save state and forward snapshot marker
             let state = FileSourceState{
                 current: self.current as u64,
-                terminated: self.terminated,
             }; 
             self.persistency_service.save_state(self.operator_coord, snapshot_id, state);
             return StreamElement::Snapshot(snapshot_id);

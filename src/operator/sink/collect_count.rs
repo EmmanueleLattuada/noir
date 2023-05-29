@@ -60,7 +60,7 @@ where
 
         self.persistency_service = metadata.persistency_service.clone();
         self.persistency_service.setup();
-        let snapshot_id = self.persistency_service.restart_from_snapshot();
+        let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
         if snapshot_id.is_some() {
             // Get and resume the persisted state
             let opt_state: Option<u64> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
@@ -81,6 +81,11 @@ where
             StreamElement::Watermark(w) => StreamElement::Watermark(w),
             StreamElement::Terminate => {
                 *self.output.lock().unwrap() = Some(self.result);
+                if self.persistency_service.is_active() {
+                    // Save terminated state
+                    let state = self.result as u64;
+                    self.persistency_service.save_terminated_state(self.operator_coord, state);
+                }
                 StreamElement::Terminate
             }
             StreamElement::FlushBatch => StreamElement::FlushBatch,
@@ -205,7 +210,7 @@ mod tests {
     use crate::network::OperatorCoord;
     use crate::operator::sink::StreamOutputRef;
     use crate::operator::sink::collect_count::CollectCountSink;
-    use crate::operator::{source, StreamElement, Operator};
+    use crate::operator::{source, StreamElement, Operator, SnapshotId};
     use crate::persistency::{PersistencyService, PersistencyServices};
     use crate::test::{FakeOperator, REDIS_TEST_COFIGURATION};
 
@@ -224,10 +229,10 @@ mod tests {
         let mut fake_operator = FakeOperator::empty();
         fake_operator.push(StreamElement::Item(1));
         fake_operator.push(StreamElement::Item(2));
-        fake_operator.push(StreamElement::Snapshot(1));
+        fake_operator.push(StreamElement::Snapshot(SnapshotId::new(1)));
         fake_operator.push(StreamElement::Item(3));
         fake_operator.push(StreamElement::Item(4));
-        fake_operator.push(StreamElement::Snapshot(2));
+        fake_operator.push(StreamElement::Snapshot(SnapshotId::new(2)));
 
         let output = StreamOutputRef::default();
         let mut collect = CollectCountSink::new(fake_operator, 0, output.clone());
@@ -242,18 +247,18 @@ mod tests {
 
         collect.next();
         collect.next();
-        assert_eq!(collect.next(), StreamElement::Snapshot(1));
-        let state: Option<u64> = collect.persistency_service.get_state(collect.operator_coord, 1);
+        assert_eq!(collect.next(), StreamElement::Snapshot(SnapshotId::new(1)));
+        let state: Option<u64> = collect.persistency_service.get_state(collect.operator_coord, SnapshotId::new(1));
         assert_eq!(state.unwrap(), 3);
         collect.next();
         collect.next();
-        assert_eq!(collect.next(), StreamElement::Snapshot(2));
-        let state: Option<u64> = collect.persistency_service.get_state(collect.operator_coord, 2);
+        assert_eq!(collect.next(), StreamElement::Snapshot(SnapshotId::new(2)));
+        let state: Option<u64> = collect.persistency_service.get_state(collect.operator_coord, SnapshotId::new(2));
         assert_eq!(state.unwrap(), 10);
 
         // Clean redis
-        collect.persistency_service.delete_state(collect.operator_coord, 1);
-        collect.persistency_service.delete_state(collect.operator_coord, 2);
+        collect.persistency_service.delete_state(collect.operator_coord, SnapshotId::new(1));
+        collect.persistency_service.delete_state(collect.operator_coord, SnapshotId::new(2));
 
     }
 

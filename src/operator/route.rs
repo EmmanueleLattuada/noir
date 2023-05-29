@@ -109,6 +109,7 @@ where
 
     endpoints: Vec<Endpoint<Out>>,
     routes: Vec<(BlockId, FilterFn<Out>)>,
+    terminated: bool,
 }
 
 impl<Out: ExchangeData, OperatorChain, IndexFn> Display
@@ -150,6 +151,7 @@ where
             endpoints: Default::default(),
             routes,
             senders: Default::default(),
+            terminated: false,
         }
     }
 
@@ -224,6 +226,7 @@ where
 
         self.persistency_service = metadata.persistency_service.clone();
         self.persistency_service.setup();
+        // Set terminated
     }
 
     fn next(&mut self) -> StreamElement<()> {
@@ -236,8 +239,24 @@ where
         match &message {
             // Broadcast messages
             StreamElement::Watermark(_)
-            | StreamElement::Terminate
             | StreamElement::FlushAndRestart => {
+                for e in self.endpoints.iter() {
+                    for &sender_idx in e.block_senders.indexes.iter() {
+                        let sender = &mut self.senders[sender_idx];
+                        sender.1.enqueue(message.clone());
+                    }
+                }
+            }
+            StreamElement::Terminate => {
+                if self.terminated {
+                    // Just return Terminate to exit
+                    return StreamElement::Terminate
+                }
+                if self.persistency_service.is_active() {
+                    // Save void terminated state
+                    self.persistency_service.save_terminated_void_state(self.operator_coord);
+                }
+                // Broadcast message
                 for e in self.endpoints.iter() {
                     for &sender_idx in e.block_senders.indexes.iter() {
                         let sender = &mut self.senders[sender_idx];

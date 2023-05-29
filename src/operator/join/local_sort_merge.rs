@@ -194,7 +194,7 @@ impl<
 
         self.persistency_service = metadata.persistency_service.clone();
         self.persistency_service.setup();
-        let snapshot_id = self.persistency_service.restart_from_snapshot();
+        let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
         if snapshot_id.is_some() {
             // Get and resume the persisted state
             let opt_state: Option<JoinLocalSortMergeState<Key, Out1, Out2>> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
@@ -270,7 +270,21 @@ impl<
                     return StreamElement::FlushAndRestart;
                 }
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
-                StreamElement::Terminate => return StreamElement::Terminate,
+                StreamElement::Terminate => {
+                    if self.persistency_service.is_active() {
+                        // Save terminated state
+                        let state = JoinLocalSortMergeState{
+                            left_ended: self.left_ended,
+                            right_ended: self.right_ended,
+                            left: self.left.clone(),
+                            right: self.right.clone(),
+                            buffer: self.buffer.clone(),
+                            last_left_key: self.last_left_key.clone(),
+                        };
+                        self.persistency_service.save_terminated_state(self.operator_coord, state);
+                    }
+                    return StreamElement::Terminate;
+                }
             }
         }
     }

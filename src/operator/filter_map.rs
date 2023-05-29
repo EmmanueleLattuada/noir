@@ -94,7 +94,13 @@ where
                     }
                 }
                 StreamElement::Watermark(w) => return StreamElement::Watermark(w),
-                StreamElement::Terminate => return StreamElement::Terminate,
+                StreamElement::Terminate => {
+                    if self.persistency_service.is_active() {
+                        // Save void terminated state                            
+                        self.persistency_service.save_terminated_void_state(self.operator_coord);
+                    }
+                    return StreamElement::Terminate
+                }
                 StreamElement::FlushAndRestart => return StreamElement::FlushAndRestart,
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
                 StreamElement::Snapshot(snap_id) => {

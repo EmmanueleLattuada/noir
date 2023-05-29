@@ -73,7 +73,13 @@ where
         let iter = std::iter::from_fn(|| loop {
             match self.prev.next() {
                 StreamElement::Item(t) | StreamElement::Timestamped(t, _) => return Some(t),
-                StreamElement::Terminate => return None,
+                StreamElement::Terminate => {
+                    if self.persistency_service.is_active() {
+                        // Save void terminated state
+                        self.persistency_service.save_terminated_void_state(self.operator_coord);
+                    }
+                    return None;
+                }
                 StreamElement::Snapshot(snapshot_id) => {
                     // State is not persisted 
                     self.persistency_service.save_void_state(self.operator_coord, snapshot_id);

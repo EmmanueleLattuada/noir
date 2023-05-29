@@ -110,6 +110,12 @@ where
             StreamElement::FlushAndRestart => {
                 // self.maps_fn.clear();
             }
+            StreamElement::Terminate => {
+                if self.persistency_service.is_active() {
+                    // Save void terminated state
+                    self.persistency_service.save_terminated_void_state(self.operator_coord);
+                }
+            }
             _ => {}
         }
         element.map(|(key, value)| {

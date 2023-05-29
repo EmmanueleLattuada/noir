@@ -97,7 +97,7 @@ where
 
         self.persistency_service = metadata.persistency_service.clone();
         self.persistency_service.setup();
-        let snapshot_id = self.persistency_service.restart_from_snapshot();
+        let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
         if snapshot_id.is_some() {
             // Get and resume the persisted state
             let opt_state: Option<FoldState<NewOut>> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
@@ -177,6 +177,18 @@ where
             return StreamElement::FlushAndRestart;
         }
 
+        // Save terminated state before end 
+        if self.persistency_service.is_active() { 
+            let acc = self.accumulator.clone();
+            let state = FoldState{
+                accumulator: acc,
+                timestamp: self.timestamp,
+                max_watermark: self.max_watermark,
+                received_end: self.received_end,
+                received_end_iter: self.received_end_iter,
+            };                          
+            self.persistency_service.save_terminated_state(self.operator_coord, state);
+        }
         StreamElement::Terminate
     }
 
@@ -298,7 +310,7 @@ where
 mod tests {
     use crate::network::OperatorCoord;
     use crate::operator::fold::{Fold, FoldState};
-    use crate::operator::{Operator, StreamElement};
+    use crate::operator::{Operator, StreamElement, SnapshotId};
     use crate::persistency::{PersistencyService, PersistencyServices};
     use crate::test::{FakeOperator, REDIS_TEST_COFIGURATION};
 
@@ -356,10 +368,10 @@ mod tests {
         let mut fake_operator = FakeOperator::empty();
         fake_operator.push(StreamElement::Item(1));
         fake_operator.push(StreamElement::Item(2));
-        fake_operator.push(StreamElement::Snapshot(1));
+        fake_operator.push(StreamElement::Snapshot(SnapshotId::new(1)));
         fake_operator.push(StreamElement::Item(3));
         fake_operator.push(StreamElement::Item(4));
-        fake_operator.push(StreamElement::Snapshot(2));
+        fake_operator.push(StreamElement::Snapshot(SnapshotId::new(2)));
 
         let mut fold = Fold::new(fake_operator, 0, |a, b| *a += b);
  
@@ -372,17 +384,17 @@ mod tests {
         fold.persistency_service = PersistencyService::new(Some(String::from(REDIS_TEST_COFIGURATION)));
         fold.persistency_service.setup();
 
-        assert_eq!(fold.next(), StreamElement::Snapshot(1));
-        let state: Option<FoldState<i32>> = fold.persistency_service.get_state(fold.operator_coord, 1);
+        assert_eq!(fold.next(), StreamElement::Snapshot(SnapshotId::new(1)));
+        let state: Option<FoldState<i32>> = fold.persistency_service.get_state(fold.operator_coord, SnapshotId::new(1));
         assert_eq!(state.unwrap().accumulator.unwrap(), 3);
 
-        assert_eq!(fold.next(), StreamElement::Snapshot(2));
-        let state: Option<FoldState<i32>> = fold.persistency_service.get_state(fold.operator_coord, 2);
+        assert_eq!(fold.next(), StreamElement::Snapshot(SnapshotId::new(2)));
+        let state: Option<FoldState<i32>> = fold.persistency_service.get_state(fold.operator_coord, SnapshotId::new(2));
         assert_eq!(state.unwrap().accumulator.unwrap(), 10);
 
         // Clean redis
-        fold.persistency_service.delete_state(fold.operator_coord, 1);
-        fold.persistency_service.delete_state(fold.operator_coord, 2);
+        fold.persistency_service.delete_state(fold.operator_coord, SnapshotId::new(1));
+        fold.persistency_service.delete_state(fold.operator_coord, SnapshotId::new(2));
 
     }
 }

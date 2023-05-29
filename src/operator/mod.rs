@@ -4,8 +4,10 @@
 //! [`KeyedStream`](crate::KeyedStream), [`WindowedStream`](crate::WindowedStream) and
 //! [`KeyedWindowedStream`](crate::KeyedWindowedStream).
 
-use std::fmt::Display;
+use std::cmp::Ordering;
+use std::fmt::{Display, self};
 use std::hash::Hash;
+use std::ops::{Add, Sub};
 
 use serde::{Deserialize, Serialize};
 
@@ -86,7 +88,64 @@ pub type Timestamp = i64;
 pub type Timestamp = ();
 
 /// Identifier of the snapshot
-pub type SnapshotId = u64;
+#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub struct SnapshotId {
+    snapshot_id: u64,
+    terminate: bool,
+}
+impl SnapshotId {
+    pub (crate) fn new(snapshot_id: u64) -> Self {
+        Self{
+            snapshot_id,
+            terminate: false,
+        }
+    }
+    pub (crate) fn new_terminate(snapshot_id: u64) -> Self {
+        Self{
+            snapshot_id,
+            terminate: true,
+        }
+    }
+    pub (crate) fn id(&self) -> u64 {
+        self.snapshot_id
+    }
+
+    pub (crate) fn terminate(&self) -> bool {
+        self.terminate
+    }
+}
+impl fmt::Display for SnapshotId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self.terminate {
+            write!(f, "{}+", self.snapshot_id)
+        } else {
+            write!(f, "{}", self.snapshot_id)
+        }
+    }
+}
+impl Ord for SnapshotId {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.snapshot_id.cmp(&other.snapshot_id)
+    }
+}
+impl Add<u64> for SnapshotId {
+    type Output = Self;
+    fn add(self, other: u64) -> Self {
+        Self {
+            snapshot_id: self.snapshot_id + other,
+            terminate: self.terminate,
+        }
+    }
+}
+impl Sub<u64> for SnapshotId {
+    type Output = Self;
+    fn sub(self, other: u64) -> Self {
+        Self {
+            snapshot_id: self.snapshot_id - other,
+            terminate: self.terminate,
+        }
+    }
+}
 
 /// An element of the stream. This is what enters and exits from the operators.
 ///

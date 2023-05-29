@@ -98,8 +98,11 @@ impl PersistencyService {
                 active: false,
                 restart_from: None,
             }
-        }
-        
+        }        
+    }
+
+    pub (crate) fn is_active(&self) -> bool {
+        self.active
     }
 
     /// Method to compute the last complete snapshot.
@@ -107,7 +110,7 @@ impl PersistencyService {
     /// To retrive the result use restart_from_snapshot() method
     pub (crate) fn compute_last_complete_snapshot(&mut self, operators: Vec<OperatorCoord>) {
         let mut op_iter = operators.into_iter();
-        let mut last_snap = self.get_last_snapshot(op_iter.next().unwrap_or_else(||
+        let last_snap = self.get_last_snapshot(op_iter.next().unwrap_or_else(||
             panic!("No operators provided")
         ));
         if last_snap.is_none() {
@@ -115,13 +118,26 @@ impl PersistencyService {
             self.restart_from = None;
             return;
         }
+        let mut last_snap = last_snap.unwrap();
         for op in op_iter {
             let opt_snap = self.get_last_snapshot(op);
             match opt_snap {
                 Some(snap_id) => {
-                    if snap_id < last_snap.unwrap() {
-                        last_snap = Some(snap_id);
+                    if snap_id.terminate() && last_snap.terminate() {
+                        // take the max 
+                        if snap_id.id() > last_snap.id() {
+                            last_snap = snap_id;
+                        }
+                    } else if !snap_id.terminate() && last_snap.terminate() {
+                        // take snap_id
+                        last_snap = snap_id;
+                    } else if !snap_id.terminate() && !last_snap.terminate() {
+                        // take the min
+                        if snap_id.id() < last_snap.id() {
+                            last_snap = snap_id;
+                        }
                     }
+                    // if snap_id.terminate() && !last_snap.terminate() do nothing
                 },
                 None => {
                     // This operator never received a snapshot marker, so there isn't a complete vaild snapshot
@@ -130,11 +146,62 @@ impl PersistencyService {
                 }
             }
         }
-        self.restart_from = last_snap;
+        self.restart_from = Some(last_snap);
     }
     /// Return last complete snapshot. Use compute_last_complete_snapshot() first to compute it.
-    pub (crate) fn restart_from_snapshot(&self) -> Option<SnapshotId> {
+    pub (crate) fn restart_from_snapshot(&self, op_coord: OperatorCoord) -> Option<SnapshotId> {
+        if let Some(snap_id) = self.restart_from {
+            let last_snap = self.get_last_snapshot(op_coord).unwrap();
+            if last_snap.id() < snap_id.id() && last_snap.terminate() {
+                return Some(last_snap)
+            }
+        }
         self.restart_from.clone()
+    }
+
+    /// This will get the last saved snapshot id, then save state with 
+    /// a terminated snapshot id with id = last snapshot id + 1.
+    /// In case there are no saved snapshots the id is set to one.
+    /// If the operator has already saved a terminated state this function does nothing.
+    /// Call this before forward StreamElement::Terminate.
+    pub (crate) fn save_terminated_state<State: ExchangeData>(&self, op_coord: OperatorCoord, state: State) {
+        if !self.active {
+            panic!("Persistency services aren't configured");
+        }
+        let opt_last_snapshot_id = self.handler.get_last_snapshot(op_coord);
+        if let Some(last_snapshot_id) = opt_last_snapshot_id {
+            if !last_snapshot_id.terminate() {
+                let terminal_snap_id = SnapshotId::new_terminate(last_snapshot_id.id() + 1);
+                self.handler.save_state(op_coord, terminal_snap_id, state);
+            }
+        } else {
+            // Save with id = 1
+            let terminal_snap_id = SnapshotId::new_terminate(1);
+            self.handler.save_state(op_coord, terminal_snap_id, state);
+        }
+    }
+
+    /// Similar to save_terminated_state
+    /// This will get the last saved snapshot id, then save state with 
+    /// a terminated snapshot id with id = last snapshot id + 1.
+    /// In case there are no saved snapshots the id is set to one.
+    /// If the operator has already saved a terminated state this function does nothing.
+    /// Call this before forward StreamElement::Terminate.
+    pub (crate) fn save_terminated_void_state(&self, op_coord: OperatorCoord) {
+        if !self.active {
+            panic!("Persistency services aren't configured");
+        }
+        let opt_last_snapshot_id = self.handler.get_last_snapshot(op_coord);
+        if let Some(last_snapshot_id) = opt_last_snapshot_id {
+            if !last_snapshot_id.terminate() {
+                let terminal_snap_id = SnapshotId::new_terminate(last_snapshot_id.id() + 1);
+                self.handler.save_void_state(op_coord, terminal_snap_id);
+            }
+        } else {
+            // Save with id = 1
+            let terminal_snap_id = SnapshotId::new_terminate(1);
+            self.handler.save_void_state(op_coord, terminal_snap_id);
+        }
     }
 
 }
@@ -151,10 +218,10 @@ impl PersistencyServices for PersistencyService{
         if !self.active {
             panic!("Persistency services aren't configured");
         }
-        if snapshot_id == 0 {
+        if snapshot_id.id() == 0 {
             panic!("Snapshot id must start from 1");
         }
-        if !((snapshot_id == 1 && self.get_last_snapshot(op_coord).is_none()) || self.get_last_snapshot(op_coord).unwrap_or(0) == snapshot_id - 1) {
+        if !((snapshot_id.id() == 1 && self.get_last_snapshot(op_coord).is_none()) || self.get_last_snapshot(op_coord).unwrap_or(SnapshotId::new(0)) == snapshot_id - 1) {
             panic!("Snapshot id must be a sequence with step 1 starting from 1");
         }
         self.handler.save_state(op_coord, snapshot_id, state);
@@ -163,10 +230,10 @@ impl PersistencyServices for PersistencyService{
         if !self.active {
             panic!("Persistency services aren't configured");
         }
-        if snapshot_id == 0 {
+        if snapshot_id.id() == 0 {
             panic!("Snapshot id must start from 1");
         }
-        if !((snapshot_id == 1 && self.get_last_snapshot(op_coord).is_none()) || self.get_last_snapshot(op_coord).unwrap_or(0) == snapshot_id - 1) {
+        if !((snapshot_id.id() == 1 && self.get_last_snapshot(op_coord).is_none()) || self.get_last_snapshot(op_coord).unwrap_or(SnapshotId::new(0)) == snapshot_id - 1) {
             panic!("Snapshot id must be a sequence with step 1 starting from 1");
         }
         self.handler.save_void_state(op_coord, snapshot_id);
@@ -267,11 +334,8 @@ impl PersistencyServices for RedisHandler{
                 panic!("Fail to save the state: {e:?}")
             );
 
-        // Save op_coord -> snap_iter_id (push on list)
-        // TODO
-
         // Save op_coord -> snap_id (push on list)
-        conn.lpush(op_coord_key_buf, snapshot_id)
+        conn.lpush(op_coord_key_buf, snap_id_buf)
             .unwrap_or_else(|e|
                 panic!("Fail to save the state: {e:?}")
             );
@@ -293,11 +357,11 @@ impl PersistencyServices for RedisHandler{
         // Serialize op_coord
         let op_coord_key_buf = serialize_op_coord(op_coord);
 
-        // Save op_coord -> snap_iter_id (push on list)
-        // TODO
+        // Serialize snap_id
+        let snap_id_buf= serialize_snapshot_id(snapshot_id);
 
         // Save op_coord -> snap_id (push on list)
-        conn.lpush(op_coord_key_buf, snapshot_id)
+        conn.lpush(op_coord_key_buf, snap_id_buf)
             .unwrap_or_else(|e|
                 panic!("Fail to save the state: {e:?}")
             );
@@ -320,19 +384,26 @@ impl PersistencyServices for RedisHandler{
         let op_coord_key_buf = serialize_op_coord(op_coord);
         
         // Get the last snapshotid
-        let snap_id: Option<SnapshotId> = conn.lpop(op_coord_key_buf.clone(), None)
+        let ser_snap_id: Option<Vec<u8>> = conn.lpop(op_coord_key_buf.clone(), None)
             .unwrap_or_else(|e| {
                 panic!("Failed to get last snapshot id of operator: {op_coord}. Error: {e:?}")
             });
         // Check if is Some
-        if snap_id.is_some() {
+        if let Some(snap_id) = ser_snap_id {
             // Since POP removes the returned element i need to repush it
-            conn.lpush(op_coord_key_buf, snap_id.unwrap())
+            conn.lpush(op_coord_key_buf, snap_id.clone())
                 .unwrap_or_else(|e|
                     panic!("Failed to get last snapshot id of operator: {op_coord}. Error: {e:?}")
                 );
+                // Deserialize the snapshot_id
+            let error_msg = format!("Fail deserialization of snapshot id");
+            let snapshot_id: SnapshotId = KEY_SERIALIZER
+                .deserialize(snap_id.as_ref())
+                .expect(&error_msg);
+            
+            return Some(snapshot_id)
         }
-        snap_id
+        None
     }
 
     fn get_state<State: ExchangeData>(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId) -> Option<State> {
@@ -409,7 +480,7 @@ impl PersistencyServices for RedisHandler{
         }
 
         // Remove op_coord from list
-        conn.lrem(op_coord_key_buf, 1, snapshot_id).unwrap_or_else(|e|
+        conn.lrem(op_coord_key_buf, 1, snap_id_buf).unwrap_or_else(|e|
             panic!("Fail to delete the state: {e:?}")
         );
 
@@ -435,7 +506,7 @@ impl PersistencyServices for RedisHandler{
 mod tests {
     use serde::{Serialize, Deserialize};
 
-    use crate::{network::OperatorCoord, test::REDIS_TEST_COFIGURATION};
+    use crate::{network::OperatorCoord, test::REDIS_TEST_COFIGURATION, operator::SnapshotId};
 
     use super::{PersistencyService, PersistencyServices};
 
@@ -469,40 +540,40 @@ mod tests {
         let mut pers_handler = PersistencyService::new(Some(String::from(REDIS_TEST_COFIGURATION)));
         pers_handler.setup();
 
-        pers_handler.save_state(op_coord1, 1, state1.clone());
-        let retrived_state: FakeState = pers_handler.get_state(op_coord1, 1).unwrap();
+        pers_handler.save_state(op_coord1, SnapshotId::new(1), state1.clone());
+        let retrived_state: FakeState = pers_handler.get_state(op_coord1, SnapshotId::new(1)).unwrap();
         assert_eq!(state1, retrived_state);
 
         let mut state2 = state1.clone();
         state2.values.push(4);
 
-        pers_handler.save_state(op_coord1, 2, state2.clone());
-        let retrived_state: FakeState = pers_handler.get_state(op_coord1, 2).unwrap();
+        pers_handler.save_state(op_coord1, SnapshotId::new(2), state2.clone());
+        let retrived_state: FakeState = pers_handler.get_state(op_coord1, SnapshotId::new(2)).unwrap();
         assert_ne!(state1, retrived_state);
         assert_eq!(state2, retrived_state);
 
-        let retrived_state: Option<FakeState> = pers_handler.get_state(op_coord1, 3);
+        let retrived_state: Option<FakeState> = pers_handler.get_state(op_coord1, SnapshotId::new(3));
         assert_eq!(None, retrived_state);
 
         let last = pers_handler.get_last_snapshot(op_coord1).unwrap();
-        assert_eq!(2, last);
+        assert_eq!(SnapshotId::new(2), last);
 
         // Clean
-        pers_handler.delete_state(op_coord1, 1);
-        let retrived_state: Option<FakeState> = pers_handler.get_state(op_coord1, 1);
+        pers_handler.delete_state(op_coord1, SnapshotId::new(1));
+        let retrived_state: Option<FakeState> = pers_handler.get_state(op_coord1, SnapshotId::new(1));
         assert_eq!(None, retrived_state);
         let last = pers_handler.get_last_snapshot(op_coord1).unwrap();
-        assert_eq!(2, last);
+        assert_eq!(SnapshotId::new(2), last);
 
-        pers_handler.delete_state(op_coord1, 2);
-        let retrived_state: Option<FakeState> = pers_handler.get_state(op_coord1, 2);
+        pers_handler.delete_state(op_coord1, SnapshotId::new(2));
+        let retrived_state: Option<FakeState> = pers_handler.get_state(op_coord1, SnapshotId::new(2));
         assert_eq!(None, retrived_state);
         let last = pers_handler.get_last_snapshot(op_coord1);
         assert_eq!(None, last);
 
         // Clean already cleaned state
-        pers_handler.delete_state(op_coord1, 2);
-        let retrived_state: Option<FakeState> = pers_handler.get_state(op_coord1, 2);
+        pers_handler.delete_state(op_coord1, SnapshotId::new(2));
+        let retrived_state: Option<FakeState> = pers_handler.get_state(op_coord1, SnapshotId::new(2));
         assert_eq!(None, retrived_state);
         let last = pers_handler.get_last_snapshot(op_coord1);
         assert_eq!(None, last);
@@ -522,28 +593,28 @@ mod tests {
         let mut pers_handler = PersistencyService::new(Some(String::from(REDIS_TEST_COFIGURATION).to_string()));
         pers_handler.setup();
 
-        pers_handler.save_void_state(op_coord1, 1);
-        pers_handler.save_void_state(op_coord1, 2);
-        let retrived_state: Option<FakeState> = pers_handler.get_state(op_coord1, 3);
+        pers_handler.save_void_state(op_coord1, SnapshotId::new(1));
+        pers_handler.save_void_state(op_coord1, SnapshotId::new(2));
+        let retrived_state: Option<FakeState> = pers_handler.get_state(op_coord1, SnapshotId::new(3));
         assert_eq!(None, retrived_state);
 
         // Clean
-        pers_handler.delete_state(op_coord1, 1);
-        let retrived_state: Option<FakeState> = pers_handler.get_state(op_coord1, 1);
+        pers_handler.delete_state(op_coord1, SnapshotId::new(1));
+        let retrived_state: Option<FakeState> = pers_handler.get_state(op_coord1, SnapshotId::new(1));
         assert_eq!(None, retrived_state);
         let last = pers_handler.get_last_snapshot(op_coord1).unwrap();
-        assert_eq!(2, last);
+        assert_eq!(SnapshotId::new(2), last);
 
-        pers_handler.delete_state(op_coord1, 2);
-        let retrived_state: Option<FakeState> = pers_handler.get_state(op_coord1, 2);
+        pers_handler.delete_state(op_coord1, SnapshotId::new(2));
+        let retrived_state: Option<FakeState> = pers_handler.get_state(op_coord1, SnapshotId::new(2));
         assert_eq!(None, retrived_state);
         let last = pers_handler.get_last_snapshot(op_coord1);
         assert_eq!(None, last);
 
-        pers_handler.save_void_state(op_coord1, 1);
+        pers_handler.save_void_state(op_coord1, SnapshotId::new(1));
         let last = pers_handler.get_last_snapshot(op_coord1).unwrap();
-        assert_eq!(1, last);
-        pers_handler.delete_state(op_coord1, 1);
+        assert_eq!(SnapshotId::new(1), last);
+        pers_handler.delete_state(op_coord1, SnapshotId::new(1));
         let last = pers_handler.get_last_snapshot(op_coord1);
         assert_eq!(None, last);
 
@@ -563,33 +634,33 @@ mod tests {
         pers_handler.setup();
 
         // Snap_id = 0
-        let result = std::panic::catch_unwind(|| pers_handler.save_state(op_coord1, 0, 100));
+        let result = std::panic::catch_unwind(|| pers_handler.save_state(op_coord1, SnapshotId::new(0), 100));
         assert!(result.is_err());
 
         // Snap_id = 10
-        let result = std::panic::catch_unwind(|| pers_handler.save_void_state(op_coord1, 10));
+        let result = std::panic::catch_unwind(|| pers_handler.save_void_state(op_coord1, SnapshotId::new(10)));
         assert!(result.is_err());
 
-        pers_handler.save_state(op_coord1, 1, 101);
-        pers_handler.save_state(op_coord1, 2, 102);
-        pers_handler.save_state(op_coord1, 3, 103);
+        pers_handler.save_state(op_coord1, SnapshotId::new(1), 101);
+        pers_handler.save_state(op_coord1, SnapshotId::new(2), 102);
+        pers_handler.save_state(op_coord1, SnapshotId::new(3), 103);
 
         // Snap_id = 1
-        let result = std::panic::catch_unwind(|| pers_handler.save_void_state(op_coord1, 1));
+        let result = std::panic::catch_unwind(|| pers_handler.save_void_state(op_coord1, SnapshotId::new(1)));
         assert!(result.is_err());
 
         // Snap_id = 2
-        let result = std::panic::catch_unwind(|| pers_handler.save_void_state(op_coord1, 2));
+        let result = std::panic::catch_unwind(|| pers_handler.save_void_state(op_coord1, SnapshotId::new(2)));
         assert!(result.is_err());
 
         // Snap_id = 3
-        let result = std::panic::catch_unwind(|| pers_handler.save_void_state(op_coord1, 3));
+        let result = std::panic::catch_unwind(|| pers_handler.save_void_state(op_coord1, SnapshotId::new(3)));
         assert!(result.is_err());
 
         // Clean
-        pers_handler.delete_state(op_coord1, 1);
-        pers_handler.delete_state(op_coord1, 2);
-        pers_handler.delete_state(op_coord1, 3);
+        pers_handler.delete_state(op_coord1, SnapshotId::new(1));
+        pers_handler.delete_state(op_coord1, SnapshotId::new(2));
+        pers_handler.delete_state(op_coord1, SnapshotId::new(3));
 
 
 
@@ -608,19 +679,19 @@ mod tests {
         let mut pers_handler = PersistencyService::new(None);
         pers_handler.setup();
 
-        let result = std::panic::catch_unwind(|| pers_handler.save_state(op_coord1, 1, 100));
+        let result = std::panic::catch_unwind(|| pers_handler.save_state(op_coord1, SnapshotId::new(1), 100));
         assert!(result.is_err());
 
-        let result = std::panic::catch_unwind(|| pers_handler.save_void_state(op_coord1, 1));
+        let result = std::panic::catch_unwind(|| pers_handler.save_void_state(op_coord1, SnapshotId::new(1)));
         assert!(result.is_err());
 
-        let result: Result<Option<u32>, Box<dyn std::any::Any + Send>> = std::panic::catch_unwind(|| pers_handler.get_state(op_coord1, 1));
+        let result: Result<Option<u32>, Box<dyn std::any::Any + Send>> = std::panic::catch_unwind(|| pers_handler.get_state(op_coord1, SnapshotId::new(1)));
         assert!(result.is_err());
 
         let result = std::panic::catch_unwind(|| pers_handler.get_last_snapshot(op_coord1));
         assert!(result.is_err());
 
-        let result = std::panic::catch_unwind(|| pers_handler.delete_state(op_coord1, 1));
+        let result = std::panic::catch_unwind(|| pers_handler.delete_state(op_coord1, SnapshotId::new(1)));
         assert!(result.is_err());
 
     }
@@ -649,37 +720,37 @@ mod tests {
         let mut pers_handler = PersistencyService::new(Some(String::from(REDIS_TEST_COFIGURATION)));
         pers_handler.setup();
 
-        assert_eq!(pers_handler.restart_from_snapshot(), None);
+        assert_eq!(pers_handler.restart_from_snapshot(op_coord1), None);
         pers_handler.compute_last_complete_snapshot(vec![op_coord1, op_coord2, op_coord3]);
-        assert_eq!(pers_handler.restart_from_snapshot(), None);
+        assert_eq!(pers_handler.restart_from_snapshot(op_coord1), None);
 
         let fake_state = true;
-        pers_handler.save_state(op_coord1, 1, fake_state);
-        pers_handler.save_state(op_coord2, 1, fake_state);
+        pers_handler.save_state(op_coord1, SnapshotId::new(1), fake_state);
+        pers_handler.save_state(op_coord2, SnapshotId::new(1), fake_state);
         pers_handler.compute_last_complete_snapshot(vec![op_coord1, op_coord2, op_coord3]);
-        assert_eq!(pers_handler.restart_from_snapshot(), None);
+        assert_eq!(pers_handler.restart_from_snapshot(op_coord1), None);
 
-        pers_handler.save_state(op_coord3, 1, fake_state);
+        pers_handler.save_state(op_coord3, SnapshotId::new(1), fake_state);
         pers_handler.compute_last_complete_snapshot(vec![op_coord1, op_coord2, op_coord3]);
-        assert_eq!(pers_handler.restart_from_snapshot(), Some(1));
+        assert_eq!(pers_handler.restart_from_snapshot(op_coord1), Some(SnapshotId::new(1)));
 
-        pers_handler.save_state(op_coord1, 2, fake_state);
-        pers_handler.save_state(op_coord3, 2, fake_state);
+        pers_handler.save_state(op_coord1, SnapshotId::new(2), fake_state);
+        pers_handler.save_state(op_coord3, SnapshotId::new(2), fake_state);
         pers_handler.compute_last_complete_snapshot(vec![op_coord1, op_coord2, op_coord3]);
-        assert_eq!(pers_handler.restart_from_snapshot(), Some(1));
+        assert_eq!(pers_handler.restart_from_snapshot(op_coord1), Some(SnapshotId::new(1)));
 
-        pers_handler.save_state(op_coord2, 2, fake_state);
+        pers_handler.save_state(op_coord2, SnapshotId::new(2), fake_state);
         pers_handler.compute_last_complete_snapshot(vec![op_coord1, op_coord2, op_coord3]);
-        assert_eq!(pers_handler.restart_from_snapshot(), Some(2));
+        assert_eq!(pers_handler.restart_from_snapshot(op_coord1), Some(SnapshotId::new(2)));
 
         // Clean
-        pers_handler.delete_state(op_coord1, 1);
-        pers_handler.delete_state(op_coord2, 1);
-        pers_handler.delete_state(op_coord3, 1);
+        pers_handler.delete_state(op_coord1, SnapshotId::new(1));
+        pers_handler.delete_state(op_coord2, SnapshotId::new(1));
+        pers_handler.delete_state(op_coord3, SnapshotId::new(1));
         // Clean
-        pers_handler.delete_state(op_coord1, 2);
-        pers_handler.delete_state(op_coord2, 2);
-        pers_handler.delete_state(op_coord3, 2);
+        pers_handler.delete_state(op_coord1, SnapshotId::new(2));
+        pers_handler.delete_state(op_coord2, SnapshotId::new(2));
+        pers_handler.delete_state(op_coord3, SnapshotId::new(2));
 
     }
 

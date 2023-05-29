@@ -83,7 +83,7 @@ where
 
         self.persistency_service = metadata.persistency_service.clone();
         self.persistency_service.setup();
-        let snapshot_id = self.persistency_service.restart_from_snapshot();
+        let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
         if snapshot_id.is_some() {
             // Get and resume the persisted state
             let opt_state: Option<AddTimestampState> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
@@ -110,8 +110,15 @@ where
                 StreamElement::Timestamped(item, ts)
             }
             StreamElement::FlushAndRestart
-            | StreamElement::FlushBatch
-            | StreamElement::Terminate => elem,
+            | StreamElement::FlushBatch => elem,
+            StreamElement::Terminate => {
+                if self.persistency_service.is_active(){
+                    // Save terminated state
+                    let state = AddTimestampState{pending_watermark: self.pending_watermark};
+                    self.persistency_service.save_terminated_state(self.operator_coord, state);
+                }
+                StreamElement::Terminate
+            }
             StreamElement::Snapshot(snap_id) => {
                 // Save state and forward marker
                 let state = AddTimestampState{pending_watermark: self.pending_watermark};
@@ -197,6 +204,13 @@ where
                     // Save void state and forward snapshot marker
                     self.persistency_service.save_void_state(self.operator_coord, snapshot_id);
                     return StreamElement::Snapshot(snapshot_id)
+                }
+                StreamElement::Terminate => {
+                    if self.persistency_service.is_active(){
+                        // Save void terminated state
+                        self.persistency_service.save_terminated_void_state(self.operator_coord);
+                    }
+                    return StreamElement::Terminate
                 }
                 el => return el,
             }

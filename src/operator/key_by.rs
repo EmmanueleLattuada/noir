@@ -86,7 +86,13 @@ where
                 StreamElement::Timestamped(((self.keyer)(&t), t), ts)
             }
             StreamElement::Watermark(w) => StreamElement::Watermark(w),
-            StreamElement::Terminate => StreamElement::Terminate,
+            StreamElement::Terminate => {
+                if self.persistency_service.is_active() {
+                    // Save void terminated state
+                    self.persistency_service.save_terminated_void_state(self.operator_coord);
+                }
+                StreamElement::Terminate
+            }
             StreamElement::FlushAndRestart => StreamElement::FlushAndRestart,
             StreamElement::FlushBatch => StreamElement::FlushBatch,
             StreamElement::Snapshot(snap_id) => {

@@ -40,6 +40,7 @@ where
     feedback_id: Option<BlockId>,
     ignore_block_ids: Vec<BlockId>,
     persistency_service: PersistencyService,
+    terminated: bool,
 }
 
 impl<Out: ExchangeData, OperatorChain, IndexFn> Display for EndBlock<Out, OperatorChain, IndexFn>
@@ -79,6 +80,7 @@ where
             feedback_id: None,
             ignore_block_ids: Default::default(),
             persistency_service: PersistencyService::default(),
+            terminated: false,
         }
     }
 
@@ -152,6 +154,12 @@ where
 
         self.persistency_service = metadata.persistency_service.clone();
         self.persistency_service.setup();
+        let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
+        if let Some(snap_id) = snapshot_id {
+            if snap_id.terminate() {
+                self.terminated = true;
+            }
+        }
     }
 
     fn next(&mut self) -> StreamElement<()> {
@@ -167,6 +175,16 @@ where
                     // Save void state
                     StreamElement::Snapshot(snap_id) => {
                         self.persistency_service.save_void_state(self.operator_coord, *snap_id);
+                    }
+                    StreamElement::Terminate => {
+                        if self.terminated {
+                            // Do nothing, just return Terminate to exit
+                            return StreamElement::Terminate; 
+                        }
+                        if self.persistency_service.is_active() {
+                            // Save void terminated state                            
+                            self.persistency_service.save_terminated_void_state(self.operator_coord);
+                        }
                     }
                     _ => {}
                 }

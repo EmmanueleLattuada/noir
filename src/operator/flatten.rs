@@ -133,7 +133,13 @@ mod inner {
                     }
                     StreamElement::Watermark(ts) => return StreamElement::Watermark(ts),
                     StreamElement::FlushBatch => return StreamElement::FlushBatch,
-                    StreamElement::Terminate => return StreamElement::Terminate,
+                    StreamElement::Terminate => {
+                        if self.persistency_service.is_active() {
+                            // Save void terminated state                            
+                            self.persistency_service.save_terminated_void_state(self.operator_coord);
+                        }
+                        return StreamElement::Terminate
+                    }
                     StreamElement::FlushAndRestart => return StreamElement::FlushAndRestart,
                     StreamElement::Snapshot(snap_id) => {
                         // Save void state and forward snapshot marker
@@ -316,7 +322,13 @@ mod inner {
                     }
                     StreamElement::Watermark(ts) => return StreamElement::Watermark(ts),
                     StreamElement::FlushBatch => return StreamElement::FlushBatch,
-                    StreamElement::Terminate => return StreamElement::Terminate,
+                    StreamElement::Terminate => {
+                        if self.persistency_service.is_active() {
+                            // Save void terminated state                            
+                            self.persistency_service.save_terminated_void_state(self.operator_coord);
+                        }
+                        return StreamElement::Terminate
+                    }
                     StreamElement::FlushAndRestart => return StreamElement::FlushAndRestart,
                     StreamElement::Snapshot(snap_id) => {
                         // Save void state and forward snapshot marker

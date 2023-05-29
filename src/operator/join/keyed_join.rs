@@ -230,7 +230,7 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
 
         self.persistency_service = metadata.persistency_service.clone();
         self.persistency_service.setup();
-        let snapshot_id = self.persistency_service.restart_from_snapshot();
+        let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
         if snapshot_id.is_some() {
             // Get and resume the persisted state
             let opt_state: Option<JoinKeyedOuterState<K, V1, V2>> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
@@ -265,7 +265,18 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
                     );
                     return StreamElement::FlushAndRestart;
                 }
-                StreamElement::Terminate => return StreamElement::Terminate,
+                StreamElement::Terminate => {
+                    if self.persistency_service.is_active() {
+                        // Save terminated state
+                        let state = JoinKeyedOuterState{
+                            left: self.left.clone(),
+                            right: self.right.clone(),
+                            buffer: self.buffer.clone(),
+                        };
+                        self.persistency_service.save_terminated_state(self.operator_coord, state);
+                    }
+                    return StreamElement::Terminate;
+                }
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
                 StreamElement::Snapshot(snapshot_id) => {
                     let state = JoinKeyedOuterState{
@@ -429,7 +440,7 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
 
         self.persistency_service = metadata.persistency_service.clone();
         self.persistency_service.setup();
-        let snapshot_id = self.persistency_service.restart_from_snapshot();
+        let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
         if snapshot_id.is_some() {
             // Get and resume the persisted state
             let opt_state: Option<JoinKeyedInnerState<K, V1, V2>> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
@@ -460,7 +471,20 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
                     self.right_ended = false;
                     return StreamElement::FlushAndRestart;
                 }
-                StreamElement::Terminate => return StreamElement::Terminate,
+                StreamElement::Terminate => {
+                    if self.persistency_service.is_active() {
+                        // Save terminated state
+                        let state = JoinKeyedInnerState{
+                            left: self.left.clone(),
+                            right: self.right.clone(),
+                            left_ended: self.left_ended,
+                            right_ended: self.right_ended,
+                            buffer: self.buffer.clone(),
+                        };
+                        self.persistency_service.save_terminated_state(self.operator_coord, state);
+                    }
+                    return StreamElement::Terminate;
+                }
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
                 StreamElement::Snapshot(snapshot_id) => {
                     let state = JoinKeyedInnerState{

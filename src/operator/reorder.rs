@@ -109,7 +109,7 @@ where
 
         self.persistency_service = metadata.persistency_service.clone();
         self.persistency_service.setup();
-        let snapshot_id = self.persistency_service.restart_from_snapshot();
+        let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
         if snapshot_id.is_some() {
             // Get and resume the persisted state
             let opt_state: Option<ReorderState<Out>> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());

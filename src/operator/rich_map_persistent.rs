@@ -103,7 +103,7 @@ where
 
         self.persistency_service = metadata.persistency_service.clone();
         self.persistency_service.setup();
-        let snapshot_id = self.persistency_service.restart_from_snapshot();
+        let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
         if snapshot_id.is_some() {
             // Get and resume the persisted state
             let opt_state: Option<HashMap<Key, State, crate::block::GroupHasherBuilder>> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
@@ -157,6 +157,11 @@ where
                 StreamElement::FlushAndRestart
             }
             StreamElement::Terminate => {
+                if self.persistency_service.is_active() {
+                    // Save terminated state
+                    let state = self.states_by_key.clone();
+                    self.persistency_service.save_terminated_state(self.operator_coord, state);
+                }
                 StreamElement::Terminate
             }
         }
@@ -270,17 +275,17 @@ where
 mod tests {
     use std::collections::HashMap;
 
-    use crate::{operator::{rich_map_persistent::RichMapPersistent, StreamElement, Operator}, test::{FakeOperator, REDIS_TEST_COFIGURATION}, network::OperatorCoord, persistency::{PersistencyService, PersistencyServices}};  
+    use crate::{operator::{rich_map_persistent::RichMapPersistent, StreamElement, Operator, SnapshotId}, test::{FakeOperator, REDIS_TEST_COFIGURATION}, network::OperatorCoord, persistency::{PersistencyService, PersistencyServices}};  
 
     #[test]
     fn test_rich_map_persistent_persistency() {
         let mut fake_operator = FakeOperator::empty();
         fake_operator.push(StreamElement::Item((1, 1)));
         fake_operator.push(StreamElement::Item((1, 2)));
-        fake_operator.push(StreamElement::Snapshot(1));
+        fake_operator.push(StreamElement::Snapshot(SnapshotId::new(1)));
         fake_operator.push(StreamElement::Item((1, 3)));
         fake_operator.push(StreamElement::Item((1, 4)));
-        fake_operator.push(StreamElement::Snapshot(2));
+        fake_operator.push(StreamElement::Snapshot(SnapshotId::new(2)));
 
         let state = 0;
         let f = {
@@ -302,19 +307,19 @@ mod tests {
 
         assert_eq!(rich_map_persistent.next(), StreamElement::Item((1, 1)));
         assert_eq!(rich_map_persistent.next(), StreamElement::Item((1, 3)));
-        assert_eq!(rich_map_persistent.next(), StreamElement::Snapshot(1));
-        let state: Option<HashMap<i32, i32, crate::block::GroupHasherBuilder>> = rich_map_persistent.persistency_service.get_state(rich_map_persistent.operator_coord, 1);
+        assert_eq!(rich_map_persistent.next(), StreamElement::Snapshot(SnapshotId::new(1)));
+        let state: Option<HashMap<i32, i32, crate::block::GroupHasherBuilder>> = rich_map_persistent.persistency_service.get_state(rich_map_persistent.operator_coord, SnapshotId::new(1));
         assert_eq!(state.unwrap().get_mut(&1).unwrap().clone(), 3);
 
         assert_eq!(rich_map_persistent.next(), StreamElement::Item((1, 6)));
         assert_eq!(rich_map_persistent.next(), StreamElement::Item((1, 10)));
-        assert_eq!(rich_map_persistent.next(), StreamElement::Snapshot(2));
-        let state: Option<HashMap<i32, i32, crate::block::GroupHasherBuilder>> = rich_map_persistent.persistency_service.get_state(rich_map_persistent.operator_coord, 2);
+        assert_eq!(rich_map_persistent.next(), StreamElement::Snapshot(SnapshotId::new(2)));
+        let state: Option<HashMap<i32, i32, crate::block::GroupHasherBuilder>> = rich_map_persistent.persistency_service.get_state(rich_map_persistent.operator_coord, SnapshotId::new(2));
         assert_eq!(state.unwrap().get_mut(&1).unwrap().clone(), 10);
 
         // Clean redis
-        rich_map_persistent.persistency_service.delete_state(rich_map_persistent.operator_coord, 1);
-        rich_map_persistent.persistency_service.delete_state(rich_map_persistent.operator_coord, 2);
+        rich_map_persistent.persistency_service.delete_state(rich_map_persistent.operator_coord, SnapshotId::new(1));
+        rich_map_persistent.persistency_service.delete_state(rich_map_persistent.operator_coord, SnapshotId::new(2));
     }
 
 
@@ -323,10 +328,10 @@ mod tests {
         let mut fake_operator = FakeOperator::empty();
         fake_operator.push(StreamElement::Item((1, 1)));
         fake_operator.push(StreamElement::Item((2, 2)));
-        fake_operator.push(StreamElement::Snapshot(1));
+        fake_operator.push(StreamElement::Snapshot(SnapshotId::new(1)));
         fake_operator.push(StreamElement::Item((1, 3)));
         fake_operator.push(StreamElement::Item((2, 4)));
-        fake_operator.push(StreamElement::Snapshot(2));
+        fake_operator.push(StreamElement::Snapshot(SnapshotId::new(2)));
 
         let state = 0;
         let f = {
@@ -348,21 +353,21 @@ mod tests {
 
         assert_eq!(rich_map_persistent.next(), StreamElement::Item((1, 1)));
         assert_eq!(rich_map_persistent.next(), StreamElement::Item((2, 2)));
-        assert_eq!(rich_map_persistent.next(), StreamElement::Snapshot(1));
-        let state: Option<HashMap<i32, i32, crate::block::GroupHasherBuilder>> = rich_map_persistent.persistency_service.get_state(rich_map_persistent.operator_coord, 1);
+        assert_eq!(rich_map_persistent.next(), StreamElement::Snapshot(SnapshotId::new(1)));
+        let state: Option<HashMap<i32, i32, crate::block::GroupHasherBuilder>> = rich_map_persistent.persistency_service.get_state(rich_map_persistent.operator_coord, SnapshotId::new(1));
         assert_eq!(state.clone().unwrap().get_mut(&1).unwrap().clone(), 1);
         assert_eq!(state.unwrap().get_mut(&2).unwrap().clone(), 2);
 
         assert_eq!(rich_map_persistent.next(), StreamElement::Item((1, 4)));
         assert_eq!(rich_map_persistent.next(), StreamElement::Item((2, 6)));
-        assert_eq!(rich_map_persistent.next(), StreamElement::Snapshot(2));
-        let state: Option<HashMap<i32, i32, crate::block::GroupHasherBuilder>> = rich_map_persistent.persistency_service.get_state(rich_map_persistent.operator_coord, 2);
+        assert_eq!(rich_map_persistent.next(), StreamElement::Snapshot(SnapshotId::new(2)));
+        let state: Option<HashMap<i32, i32, crate::block::GroupHasherBuilder>> = rich_map_persistent.persistency_service.get_state(rich_map_persistent.operator_coord, SnapshotId::new(2));
         assert_eq!(state.clone().unwrap().get_mut(&1).unwrap().clone(), 4);
         assert_eq!(state.unwrap().get_mut(&2).unwrap().clone(), 6);
 
         // Clean redis
-        rich_map_persistent.persistency_service.delete_state(rich_map_persistent.operator_coord, 1);
-        rich_map_persistent.persistency_service.delete_state(rich_map_persistent.operator_coord, 2);
+        rich_map_persistent.persistency_service.delete_state(rich_map_persistent.operator_coord, SnapshotId::new(1));
+        rich_map_persistent.persistency_service.delete_state(rich_map_persistent.operator_coord, SnapshotId::new(2));
     }
 
 }

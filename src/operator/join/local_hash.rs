@@ -221,7 +221,7 @@ impl<
 
         self.persistency_service = metadata.persistency_service.clone();
         self.persistency_service.setup();
-        let snapshot_id = self.persistency_service.restart_from_snapshot();
+        let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
         if snapshot_id.is_some() {
             // Get and resume the persisted state
             let opt_state: Option<JoinLocalHashState<Key, Out1, Out2>> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
@@ -300,7 +300,18 @@ impl<
                     log::debug!("JoinLocalHash at {} emitted FlushAndRestart", self.coord);
                     return StreamElement::FlushAndRestart;
                 }
-                StreamElement::Terminate => return StreamElement::Terminate,
+                StreamElement::Terminate => {
+                    if self.persistency_service.is_active() {
+                        // Save terminated state
+                        let state = JoinLocalHashState{
+                            left: self.left.clone(),
+                            right: self.right.clone(),
+                            buffer: self.buffer.clone(),
+                        };
+                        self.persistency_service.save_terminated_state(self.operator_coord, state);
+                    }
+                    return StreamElement::Terminate;
+                }
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
                 StreamElement::Snapshot(snap_id) => {
                     let state = JoinLocalHashState{

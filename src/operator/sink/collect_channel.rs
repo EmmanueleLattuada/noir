@@ -74,6 +74,10 @@ where
             StreamElement::Watermark(w) => StreamElement::Watermark(w),
             StreamElement::Terminate => {
                 self.tx = None;
+                if self.persistency_service.is_active() {
+                    // Save terminated state
+                    self.persistency_service.save_terminated_void_state(self.operator_coord);
+                }
                 StreamElement::Terminate
             }
             StreamElement::FlushBatch => StreamElement::FlushBatch,

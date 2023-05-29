@@ -180,7 +180,7 @@ where
 
         self.persistency_service = metadata.persistency_service.clone();
         self.persistency_service.setup();
-        let snapshot_id = self.persistency_service.restart_from_snapshot();
+        let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
         if snapshot_id.is_some() {
             // Get and resume the persisted state
             let opt_state: Option<WindowOperatorState<Key, Out, W::ManagerState>> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
@@ -206,6 +206,28 @@ where
     fn next(&mut self) -> StreamElement<KeyValue<Key, Out>> {
         loop {
             if let Some(item) = self.output_buffer.pop_front() {
+                match item {
+                    StreamElement::Terminate => {
+                        if self.persistency_service.is_active() {
+                            // Save terminated state
+                            let windows = HashMap::from_iter(
+                                self.manager.windows
+                                    .clone()
+                                    .iter()
+                                    .map(|(key, manager)| (key.clone(), manager.get_state()))
+                            );
+                            let manager_state = KeyedWindowManagerState {
+                                windows,
+                            };
+                            let state = WindowOperatorState {
+                                manager: manager_state,
+                                output_buffer: self.output_buffer.clone(),
+                            };
+                            self.persistency_service.save_terminated_state(self.operator_coord, state);
+                        }
+                    }
+                    _ => {}
+                }
                 return item;
             }
 
@@ -243,14 +265,14 @@ where
                         output_buffer: self.output_buffer.clone(),
                     };
                     self.persistency_service.save_state(self.operator_coord, snap_id, state);
-                    return StreamElement::Snapshot(snap_id);
+                    self.output_buffer.push_back(StreamElement::Snapshot(snap_id));
 
                 }
                 el => {
                     let (_, el) = el.take_key();
 
                     self.manager.windows.retain(|key, mgr| {
-                        let ret = mgr.process(el.clone());
+                        let ret = mgr.process(el.clone());                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
                         self.output_buffer.extend(
                             ret.into_iter()
                                 .map(|e| StreamElement::from(e).add_key(key.clone())),

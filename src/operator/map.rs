@@ -87,6 +87,12 @@ where
             StreamElement::Snapshot(snap_id) => {
                 self.persistency_service.save_void_state(self.operator_coord, snap_id);
             }
+            StreamElement::Terminate => {
+                if self.persistency_service.is_active() {
+                    // Save void terminated state
+                    self.persistency_service.save_terminated_void_state(self.operator_coord);
+                }
+            }
             _ => {},
         }
         elem.map(&self.f)

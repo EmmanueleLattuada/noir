@@ -95,7 +95,6 @@ where
 #[derive(Clone, Serialize, Deserialize)]
 struct IteratorSourceState{
     last_index: Option<u64>,
-    terminated: bool,
 }
 
 impl<Out: Data, It> Operator<Out> for IteratorSource<Out, It>
@@ -109,24 +108,32 @@ where
 
         self.persistency_service = metadata.persistency_service.clone();
         self.persistency_service.setup();
-        let snapshot_id = self.persistency_service.restart_from_snapshot();
-        if snapshot_id.is_some() {
+        let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
+        if let Some(snap_id) = snapshot_id {
             // Get and resume the persisted state
-            let opt_state: Option<IteratorSourceState> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
+            let opt_state: Option<IteratorSourceState> = self.persistency_service.get_state(self.operator_coord, snap_id);
             if let Some(state) = opt_state {
-                self.terminated = state.terminated;
+                self.terminated = snap_id.terminate();
                 if state.last_index.is_some() {
                     self.inner.nth(state.last_index.unwrap() as usize);
                 }
             } else {
                 panic!("No persisted state founded for op: {0}", self.operator_coord);
             } 
+            self.snapshot_generator.restart_from(snap_id);
         }
     }
 
     fn next(&mut self) -> StreamElement<Out> {
         if self.terminated {
-            return StreamElement::Terminate;
+            if self.persistency_service.is_active() {
+                // Save terminated state
+                let state = IteratorSourceState{
+                    last_index: self.last_index,
+                };
+                self.persistency_service.save_terminated_state(self.operator_coord, state);
+            }
+            return StreamElement::Terminate;   
         }
         // Check snapshot generator
         let snapshot = self.snapshot_generator.get_snapshot_marker();
@@ -135,7 +142,6 @@ where
             // Save state and forward snapshot marker
             let state = IteratorSourceState{
                 last_index: self.last_index,
-                terminated: self.terminated,
             };
             self.persistency_service.save_state(self.operator_coord, snapshot_id, state);
             return StreamElement::Snapshot(snapshot_id);

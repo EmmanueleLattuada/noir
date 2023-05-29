@@ -122,7 +122,7 @@ where
 
         self.persistency_service = metadata.persistency_service.clone();
         self.persistency_service.setup();
-        let snapshot_id = self.persistency_service.restart_from_snapshot();
+        let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
         if snapshot_id.is_some() {
             // Get and resume the persisted state
             let opt_state: Option<KeyedFoldState<Key, NewOut>> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
@@ -209,6 +209,18 @@ where
             return StreamElement::FlushAndRestart;
         }
 
+        // Save terminated state before end
+        if self.persistency_service.is_active() {
+            let state = KeyedFoldState{
+                accumulators: self.accumulators.clone(),
+                timestamps: self.timestamps.clone(),
+                ready: self.ready.clone(),
+                max_watermark: self.max_watermark,
+                received_end: self.received_end,
+                received_end_iter: self.received_end_iter,
+            }; 
+            self.persistency_service.save_terminated_state(self.operator_coord, state);
+        }
         StreamElement::Terminate
     }
 

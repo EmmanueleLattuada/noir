@@ -94,11 +94,20 @@ impl<Out: Data + core::fmt::Debug> Operator<Out> for ChannelSource<Out> {
 
         self.persistency_service = metadata.persistency_service.clone();
         self.persistency_service.setup();
+        let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
+        if let Some(snap_id) = snapshot_id {
+            self.terminated = snap_id.terminate();
+            self.snapshot_generator.restart_from(snap_id);
+        }
     }
 
     fn next(&mut self) -> StreamElement<Out> {
         loop {
             if self.terminated {
+                if self.persistency_service.is_active(){
+                    // Save terminated state
+                    self.persistency_service.save_terminated_void_state(self.operator_coord);
+                } 
                 return StreamElement::Terminate;
             }
             // Check snapshot generator

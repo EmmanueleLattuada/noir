@@ -446,7 +446,7 @@ impl<Item> std::fmt::Debug for MultipleReceiverState<Item>{
 mod tests {
     use std::collections::VecDeque;
 
-    use crate::{network::NetworkMessage, test::{FakeNetworkTopology, REDIS_TEST_COFIGURATION}, operator::{StartBlock, TwoSidesItem, StreamElement, Operator, SideReceiverState, MultipleReceiverState, start::{StartBlockState, watermark_frontier::WatermarkFrontier}, MultipleStartBlockReceiver}, persistency::{PersistencyService, PersistencyServices}};
+    use crate::{network::NetworkMessage, test::{FakeNetworkTopology, REDIS_TEST_COFIGURATION}, operator::{StartBlock, TwoSidesItem, StreamElement, Operator, SideReceiverState, MultipleReceiverState, start::{StartBlockState, watermark_frontier::WatermarkFrontier}, MultipleStartBlockReceiver, SnapshotId}, persistency::{PersistencyService, PersistencyServices}};
 
     #[test]
     fn test_multiple_start_persistency() {
@@ -468,7 +468,7 @@ mod tests {
 
         // Set a fake unique operator id to not have conflicts with other tests
         // If 2 opreators have the same coord and persist their state the tests fail
-        start_block.operator_coord.operator_id = 102;
+        start_block.operator_coord.operator_id = 110;
 
         sender1
             .send(NetworkMessage::new_single(
@@ -479,7 +479,7 @@ mod tests {
 
         sender1
             .send(NetworkMessage::new_single(
-                StreamElement::Snapshot(1),
+                StreamElement::Snapshot(SnapshotId::new(1)),
                 from1,
             ))
             .unwrap();
@@ -492,7 +492,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(StreamElement::Item(TwoSidesItem::Left(1)), start_block.next());
-        assert_eq!(StreamElement::Snapshot(1), start_block.next());
+        assert_eq!(StreamElement::Snapshot(SnapshotId::new(1)), start_block.next());
         assert_eq!(StreamElement::Item(TwoSidesItem::Left(2)), start_block.next());
 
         sender2
@@ -511,7 +511,7 @@ mod tests {
 
         sender2
             .send(NetworkMessage::new_single(
-                StreamElement::Snapshot(1),
+                StreamElement::Snapshot(SnapshotId::new(1)),
                 from2,
             ))
             .unwrap(); 
@@ -569,7 +569,7 @@ mod tests {
             ]),
         };
 
-        let retrived_state: StartBlockState<TwoSidesItem<i32, i32>, MultipleStartBlockReceiver<i32, i32>> = start_block.persistency_service.get_state(start_block.operator_coord, 1).unwrap();
+        let retrived_state: StartBlockState<TwoSidesItem<i32, i32>, MultipleStartBlockReceiver<i32, i32>> = start_block.persistency_service.get_state(start_block.operator_coord, SnapshotId::new(1)).unwrap();
 
         assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
         assert_eq!(state.missing_terminate, retrived_state.missing_terminate);
@@ -596,7 +596,7 @@ mod tests {
 
         
         // Clean redis
-        start_block.persistency_service.delete_state(start_block.operator_coord, 1);
+        start_block.persistency_service.delete_state(start_block.operator_coord, SnapshotId::new(1));
 
     }
 
@@ -620,7 +620,7 @@ mod tests {
 
         // Set a fake unique operator id to not have conflicts with other tests
         // If 2 opreators have the same coord and persist their state the tests fail
-        start_block.operator_coord.operator_id = 103;
+        start_block.operator_coord.operator_id = 111;
 
         sender1
             .send(NetworkMessage::new_single(
@@ -631,7 +631,7 @@ mod tests {
 
         sender1
             .send(NetworkMessage::new_single(
-                StreamElement::Snapshot(1),
+                StreamElement::Snapshot(SnapshotId::new(1)),
                 from1,
             ))
             .unwrap();
@@ -645,7 +645,7 @@ mod tests {
 
             sender1
             .send(NetworkMessage::new_single(
-                StreamElement::Snapshot(2),
+                StreamElement::Snapshot(SnapshotId::new(2)),
                 from1,
             ))
             .unwrap();
@@ -658,9 +658,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(StreamElement::Item(TwoSidesItem::Left(1)), start_block.next());
-        assert_eq!(StreamElement::Snapshot(1), start_block.next());
+        assert_eq!(StreamElement::Snapshot(SnapshotId::new(1)), start_block.next());
         assert_eq!(StreamElement::Item(TwoSidesItem::Left(2)), start_block.next());
-        assert_eq!(StreamElement::Snapshot(2), start_block.next());
+        assert_eq!(StreamElement::Snapshot(SnapshotId::new(2)), start_block.next());
         assert_eq!(StreamElement::Item(TwoSidesItem::Left(3)), start_block.next());
 
         sender2
@@ -679,7 +679,7 @@ mod tests {
 
         sender2
             .send(NetworkMessage::new_single(
-                StreamElement::Snapshot(1),
+                StreamElement::Snapshot(SnapshotId::new(1)),
                 from2,
             ))
             .unwrap(); 
@@ -693,7 +693,7 @@ mod tests {
 
         sender2
             .send(NetworkMessage::new_single(
-                StreamElement::Snapshot(2),
+                StreamElement::Snapshot(SnapshotId::new(2)),
                 from2,
             ))
             .unwrap(); 
@@ -752,7 +752,7 @@ mod tests {
             ]),
         };
 
-        let retrived_state: StartBlockState<TwoSidesItem<i32, i32>, MultipleStartBlockReceiver<i32, i32>> = start_block.persistency_service.get_state(start_block.operator_coord, 1).unwrap();
+        let retrived_state: StartBlockState<TwoSidesItem<i32, i32>, MultipleStartBlockReceiver<i32, i32>> = start_block.persistency_service.get_state(start_block.operator_coord, SnapshotId::new(1)).unwrap();
 
         assert_eq!(state.message_queue, retrived_state.message_queue);
         // Check receiver state
@@ -813,7 +813,7 @@ mod tests {
             ]),
         };
 
-        let retrived_state: StartBlockState<TwoSidesItem<i32, i32>, MultipleStartBlockReceiver<i32, i32>> = start_block.persistency_service.get_state(start_block.operator_coord, 2).unwrap();
+        let retrived_state: StartBlockState<TwoSidesItem<i32, i32>, MultipleStartBlockReceiver<i32, i32>> = start_block.persistency_service.get_state(start_block.operator_coord, SnapshotId::new(2)).unwrap();
 
         assert_eq!(state.message_queue, retrived_state.message_queue);
         // Check receiver state
@@ -827,8 +827,8 @@ mod tests {
 
         
         // Clean redis
-        start_block.persistency_service.delete_state(start_block.operator_coord, 1);
-        start_block.persistency_service.delete_state(start_block.operator_coord, 2);
+        start_block.persistency_service.delete_state(start_block.operator_coord, SnapshotId::new(1));
+        start_block.persistency_service.delete_state(start_block.operator_coord, SnapshotId::new(2));
 
     }
 
@@ -852,15 +852,15 @@ mod tests {
 
         // Set a fake unique operator id to not have conflicts with other tests
         // If 2 opreators have the same coord and persist their state the tests fail
-        start_block.operator_coord.operator_id = 104;
+        start_block.operator_coord.operator_id = 112;
 
         sender1
             .send(NetworkMessage::new_batch(
                 vec![
                     StreamElement::Item(1),
-                    StreamElement::Snapshot(1),
+                    StreamElement::Snapshot(SnapshotId::new(1)),
                     StreamElement::Item(2),
-                    StreamElement::Snapshot(2),
+                    StreamElement::Snapshot(SnapshotId::new(2)),
                     StreamElement::Item(3),
                     StreamElement::FlushAndRestart,
                     StreamElement::Terminate,
@@ -870,9 +870,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(StreamElement::Item(TwoSidesItem::Left(1)), start_block.next());
-        assert_eq!(StreamElement::Snapshot(1), start_block.next());
+        assert_eq!(StreamElement::Snapshot(SnapshotId::new(1)), start_block.next());
         assert_eq!(StreamElement::Item(TwoSidesItem::Left(2)), start_block.next());
-        assert_eq!(StreamElement::Snapshot(2), start_block.next());
+        assert_eq!(StreamElement::Snapshot(SnapshotId::new(2)), start_block.next());
         assert_eq!(StreamElement::Item(TwoSidesItem::Left(3)), start_block.next());
         assert_eq!(StreamElement::Item(TwoSidesItem::LeftEnd), start_block.next());
 
@@ -880,9 +880,9 @@ mod tests {
             .send(NetworkMessage::new_batch(
                 vec![
                     StreamElement::Item(5),
-                    StreamElement::Snapshot(1),
+                    StreamElement::Snapshot(SnapshotId::new(1)),
                     StreamElement::Item(6),
-                    StreamElement::Snapshot(2),
+                    StreamElement::Snapshot(SnapshotId::new(2)),
                     StreamElement::FlushAndRestart,
                 ],
                 from2,
@@ -941,7 +941,7 @@ mod tests {
             ]),
         };
 
-        let retrived_state: StartBlockState<TwoSidesItem<i32, i32>, MultipleStartBlockReceiver<i32, i32>> = start_block.persistency_service.get_state(start_block.operator_coord, 2).unwrap();
+        let retrived_state: StartBlockState<TwoSidesItem<i32, i32>, MultipleStartBlockReceiver<i32, i32>> = start_block.persistency_service.get_state(start_block.operator_coord, SnapshotId::new(2)).unwrap();
 
         assert_eq!(state.message_queue, retrived_state.message_queue);
         // Check receiver state
@@ -958,17 +958,17 @@ mod tests {
         assert_eq!(StreamElement::FlushAndRestart, start_block.next());
         sender2
             .send(NetworkMessage::new_single(
-                StreamElement::Snapshot(3),
+                StreamElement::Snapshot(SnapshotId::new(3)),
                 from2,
             ))
             .unwrap(); 
         
-        assert_eq!(StreamElement::Snapshot(3), start_block.next());
+        assert_eq!(StreamElement::Snapshot(SnapshotId::new(3)), start_block.next());
         assert_eq!(StreamElement::Item(TwoSidesItem::Left(1)), start_block.next());
         
 
         // Extract manually the state
-        let retrived_state = start_block.on_going_snapshots.get(&3).unwrap().clone().0;
+        let retrived_state = start_block.on_going_snapshots.get(&SnapshotId::new(3)).unwrap().clone().0;
         
         let left_side: SideReceiverState<TwoSidesItem<i32, i32>> = SideReceiverState{
             missing_flush_and_restart: 1,
@@ -1039,8 +1039,8 @@ mod tests {
         assert_eq!(receiver.right.cache, retrived_receiver.right.cache);
 
         // Clean redis
-        start_block.persistency_service.delete_state(start_block.operator_coord, 1);
-        start_block.persistency_service.delete_state(start_block.operator_coord, 2);
+        start_block.persistency_service.delete_state(start_block.operator_coord, SnapshotId::new(1));
+        start_block.persistency_service.delete_state(start_block.operator_coord, SnapshotId::new(2));
 
     }
 }

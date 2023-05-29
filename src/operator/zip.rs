@@ -80,7 +80,7 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Operator<(Out1, Out2)> for Zip<Out1
 
         self.persistency_service = metadata.persistency_service.clone();
         self.persistency_service.setup();
-        let snapshot_id = self.persistency_service.restart_from_snapshot();
+        let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
         if snapshot_id.is_some() {
             // Get and resume the persisted state
             let opt_state: Option<ZipState<Out1, Out2>> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
@@ -127,8 +127,20 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Operator<(Out1, Out2)> for Zip<Out1
                     return item.map(|_| unreachable!());
                 }
 
-                StreamElement::FlushBatch | StreamElement::Terminate => {
+                StreamElement::FlushBatch => {
                     return item.map(|_| unreachable!())
+                }
+
+                StreamElement::Terminate => {
+                    if self.persistency_service.is_active(){
+                        // Save terminated state
+                        let state = ZipState {
+                            stash1: self.stash1.clone(),
+                            stash2: self.stash2.clone(),
+                        };
+                        self.persistency_service.save_terminated_state(self.operator_coord, state);
+                    }
+                    return StreamElement::Terminate
                 }
 
                 StreamElement::Snapshot(snap_id) => {
