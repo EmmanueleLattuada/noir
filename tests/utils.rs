@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use itertools::{process_results, Itertools};
 
-use noir::config::{ExecutionRuntime, RemoteHostConfig, RemoteRuntimeConfig};
+use noir::config::{ExecutionRuntime, RemoteHostConfig, RemoteRuntimeConfig, PersistencyConfig};
 use noir::operator::{Data, Operator, StreamElement, Timestamp};
 use noir::structure::BlockStructure;
 use noir::CoordUInt;
@@ -19,6 +19,8 @@ use noir::{EnvironmentConfig, StreamEnvironment};
 
 /// Port from which the integration tests start allocating sockets for the remote runtime.
 const TEST_BASE_PORT: u16 = 17666;
+
+pub const REDIS_TEST_CONFIGURATION: &str ="redis://127.0.0.1";
 
 /// The index of the current test.
 ///
@@ -139,9 +141,12 @@ impl TestHelper {
     }
 
     /// Run the test body under a local environment.
-    pub fn local_env(body: Arc<dyn Fn(StreamEnvironment) + Send + Sync>, num_cores: CoordUInt) {
+    pub fn local_env(body: Arc<dyn Fn(StreamEnvironment) + Send + Sync>, num_cores: CoordUInt, persistency_config: Option<PersistencyConfig>) {
         Self::setup();
-        let config = EnvironmentConfig::local(num_cores);
+        let mut config = EnvironmentConfig::local(num_cores);
+        if persistency_config.is_some() {
+            config.add_persistency(persistency_config.unwrap());
+        }
         log::debug!("Running test with env: {:?}", config);
         Self::env_with_config(config, body)
     }
@@ -151,6 +156,7 @@ impl TestHelper {
         body: Arc<dyn Fn(StreamEnvironment) + Send + Sync>,
         num_hosts: CoordUInt,
         cores_per_host: CoordUInt,
+        persistency_config: Option<PersistencyConfig>
     ) {
         Self::setup();
         let mut hosts = vec![];
@@ -176,12 +182,15 @@ impl TestHelper {
 
         let mut join_handles = vec![];
         for host_id in 0..num_hosts {
-            let config = EnvironmentConfig {
+            let mut config = EnvironmentConfig {
                 runtime: runtime.clone(),
                 host_id: Some(host_id),
                 skip_single_remote_check: true,
                 persistency_configuration: None,
             };
+            if let Some(pers_conf) = persistency_config.clone(){
+                config.add_persistency(pers_conf);
+            }
             let body = body.clone();
             join_handles.push(
                 std::thread::Builder::new()
@@ -207,7 +216,7 @@ impl TestHelper {
         let local_cores =
             Self::parse_list_from_env("RSTREAM_TEST_LOCAL_CORES").unwrap_or_else(|| vec![4]);
         for num_cores in local_cores {
-            Self::local_env(body.clone(), num_cores);
+            Self::local_env(body.clone(), num_cores, None);
         }
 
         let remote_hosts =
@@ -216,8 +225,49 @@ impl TestHelper {
             Self::parse_list_from_env("RSTREAM_TEST_REMOTE_CORES").unwrap_or_else(|| vec![4]);
         for num_hosts in remote_hosts {
             for &num_cores in &remote_cores {
-                Self::remote_env(body.clone(), num_hosts, num_cores);
+                Self::remote_env(body.clone(), num_hosts, num_cores, None);
             }
+        }
+    }
+
+     /// Run the test body under a local environment and later under a simulated remote environment.
+     /// restart_config must contains all configurations to run sequentially
+     /// Example: first a complete execution, then restart from snapshot 1 and finally restart from 
+     /// last and clean the database
+    pub fn local_remote_env_with_persistency<F>(body: F, restart_config: Vec<PersistencyConfig>)
+    where
+        F: Fn(StreamEnvironment) + Send + Sync + 'static,
+    {
+        let body = Arc::new(body);
+        
+        let local_cores =
+            Self::parse_list_from_env("RSTREAM_TEST_LOCAL_CORES").unwrap_or_else(|| vec![4]);
+        for num_cores in local_cores {
+            for pers_conf in restart_config.clone() {
+                Self::local_env(body.clone(), num_cores, Some(pers_conf));
+            }
+        }
+        // TODO: FIX THIS
+        /*
+        let remote_hosts =
+            Self::parse_list_from_env("RSTREAM_TEST_REMOTE_HOSTS").unwrap_or_else(|| vec![4]);
+        let remote_cores =
+            Self::parse_list_from_env("RSTREAM_TEST_REMOTE_CORES").unwrap_or_else(|| vec![4]);
+        for num_hosts in remote_hosts {
+            for &num_cores in &remote_cores {
+                for pers_conf in restart_config.clone() {
+                    Self::remote_env(body.clone(), num_hosts, num_cores, Some(pers_conf));
+                }
+            }
+        }*/
+    }
+
+    pub fn persistency_config_test(try_restart: bool, clean_on_exit: bool, restart_from: Option<u64>) -> PersistencyConfig {
+        PersistencyConfig { 
+            server_addr: String::from(REDIS_TEST_CONFIGURATION), 
+            try_restart, 
+            clean_on_exit, 
+            restart_from 
         }
     }
 

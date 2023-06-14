@@ -1,7 +1,10 @@
 use itertools::Itertools;
 
+use noir::StreamEnvironment;
 use noir::operator::source::IteratorSource;
 use noir::operator::window::CountWindow;
+use noir::prelude::Source;
+use serial_test::serial;
 
 use super::utils::TestHelper;
 
@@ -188,4 +191,51 @@ fn test_map_window_keyed() {
             );
         }
     });
+}
+
+
+#[test]
+#[serial]
+fn test_first_window_keyed_persistency() {
+    let body = |mut env: StreamEnvironment| {
+        let mut source = IteratorSource::new(0..10u8);
+        source.set_snapshot_frequency_by_item(3);
+        let res = env
+            .stream(source)
+            .group_by(|x| x % 2)
+            .window(CountWindow::sliding(3, 2))
+            .first()
+            .collect_vec();
+        env.execute();
+        if let Some(mut res) = res.get() {
+            res.sort_unstable();
+            assert_eq!(
+                res,
+                vec![
+                    (0, 0), // [0, 2, 4]
+                    (0, 4), // [4, 6, 8]
+                    // (0, 8), // [8]
+                    (1, 1), // [1, 3, 5]
+                    (1, 5), // [5, 7, 9]
+                            // (1, 9), // [9]
+                ]
+            );
+        }
+    };
+
+    let execution_list = vec![
+        // Complete execution
+        TestHelper::persistency_config_test(false, false, None),
+        // Restart from snapshot 1
+        TestHelper::persistency_config_test(true, false, Some(1)),
+        // Restart from snapshot 2
+        TestHelper::persistency_config_test(true, false, Some(2)),
+        // Restart from snapshot 4, the first block has already terminated
+        TestHelper::persistency_config_test(true, false, Some(4)),
+        // Restart from last snapshot, all operators have terminated
+        TestHelper::persistency_config_test(true, true, None),
+    ];
+
+    TestHelper::local_remote_env_with_persistency(body, execution_list);
+
 }

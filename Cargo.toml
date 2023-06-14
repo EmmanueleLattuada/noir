@@ -98,6 +98,7 @@ criterion = { version = "0.4.0", features = ["html_reports"] }
 fake = "2.5.0"
 mimalloc = { version = "0.1.34", default-features = false }
 tracing-subscriber = "0.3.16"
+serial_test = "2.0.0"
 
 # for the examples
 regex = "1.7.1"
