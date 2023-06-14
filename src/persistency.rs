@@ -4,7 +4,7 @@ use redis::{Commands, Client};
 use bincode::{DefaultOptions, Options, config::{WithOtherTrailing, WithOtherIntEncoding, FixintEncoding, RejectTrailing}};
 use once_cell::sync::Lazy;
 
-use crate::{network::OperatorCoord, operator::{SnapshotId, ExchangeData}};
+use crate::{network::OperatorCoord, operator::{SnapshotId, ExchangeData}, config::PersistencyConfig};
 
 /// Serializer
 static SERIALIZER: Lazy<DefaultOptions> = Lazy::new(bincode::DefaultOptions::new);
@@ -84,9 +84,9 @@ pub struct PersistencyService {
 
 impl PersistencyService {
     /// Create a new persistencyService from given configuration
-    pub (crate) fn new(conf: Option<String>) -> Self{
-        if conf.is_some(){
-            let handler = RedisHandler::new(conf.unwrap());
+    pub (crate) fn new(conf: Option<PersistencyConfig>) -> Self{
+        if let Some(config) = conf{
+            let handler = RedisHandler::new(config.server_addr);
             return Self { 
                 handler: handler, 
                 active: true,
@@ -105,12 +105,36 @@ impl PersistencyService {
         self.active
     }
 
-    /// Method to compute the last complete snapshot.
+    /// Call this method to restart from specified snapshot or from the last one.
+    /// All partial or complete snapshot with an higher index will be deleted in another step.
     /// You must includes all coordinates of each operator in the graph to have a correct result.
     /// To retrive the result use restart_from_snapshot() method
-    pub (crate) fn compute_last_complete_snapshot(&mut self, operators: Vec<OperatorCoord>) {
+    pub (crate) fn find_snapshot(&mut self, operators: Vec<OperatorCoord>, snapshot_index: Option<u64>) {
+        self.compute_last_complete_snapshot(operators.clone());
+        if let Some(restart) = self.restart_from{
+            if let Some(snap_idx) = snapshot_index {
+                if snap_idx == 0 {
+                    self.restart_from = None;
+                    self.clean_persisted_state(operators.clone());  //FIX
+                } else if snap_idx < restart.id() {
+                    // TODO: Check that the snapshot with this id has not been deleted
+                    self.restart_from = Some(SnapshotId::new(snap_idx));
+                }
+            }
+        } 
+    }
+
+    /// Method to compute the last complete snapshot.
+    fn compute_last_complete_snapshot(&mut self, operators: Vec<OperatorCoord>) {
+        if !self.is_active() {
+            panic!("Persistency serviced aren't active");
+        }
+        // This is called before setup, clone self to compute it
+        let mut tmp = self.clone();
+        tmp.setup();
+
         let mut op_iter = operators.into_iter();
-        let last_snap = self.get_last_snapshot(op_iter.next().unwrap_or_else(||
+        let last_snap = tmp.get_last_snapshot(op_iter.next().unwrap_or_else(||
             panic!("No operators provided")
         ));
         if last_snap.is_none() {
@@ -120,7 +144,7 @@ impl PersistencyService {
         }
         let mut last_snap = last_snap.unwrap();
         for op in op_iter {
-            let opt_snap = self.get_last_snapshot(op);
+            let opt_snap = tmp.get_last_snapshot(op);
             match opt_snap {
                 Some(snap_id) => {
                     if snap_id.terminate() && last_snap.terminate() {
@@ -148,13 +172,19 @@ impl PersistencyService {
         }
         self.restart_from = Some(last_snap);
     }
-    /// Return last complete snapshot. Use compute_last_complete_snapshot() first to compute it.
+    /// Return last complete snapshot. Use find_snapshot() first to compute it.
+    /// Remove all partial snapshotd with id > self.restart_from
     pub (crate) fn restart_from_snapshot(&self, op_coord: OperatorCoord) -> Option<SnapshotId> {
         if let Some(snap_id) = self.restart_from {
-            let last_snap = self.get_last_snapshot(op_coord).unwrap();
-            if last_snap.id() < snap_id.id() && last_snap.terminate() {
+            let mut last_snap = self.get_last_snapshot(op_coord).unwrap();
+            if last_snap.id() <= snap_id.id() && last_snap.terminate() {
                 return Some(last_snap)
             }
+            // Remove all partial snapshots with id > self.restart_from           
+            while last_snap.id() > snap_id.id() {
+                self.delete_state(op_coord, last_snap);
+                last_snap = self.get_last_snapshot(op_coord).unwrap();                
+            }             
         }
         self.restart_from.clone()
     }
@@ -204,6 +234,21 @@ impl PersistencyService {
         }
     }
 
+    /// Method to remove all persisted data.
+    /// You must includes all coordinates of each operator in the graph to have a complete cleaning.
+    pub (crate) fn clean_persisted_state(&mut self, operators: Vec<OperatorCoord>){
+        // This is called before setup, clone self to compute it
+        let mut tmp = self.clone();
+        tmp.setup();
+
+        for op_coord in operators {
+            let mut last_opt_snap = tmp.get_last_snapshot(op_coord);
+            while last_opt_snap.is_some() {
+                tmp.delete_state(op_coord, last_opt_snap.unwrap());
+                last_opt_snap = tmp.get_last_snapshot(op_coord);
+            } 
+        }
+    }
 }
 
 // Just wrap methods and check snapshot id constraints
@@ -219,10 +264,11 @@ impl PersistencyServices for PersistencyService{
             panic!("Persistency services aren't configured");
         }
         if snapshot_id.id() == 0 {
-            panic!("Snapshot id must start from 1");
+            panic!("Passed snap_id: {snapshot_id:?}.\nSnapshot id must start from 1");
         }
         if !((snapshot_id.id() == 1 && self.get_last_snapshot(op_coord).is_none()) || self.get_last_snapshot(op_coord).unwrap_or(SnapshotId::new(0)) == snapshot_id - 1) {
-            panic!("Snapshot id must be a sequence with step 1 starting from 1");
+            let saved = self.get_last_snapshot(op_coord);
+            panic!("Passed snap_id: {snapshot_id:?}.\n Last saved snap_id: {saved:?}.\n  Op_coord: {op_coord:?}.\n Snapshot id must be a sequence with step 1 starting from 1");
         }
         self.handler.save_state(op_coord, snapshot_id, state);
     }
@@ -231,10 +277,11 @@ impl PersistencyServices for PersistencyService{
             panic!("Persistency services aren't configured");
         }
         if snapshot_id.id() == 0 {
-            panic!("Snapshot id must start from 1");
+            panic!("Passed snap_id: {snapshot_id:?}.\nSnapshot id must start from 1");
         }
         if !((snapshot_id.id() == 1 && self.get_last_snapshot(op_coord).is_none()) || self.get_last_snapshot(op_coord).unwrap_or(SnapshotId::new(0)) == snapshot_id - 1) {
-            panic!("Snapshot id must be a sequence with step 1 starting from 1");
+            let saved = self.get_last_snapshot(op_coord);
+            panic!("Passed snap_id: {snapshot_id:?}.\n Last saved snap_id: {saved:?}.\n  Op_coord: {op_coord:?}.\n Snapshot id must be a sequence with step 1 starting from 1");
         }
         self.handler.save_void_state(op_coord, snapshot_id);
     }
@@ -384,18 +431,13 @@ impl PersistencyServices for RedisHandler{
         let op_coord_key_buf = serialize_op_coord(op_coord);
         
         // Get the last snapshotid
-        let ser_snap_id: Option<Vec<u8>> = conn.lpop(op_coord_key_buf.clone(), None)
-            .unwrap_or_else(|e| {
-                panic!("Failed to get last snapshot id of operator: {op_coord}. Error: {e:?}")
-            });
+        let ser_snap_id: Option<Vec<u8>> = conn.lindex(op_coord_key_buf.clone(), 0)
+        .unwrap_or_else(|e| {
+            panic!("Failed to get last snapshot id of operator: {op_coord}. Error: {e:?}")
+        });
         // Check if is Some
         if let Some(snap_id) = ser_snap_id {
-            // Since POP removes the returned element i need to repush it
-            conn.lpush(op_coord_key_buf, snap_id.clone())
-                .unwrap_or_else(|e|
-                    panic!("Failed to get last snapshot id of operator: {op_coord}. Error: {e:?}")
-                );
-                // Deserialize the snapshot_id
+            // Deserialize the snapshot_id
             let error_msg = format!("Fail deserialization of snapshot id");
             let snapshot_id: SnapshotId = KEY_SERIALIZER
                 .deserialize(snap_id.as_ref())
@@ -505,8 +547,9 @@ impl PersistencyServices for RedisHandler{
 #[cfg(test)]
 mod tests {
     use serde::{Serialize, Deserialize};
+    use serial_test::serial;
 
-    use crate::{network::OperatorCoord, test::REDIS_TEST_COFIGURATION, operator::SnapshotId};
+    use crate::{network::OperatorCoord, test::REDIS_TEST_CONFIGURATION, operator::SnapshotId, config::PersistencyConfig};
 
     use super::{PersistencyService, PersistencyServices};
 
@@ -519,6 +562,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_save_get_remove_state(){
         let op_coord1 = OperatorCoord {
             block_id: 1,
@@ -537,7 +581,14 @@ mod tests {
         state1.values.push(2);
         state1.values.push(3);
 
-        let mut pers_handler = PersistencyService::new(Some(String::from(REDIS_TEST_COFIGURATION)));
+        let mut pers_handler = PersistencyService::new(Some(
+            PersistencyConfig { 
+                server_addr: String::from(REDIS_TEST_CONFIGURATION),
+                try_restart: false,
+                clean_on_exit: false,
+                restart_from: None,
+            }
+        ));
         pers_handler.setup();
 
         pers_handler.save_state(op_coord1, SnapshotId::new(1), state1.clone());
@@ -582,6 +633,7 @@ mod tests {
  
     
     #[test]
+    #[serial]
     fn test_save_void_state() {
         let op_coord1 = OperatorCoord {
             block_id: 1,
@@ -590,7 +642,14 @@ mod tests {
             operator_id: 2,
         };
 
-        let mut pers_handler = PersistencyService::new(Some(String::from(REDIS_TEST_COFIGURATION).to_string()));
+        let mut pers_handler = PersistencyService::new(Some(
+            PersistencyConfig { 
+                server_addr: String::from(REDIS_TEST_CONFIGURATION),
+                try_restart: false,
+                clean_on_exit: false,
+                restart_from: None,
+            }
+        ));
         pers_handler.setup();
 
         pers_handler.save_void_state(op_coord1, SnapshotId::new(1));
@@ -622,6 +681,7 @@ mod tests {
 
     #[ignore]
     #[test]
+    #[serial]
     fn test_snapshot_id_consistency() {
         let op_coord1 = OperatorCoord {
             block_id: 1,
@@ -630,7 +690,14 @@ mod tests {
             operator_id: 3,
         };
 
-        let mut pers_handler = PersistencyService::new(Some(String::from(REDIS_TEST_COFIGURATION)));
+        let mut pers_handler = PersistencyService::new(Some(
+            PersistencyConfig { 
+                server_addr: String::from(REDIS_TEST_CONFIGURATION),
+                try_restart: false,
+                clean_on_exit: false,
+                restart_from: None,
+            }
+        ));
         pers_handler.setup();
 
         // Snap_id = 0
@@ -668,6 +735,7 @@ mod tests {
 
     #[ignore]
     #[test]
+    #[serial]
     fn test_no_persistency() {
         let op_coord1 = OperatorCoord {
             block_id: 1,
@@ -698,6 +766,7 @@ mod tests {
 
 
     #[test]
+    #[serial]
     fn test_compute_last_complete_snapshot(){
         let op_coord1 = OperatorCoord {
             block_id: 1,
@@ -717,7 +786,14 @@ mod tests {
             replica_id: 1,
             operator_id: 7,
         };
-        let mut pers_handler = PersistencyService::new(Some(String::from(REDIS_TEST_COFIGURATION)));
+        let mut pers_handler = PersistencyService::new(Some(
+            PersistencyConfig { 
+                server_addr: String::from(REDIS_TEST_CONFIGURATION),
+                try_restart: false,
+                clean_on_exit: false,
+                restart_from: None,
+            }
+        ));
         pers_handler.setup();
 
         assert_eq!(pers_handler.restart_from_snapshot(op_coord1), None);
@@ -739,6 +815,7 @@ mod tests {
         pers_handler.compute_last_complete_snapshot(vec![op_coord1, op_coord2, op_coord3]);
         assert_eq!(pers_handler.restart_from_snapshot(op_coord1), Some(SnapshotId::new(1)));
 
+        pers_handler.save_state(op_coord1, SnapshotId::new(2), fake_state);
         pers_handler.save_state(op_coord2, SnapshotId::new(2), fake_state);
         pers_handler.compute_last_complete_snapshot(vec![op_coord1, op_coord2, op_coord3]);
         assert_eq!(pers_handler.restart_from_snapshot(op_coord1), Some(SnapshotId::new(2)));

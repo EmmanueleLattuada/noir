@@ -218,6 +218,7 @@ impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send + 'static> Star
                 state_generation: self.state_generation as u64,
                 watermark_forntier: self.watermark_frontier.clone(),
                 receiver_state: self.receiver.get_state(),
+                terminated_replicas: self.terminated_replicas.clone(),
                 message_queue: VecDeque::default(),
             };
 
@@ -288,6 +289,7 @@ impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send + 'static> Star
                 state_generation: self.state_generation as u64,
                 watermark_forntier: self.watermark_frontier.clone(),
                 receiver_state: self.receiver.get_state(),
+                terminated_replicas: self.terminated_replicas.clone(),
                 message_queue: VecDeque::default(),
             };
 
@@ -328,6 +330,8 @@ struct StartBlockState<Out, Receiver: StartBlockReceiver<Out>> {
     ))]
     receiver_state: Option<<Receiver as StartBlockReceiver<Out>>::ReceiverState>,
 
+    terminated_replicas: Vec<Coord>,
+
     message_queue: VecDeque<(Coord, StreamElement<Out>)>,
 }
 
@@ -358,9 +362,9 @@ impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send + 'static> Oper
         self.persistency_service = metadata.persistency_service.clone();
         self.persistency_service.setup();
         let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
-        if snapshot_id.is_some() {
+        if let Some(snap_id) = snapshot_id {
             // Get and resume the persisted state
-            let opt_state: Option<StartBlockState<Out, Receiver>> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
+            let opt_state: Option<StartBlockState<Out, Receiver>> = self.persistency_service.get_state(self.operator_coord, snap_id);
             if let Some(state) = opt_state {
                 self.missing_terminate = state.missing_terminate as usize;
                 self.missing_flush_and_restart = state.missing_flush_and_restart as usize;
@@ -368,7 +372,12 @@ impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send + 'static> Oper
                 self.state_generation = state.state_generation as usize;
                 self.watermark_frontier = state.watermark_forntier;
                 self.receiver.set_state(state.receiver_state);
-                self.persisted_message_queue = state.message_queue;                
+                self.terminated_replicas = state.terminated_replicas;
+                self.persisted_message_queue = state.message_queue;  
+                // Set last snapshots off all previous replicas to this snapshot_id
+                for prev_rep in self.receiver.prev_replicas() {
+                    self.last_snapshots.insert(prev_rep, snap_id);
+                }             
                 
             } else {
                 panic!("No persisted state founded for op: {0}", self.operator_coord);
@@ -391,6 +400,7 @@ impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send + 'static> Oper
                         state_generation: self.state_generation as u64,
                         watermark_forntier: self.watermark_frontier.clone(),
                         receiver_state: self.receiver.get_state(),
+                        terminated_replicas: self.terminated_replicas.clone(),
                         // This is empty since all previous replicas terminated, so no more messages will arrive
                         message_queue: VecDeque::default(),
                     };
@@ -579,12 +589,15 @@ impl<Out: ExchangeData, Receiver: StartBlockReceiver<Out> + Send + 'static> Sour
 mod tests {
     use std::collections::VecDeque;
 
+    use serial_test::serial;
+
+    use crate::config::PersistencyConfig;
     use crate::network::NetworkMessage;
     use crate::operator::start::StartBlockState;
     use crate::operator::start::watermark_frontier::WatermarkFrontier;
     use crate::operator::{Operator, StartBlock, StreamElement, Timestamp, TwoSidesItem, SingleStartBlockReceiver, SnapshotId};
     use crate::persistency::{PersistencyService, PersistencyServices};
-    use crate::test::{FakeNetworkTopology, REDIS_TEST_COFIGURATION};
+    use crate::test::{FakeNetworkTopology, REDIS_TEST_CONFIGURATION};
 
     #[cfg(feature = "timestamp")]
     fn ts(millis: u64) -> Timestamp {
@@ -890,6 +903,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_single_start_persistency() {
         let mut t = FakeNetworkTopology::new(1, 2);
         let (from1, sender1) = t.senders_mut()[0].pop().unwrap();
@@ -899,11 +913,16 @@ mod tests {
             StartBlock::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None);
 
         let mut metadata = t.metadata();
-        metadata.persistency_service = PersistencyService::new(Some(String::from(REDIS_TEST_COFIGURATION)));
+        metadata.persistency_service = PersistencyService::new(Some(
+            PersistencyConfig { 
+                server_addr: String::from(REDIS_TEST_CONFIGURATION),
+                try_restart: false,
+                clean_on_exit: false,
+                restart_from: None,
+            }
+        ));
         start_block.setup(&mut metadata);
 
-        // Set a fake unique operator id to not have conflicts with other tests
-        // If 2 opreators have the same coord and persist their state the tests fail
         start_block.operator_coord.operator_id = 100;
 
 
@@ -945,6 +964,7 @@ mod tests {
             state_generation: 0,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: None,
+            terminated_replicas: vec![],
             message_queue: VecDeque::from([
                 (from2, StreamElement::Item(3)), 
                 (from2, StreamElement::Item(4)),
@@ -959,6 +979,7 @@ mod tests {
         assert_eq!(state.state_generation, retrived_state.state_generation);
         assert_eq!(state.watermark_forntier.get_frontier(), retrived_state.watermark_forntier.get_frontier());
         assert_eq!(state.receiver_state, retrived_state.receiver_state);
+        assert_eq!(state.terminated_replicas, retrived_state.terminated_replicas);
         assert_eq!(state.message_queue, retrived_state.message_queue);
         
         // Clean redis
@@ -968,6 +989,7 @@ mod tests {
 
     
     #[test]
+    #[serial]
     fn test_single_start_persistency_multiple_snapshot() {
         let mut t = FakeNetworkTopology::new(1, 2);
         let (from1, sender1) = t.senders_mut()[0].pop().unwrap();
@@ -977,11 +999,16 @@ mod tests {
             StartBlock::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None);
 
         let mut metadata = t.metadata();
-        metadata.persistency_service = PersistencyService::new(Some(String::from(REDIS_TEST_COFIGURATION)));
+        metadata.persistency_service = PersistencyService::new(Some(
+            PersistencyConfig { 
+                server_addr: String::from(REDIS_TEST_CONFIGURATION),
+                try_restart: false,
+                clean_on_exit: false,
+                restart_from: None,
+            }
+        ));
         start_block.setup(&mut metadata);
 
-        // Set a fake unique operator id to not have conflicts with other tests
-        // If 2 opreators have the same coord and persist their state the tests fail
         start_block.operator_coord.operator_id = 101;
 
 
@@ -1029,6 +1056,7 @@ mod tests {
             state_generation: 0,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: None,
+            terminated_replicas: vec![],
             message_queue: VecDeque::from([
                 (from2, StreamElement::Item(5)), 
                 (from2, StreamElement::Item(6)),
@@ -1043,6 +1071,7 @@ mod tests {
         assert_eq!(state.state_generation, retrived_state.state_generation);
         assert_eq!(state.watermark_forntier.get_frontier(), retrived_state.watermark_forntier.get_frontier());
         assert_eq!(state.receiver_state, retrived_state.receiver_state);
+        assert_eq!(state.terminated_replicas, retrived_state.terminated_replicas);
         assert_eq!(state.message_queue, retrived_state.message_queue);
 
         assert_eq!(StreamElement::Item(8), start_block.next());
@@ -1054,6 +1083,7 @@ mod tests {
             state_generation: 0,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: None,
+            terminated_replicas: vec![],
             message_queue: VecDeque::from([
                 (from2, StreamElement::Item(5)), 
                 (from2, StreamElement::Item(6)),
@@ -1069,6 +1099,7 @@ mod tests {
         assert_eq!(state.state_generation, retrived_state.state_generation);
         assert_eq!(state.watermark_forntier.get_frontier(), retrived_state.watermark_forntier.get_frontier());
         assert_eq!(state.receiver_state, retrived_state.receiver_state);
+        assert_eq!(state.terminated_replicas, retrived_state.terminated_replicas);
         assert_eq!(state.message_queue, retrived_state.message_queue);
         
         // Clean redis
@@ -1078,6 +1109,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_single_start_persistency_multiple_snapshot_terminate() {
         let mut t = FakeNetworkTopology::new(1, 2);
         let (from1, sender1) = t.senders_mut()[0].pop().unwrap();
@@ -1087,11 +1119,16 @@ mod tests {
             StartBlock::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None);
 
         let mut metadata = t.metadata();
-        metadata.persistency_service = PersistencyService::new(Some(String::from(REDIS_TEST_COFIGURATION)));
+        metadata.persistency_service = PersistencyService::new(Some(
+            PersistencyConfig { 
+                server_addr: String::from(REDIS_TEST_CONFIGURATION),
+                try_restart: false,
+                clean_on_exit: false,
+                restart_from: None,
+            }
+        ));
         start_block.setup(&mut metadata);
 
-        // Set a fake unique operator id to not have conflicts with other tests
-        // If 2 opreators have the same coord and persist their state the tests fail
         start_block.operator_coord.operator_id = 102;
 
 
@@ -1145,6 +1182,7 @@ mod tests {
             state_generation: 0,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: None,
+            terminated_replicas: vec![],
             message_queue: VecDeque::from([
                 (from2, StreamElement::Item(5)), 
                 (from2, StreamElement::Item(6)),
@@ -1159,6 +1197,7 @@ mod tests {
         assert_eq!(state.state_generation, retrived_state.state_generation);
         assert_eq!(state.watermark_forntier.get_frontier(), retrived_state.watermark_forntier.get_frontier());
         assert_eq!(state.receiver_state, retrived_state.receiver_state);
+        assert_eq!(state.terminated_replicas, retrived_state.terminated_replicas);
         assert_eq!(state.message_queue, retrived_state.message_queue);
         
         sender1
@@ -1183,6 +1222,7 @@ mod tests {
             state_generation: 0,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: None,
+            terminated_replicas: vec![from2],
             message_queue: VecDeque::from([]),
         };
 
@@ -1194,6 +1234,7 @@ mod tests {
         assert_eq!(state.state_generation, retrived_state.state_generation);
         assert_eq!(state.watermark_forntier.get_frontier(), retrived_state.watermark_forntier.get_frontier());
         assert_eq!(state.receiver_state, retrived_state.receiver_state);
+        assert_eq!(state.terminated_replicas, retrived_state.terminated_replicas);
         assert_eq!(state.message_queue, retrived_state.message_queue);
         
         

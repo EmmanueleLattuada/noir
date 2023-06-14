@@ -275,9 +275,12 @@ where
 mod tests {
     use std::collections::HashMap;
 
-    use crate::{operator::{rich_map_persistent::RichMapPersistent, StreamElement, Operator, SnapshotId}, test::{FakeOperator, REDIS_TEST_COFIGURATION}, network::OperatorCoord, persistency::{PersistencyService, PersistencyServices}};  
+    use serial_test::serial;
+
+    use crate::{operator::{rich_map_persistent::RichMapPersistent, StreamElement, Operator, SnapshotId}, test::{FakeOperator, REDIS_TEST_CONFIGURATION}, network::OperatorCoord, persistency::{PersistencyService, PersistencyServices}, config::PersistencyConfig};  
 
     #[test]
+    #[serial]
     fn test_rich_map_persistent_persistency() {
         let mut fake_operator = FakeOperator::empty();
         fake_operator.push(StreamElement::Item((1, 1)));
@@ -302,7 +305,14 @@ mod tests {
             replica_id: 2,
             operator_id: 1,
         };
-        rich_map_persistent.persistency_service = PersistencyService::new(Some(String::from(REDIS_TEST_COFIGURATION)));
+        rich_map_persistent.persistency_service = PersistencyService::new(Some(
+            PersistencyConfig { 
+                server_addr: String::from(REDIS_TEST_CONFIGURATION),
+                try_restart: false,
+                clean_on_exit: false,
+                restart_from: None,
+            }
+        ));
         rich_map_persistent.persistency_service.setup();
 
         assert_eq!(rich_map_persistent.next(), StreamElement::Item((1, 1)));
@@ -324,6 +334,7 @@ mod tests {
 
 
     #[test]
+    #[serial]
     fn test_rich_map_persistent_diff_key_persistency() {
         let mut fake_operator = FakeOperator::empty();
         fake_operator.push(StreamElement::Item((1, 1)));
@@ -348,7 +359,14 @@ mod tests {
             replica_id: 2,
             operator_id: 2,
         };
-        rich_map_persistent.persistency_service = PersistencyService::new(Some(String::from(REDIS_TEST_COFIGURATION)));
+        rich_map_persistent.persistency_service = PersistencyService::new(Some(
+            PersistencyConfig { 
+                server_addr: String::from(REDIS_TEST_CONFIGURATION),
+                try_restart: false,
+                clean_on_exit: false,
+                restart_from: None,
+            }
+        ));
         rich_map_persistent.persistency_service.setup();
 
         assert_eq!(rich_map_persistent.next(), StreamElement::Item((1, 1)));

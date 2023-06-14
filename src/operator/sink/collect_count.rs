@@ -204,15 +204,16 @@ where
 #[cfg(test)]
 mod tests {
     use itertools::Itertools;
+    use serial_test::serial;
 
-    use crate::config::EnvironmentConfig;
+    use crate::config::{EnvironmentConfig, PersistencyConfig};
     use crate::environment::StreamEnvironment;
     use crate::network::OperatorCoord;
     use crate::operator::sink::StreamOutputRef;
     use crate::operator::sink::collect_count::CollectCountSink;
     use crate::operator::{source, StreamElement, Operator, SnapshotId};
     use crate::persistency::{PersistencyService, PersistencyServices};
-    use crate::test::{FakeOperator, REDIS_TEST_COFIGURATION};
+    use crate::test::{FakeOperator, REDIS_TEST_CONFIGURATION};
 
     #[test]
     fn collect_vec() {
@@ -223,8 +224,8 @@ mod tests {
         assert_eq!(res.get().unwrap(), (0..10).collect_vec());
     }
 
-    #[ignore]
     #[test]
+    #[serial]
     fn test_collect_count_persistency_save_state() {
         let mut fake_operator = FakeOperator::empty();
         fake_operator.push(StreamElement::Item(1));
@@ -242,7 +243,14 @@ mod tests {
             replica_id: 2,
             operator_id: 1,
         };
-        collect.persistency_service = PersistencyService::new(Some(String::from(REDIS_TEST_COFIGURATION)));
+        collect.persistency_service = PersistencyService::new(Some(
+            PersistencyConfig { 
+                server_addr: String::from(REDIS_TEST_CONFIGURATION),
+                try_restart: false,
+                clean_on_exit: false,
+                restart_from: None,
+            }
+        ));
         collect.persistency_service.setup();
 
         collect.next();

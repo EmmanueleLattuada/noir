@@ -7,7 +7,7 @@ use itertools::Itertools;
 
 use crate::block::{BatchMode, BlockStructure, InnerBlock, JobGraphGenerator};
 use crate::config::{EnvironmentConfig, ExecutionRuntime, LocalRuntimeConfig, RemoteRuntimeConfig};
-use crate::network::{Coord, NetworkTopology};
+use crate::network::{Coord, NetworkTopology, OperatorCoord};
 use crate::operator::{Data, Operator};
 use crate::persistency::PersistencyService;
 use crate::profiler::{wait_profiler, ProfilerResult};
@@ -59,6 +59,8 @@ struct SchedulerBlockInfo {
     batch_mode: BatchMode,
     /// Whether this block has `NextStrategy::OnlyOne`.
     is_only_one_strategy: bool,
+    /// This is the operator id of the last operator in the block
+    last_operator_id: u64,
 }
 
 /// The `Scheduler` is the entity that keeps track of all the blocks of the job graph and when the
@@ -78,6 +80,8 @@ pub(crate) struct Scheduler {
     network: NetworkTopology,
     /// Persistency service handler for saving the state
     persistency_service: PersistencyService,
+    /// List with coordinates of all operators in the network
+    operators_coordinates: Vec<OperatorCoord>,
 }
 
 impl Scheduler {
@@ -91,6 +95,7 @@ impl Scheduler {
             network: NetworkTopology::new(config.clone()),
             config,
             persistency_service: PersistencyService::new(pers_conf),
+            operators_coordinates: Default::default()
         }
     }
 
@@ -113,6 +118,35 @@ impl Scheduler {
             block.to_string(),
             // info
         );
+
+        // add operators coordinates of this block to operators_coordinates
+        let num_of_op = info.last_operator_id + 1;
+        let num_of_hosts = match &self.config.runtime {
+            ExecutionRuntime::Remote(conf) => {
+                conf.hosts.len() as u64
+            }
+            ExecutionRuntime::Local(_) => {
+                1
+            }
+        };
+        for host in 0..num_of_hosts{
+            let host_replicas = info.replicas(host);
+            for coord in host_replicas {
+                for op_id in 0..num_of_op {
+                    let op_coord = OperatorCoord { 
+                        block_id, 
+                        host_id: host, 
+                        replica_id: coord.replica_id, 
+                        operator_id: op_id, 
+                    };
+                    // This check could be removed
+                    if self.operators_coordinates.contains(&op_coord) {
+                        panic!("Something wrong in the computation of all coordinates");
+                    }
+                    self.operators_coordinates.push(op_coord)
+                }
+            }
+        }
 
         // duplicate the block in the execution graph
         let mut blocks = vec![];
@@ -235,6 +269,13 @@ impl Scheduler {
             self.block_info.len(),
         );
 
+        // If set, try to restart from a snapshot
+        if let Some(persistency_conf) = self.config.persistency_configuration.clone(){
+            if persistency_conf.try_restart {
+                self.persistency_service.find_snapshot(self.operators_coordinates.clone(), persistency_conf.restart_from);
+            }
+        }
+
         self.build_execution_graph();
         self.network.build();
         self.network.log();
@@ -272,6 +313,19 @@ impl Scheduler {
         }
 
         self.network.stop_and_wait();
+
+        // If set, clean all persisted snapshots (each host clean its own operators)
+        let this_host = self.config.host_id.unwrap();
+        if let Some(persistency_conf) = self.config.persistency_configuration{
+                if persistency_conf.clean_on_exit {
+                    self.persistency_service.clean_persisted_state(
+                        self.operators_coordinates
+                            .into_iter()
+                            .filter(|op_coord| op_coord.host_id == this_host)
+                            .collect_vec()
+                    );
+                }
+            }
 
         let profiler_results = wait_profiler();
 
@@ -395,6 +449,7 @@ impl Scheduler {
             global_ids: global_ids.into_iter().collect(),
             batch_mode: block.batch_mode,
             is_only_one_strategy: block.is_only_one_strategy,
+            last_operator_id: block.operators.get_op_id(),
         }
     }
 
@@ -445,6 +500,7 @@ impl Scheduler {
             global_ids,
             batch_mode: block.batch_mode,
             is_only_one_strategy: block.is_only_one_strategy,
+            last_operator_id: block.operators.get_op_id(),
         }
     }
 }

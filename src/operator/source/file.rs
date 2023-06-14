@@ -147,7 +147,8 @@ impl Operator<String> for FileSource {
 
         // Set start to last position (from persisted state), if any
         if last_position.is_some() {
-            start = last_position.unwrap() as usize;
+            start = last_position.clone().unwrap() as usize;
+            self.current = start;
         }
 
         let mut reader = BufReader::new(file);
@@ -155,7 +156,7 @@ impl Operator<String> for FileSource {
         reader
             .seek(SeekFrom::Current(start as i64))
             .expect("seek file");
-        if global_id != 0 {
+        if global_id != 0 && last_position.is_none() {
             // discard first line
             let mut v = Vec::new();
 

@@ -308,11 +308,14 @@ where
 
 #[cfg(test)]
 mod tests {
+    use serial_test::serial;
+
+    use crate::config::PersistencyConfig;
     use crate::network::OperatorCoord;
     use crate::operator::fold::{Fold, FoldState};
     use crate::operator::{Operator, StreamElement, SnapshotId};
     use crate::persistency::{PersistencyService, PersistencyServices};
-    use crate::test::{FakeOperator, REDIS_TEST_COFIGURATION};
+    use crate::test::{FakeOperator, REDIS_TEST_CONFIGURATION};
 
     #[test]
     fn test_fold_without_timestamps() {
@@ -362,8 +365,8 @@ mod tests {
         assert_eq!(fold.next(), StreamElement::Terminate);
     }
 
-    #[ignore]
     #[test]
+    #[serial]
     fn test_fold_persistency_save_state() {
         let mut fake_operator = FakeOperator::empty();
         fake_operator.push(StreamElement::Item(1));
@@ -381,7 +384,14 @@ mod tests {
             replica_id: 1,
             operator_id: 1,
         };
-        fold.persistency_service = PersistencyService::new(Some(String::from(REDIS_TEST_COFIGURATION)));
+        fold.persistency_service = PersistencyService::new(Some(
+            PersistencyConfig { 
+                server_addr: String::from(REDIS_TEST_CONFIGURATION),
+                try_restart: false,
+                clean_on_exit: false,
+                restart_from: None,
+            }
+        ));
         fold.persistency_service.setup();
 
         assert_eq!(fold.next(), StreamElement::Snapshot(SnapshotId::new(1)));

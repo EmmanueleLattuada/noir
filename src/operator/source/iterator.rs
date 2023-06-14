@@ -114,11 +114,12 @@ where
             let opt_state: Option<IteratorSourceState> = self.persistency_service.get_state(self.operator_coord, snap_id);
             if let Some(state) = opt_state {
                 self.terminated = snap_id.terminate();
-                if state.last_index.is_some() {
-                    self.inner.nth(state.last_index.unwrap() as usize);
+                if let Some(idx) = state.last_index {
+                    self.inner.nth(idx as usize);
+                    self.last_index = Some(idx);
                 }
             } else {
-                panic!("No persisted state founded for op: {0}", self.operator_coord);
+                panic!("No persisted state founded for op: {0} and snapshot id: {snap_id:?}", self.operator_coord);
             } 
             self.snapshot_generator.restart_from(snap_id);
         }

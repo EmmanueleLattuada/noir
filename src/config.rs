@@ -83,7 +83,15 @@ pub struct EnvironmentConfig {
     /// constructed.
     pub skip_single_remote_check: bool,
     /// Configuration for persistency
-    pub persistency_configuration: Option<String>,
+    pub persistency_configuration: Option<PersistencyConfig>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct PersistencyConfig {
+    pub server_addr: String,
+    pub try_restart: bool,
+    pub clean_on_exit: bool,
+    pub restart_from: Option<u64>,
 }
 
 /// Which kind of environment to use for the execution.
@@ -209,8 +217,7 @@ impl EnvironmentConfig {
     }
 
     /// Add configuration to enable persistency services
-    /// Example: persistencyConfiguration = "redis://127.0.0.1"
-    pub fn add_persistency(&mut self, persistency_configuration: String) {
+    pub fn add_persistency(&mut self, persistency_configuration: PersistencyConfig) {
         self.persistency_configuration = Some(persistency_configuration);
     }
 

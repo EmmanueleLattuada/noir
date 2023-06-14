@@ -98,6 +98,7 @@ where
 
         self.persistency_service = metadata.persistency_service.clone();
         self.persistency_service.setup();
+        self.persistency_service.restart_from_snapshot(self.operator_coord);
     }
 
     #[inline]
