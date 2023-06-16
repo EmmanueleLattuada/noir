@@ -1,22 +1,18 @@
 use parking_lot::Mutex;
-use std::any::TypeId;
+
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use crate::block::{BatchMode, InnerBlock, NextStrategy, SchedulerRequirements};
+use crate::block::{BatchMode, Block, NextStrategy, SchedulerRequirements};
 use crate::environment::StreamEnvironmentInner;
-use crate::operator::end::EndBlock;
+use crate::operator::end::End;
 use crate::operator::iteration::IterationStateLock;
-use crate::operator::window::WindowBuilder;
+use crate::operator::source::Source;
+use crate::operator::window::WindowDescription;
 use crate::operator::DataKey;
-use crate::operator::StartBlock;
+use crate::operator::Start;
 use crate::operator::{Data, ExchangeData, KeyerFn, Operator};
 use crate::scheduler::BlockId;
-
-/// On keyed streams, this is the type of the items of the stream.
-///
-/// For now it's just a type alias, maybe downstream it can become a richer struct.
-pub type KeyValue<Key, Value> = (Key, Value);
 
 /// A Stream represents a chain of operators that work on a flow of data. The type of the elements
 /// that is leaving the stream is `Out`.
@@ -33,85 +29,56 @@ where
     OperatorChain: Operator<Out>,
 {
     /// The last block inside the stream.
-    pub(crate) block: InnerBlock<Out, OperatorChain>,
+    pub(crate) block: Block<Out, OperatorChain>,
     /// A reference to the environment this stream lives in.
     pub(crate) env: Arc<Mutex<StreamEnvironmentInner>>,
 }
 
 /// A [`KeyedStream`] is like a set of [`Stream`]s, each of which partitioned by some `Key`. Internally
-/// it's just a stream whose elements are `KeyValue` pairs and the operators behave following the
+/// it's just a stream whose elements are `(K, V)` pairs and the operators behave following the
 /// [`KeyedStream`] semantics.
 ///
 /// The type of the `Key` must be a valid key inside an hashmap.
-pub struct KeyedStream<Key: Data, Out: Data, OperatorChain>(
-    pub Stream<KeyValue<Key, Out>, OperatorChain>,
-)
+pub struct KeyedStream<Key: Data, Out: Data, OperatorChain>(pub Stream<(Key, Out), OperatorChain>)
 where
-    OperatorChain: Operator<KeyValue<Key, Out>>;
+    OperatorChain: Operator<(Key, Out)>;
 
-// /// A [`WindowedStream`] is a data stream where elements are divided in multiple groups called
-// /// windows. Internally, a [`WindowedStream`] is just a [`KeyedWindowedStream`] where each element is
-// /// assigned to the same key `()`.
-// ///
-// /// These are the windows supported out-of-the-box:
-// ///  - [`EventTimeWindow`][crate::operator::window::EventTimeWindow]
-// ///     - [`EventTimeWindow::sliding`][crate::operator::window::EventTimeWindow::sliding]
-// ///     - [`EventTimeWindow::tumbling`][crate::operator::window::EventTimeWindow::tumbling]
-// ///     - [`EventTimeWindow::session`][crate::operator::window::EventTimeWindow::session]
-// ///  - [`ProcessingTimeWindow`][crate::operator::window::ProcessingTimeWindow]
-// ///     - [`ProcessingTimeWindow::sliding`][crate::operator::window::ProcessingTimeWindow::sliding]
-// ///     - [`ProcessingTimeWindow::tumbling`][crate::operator::window::ProcessingTimeWindow::tumbling]
-// ///     - [`ProcessingTimeWindow::session`][crate::operator::window::ProcessingTimeWindow::session]
-// ///  - [`CountWindow`][crate::operator::window::CountWindow]
-// ///     - [`CountWindow::sliding`][crate::operator::window::CountWindow::sliding]
-// ///     - [`CountWindow::tumbling`][crate::operator::window::CountWindow::tumbling]
-// ///
-// /// To apply a window to a [`Stream`], see [`Stream::window_all`].
-// pub struct WindowedStream<Out: Data, OperatorChain, WinOut: Data, WinDescr>
-// where
-//     OperatorChain: Operator<KeyValue<(), Out>>,
-//     WinDescr: WindowBuilder,
-// {
-//     pub(crate) inner: KeyedWindowedStream<(), Out, OperatorChain, WinOut, WinDescr>,
-// }
-
-/// A [`KeyedWindowedStream`] is a data stream partitioned by `Key`, where elements of each partition
+/// A [`WindowedStream`] is a data stream partitioned by `Key`, where elements of each partition
 /// are divided in groups called windows.
 /// Each element can be assigned to one or multiple windows.
 ///
 /// Windows are handled independently for each partition of the stream.
 /// Each partition may be processed in parallel.
 ///
-/// The trait [`WindowDescription`] is used to specify how windows behave, that is how elements are
-/// grouped into windows.
+/// The windowing logic is implemented through 3 traits:
+/// - A [`WindowDescription`] contains the parameters and logic that characterize the windowing strategy,
+///   when given a `WindowAccumulator` it instantiates a `WindowManager`.
+/// - A [`WindowManger`](crate::operator::window::WindowManager) is the struct responsible for creating
+///   the windows and forwarding the input elements to the correct window which will should pass it to
+///   its `WindowAccumulator`.
+/// - A [`WindowAccumulator`](crate::operator::window::WindowAccumulator) contains the logic that should
+///   be applied to the elements of each window.
 ///
-/// These are the windows supported out-of-the-box:
+/// There are a set of provided window descriptions with their respective managers:
 ///  - [`EventTimeWindow`][crate::operator::window::EventTimeWindow]
-///     - [`EventTimeWindow::sliding`][crate::operator::window::EventTimeWindow::sliding]
-///     - [`EventTimeWindow::tumbling`][crate::operator::window::EventTimeWindow::tumbling]
-///     - [`EventTimeWindow::session`][crate::operator::window::EventTimeWindow::session]
 ///  - [`ProcessingTimeWindow`][crate::operator::window::ProcessingTimeWindow]
-///     - [`ProcessingTimeWindow::sliding`][crate::operator::window::ProcessingTimeWindow::sliding]
-///     - [`ProcessingTimeWindow::tumbling`][crate::operator::window::ProcessingTimeWindow::tumbling]
-///     - [`ProcessingTimeWindow::session`][crate::operator::window::ProcessingTimeWindow::session]
 ///  - [`CountWindow`][crate::operator::window::CountWindow]
-///     - [`CountWindow::sliding`][crate::operator::window::CountWindow::sliding]
-///     - [`CountWindow::tumbling`][crate::operator::window::CountWindow::tumbling]
+///  - [`SessionWindow`][crate::operator::window::SessionWindow]
+///  - [`TransactionWindow`][crate::operator::window::TransactionWindow]
 ///
-/// To apply a window to a [`KeyedStream`], see [`KeyedStream::window`].
-pub struct WindowedStream<Key: DataKey, Out: Data, OperatorChain, WinOut: Data, WinDescr>
+pub struct WindowedStream<K: DataKey, I: Data, Op, O: Data, WinDescr>
 where
-    OperatorChain: Operator<KeyValue<Key, Out>>,
-    WinDescr: WindowBuilder<Out>,
+    Op: Operator<(K, I)>,
+    WinDescr: WindowDescription<I>,
 {
-    pub(crate) inner: KeyedStream<Key, Out, OperatorChain>,
+    pub(crate) inner: KeyedStream<K, I, Op>,
     pub(crate) descr: WinDescr,
-    pub(crate) _win_out: PhantomData<WinOut>,
+    pub(crate) _win_out: PhantomData<O>,
 }
 
-impl<Out: Data, OperatorChain> Stream<Out, OperatorChain>
+impl<I: Data, Op> Stream<I, Op>
 where
-    OperatorChain: Operator<Out> + 'static,
+    Op: Operator<I> + 'static,
 {
     /// Add a new operator to the current chain inside the stream. This consumes the stream and
     /// returns a new one with the operator added.
@@ -122,21 +89,13 @@ where
     ///
     /// **Note**: this is an advanced function that manipulates the block structure. Probably it is
     /// not what you are looking for.
-    pub fn add_operator<NewOut: Data, Op, GetOp>(self, get_operator: GetOp) -> Stream<NewOut, Op>
+    pub fn add_operator<O: Data, Op2, GetOp>(self, get_operator: GetOp) -> Stream<O, Op2>
     where
-        Op: Operator<NewOut> + 'static,
-        GetOp: FnOnce(OperatorChain) -> Op,
+        Op2: Operator<O> + 'static,
+        GetOp: FnOnce(Op) -> Op2,
     {
         Stream {
-            block: InnerBlock {
-                id: self.block.id,
-                operators: get_operator(self.block.operators),
-                batch_mode: self.block.batch_mode,
-                iteration_state_lock_stack: self.block.iteration_state_lock_stack,
-                is_only_one_strategy: false,
-                scheduler_requirements: self.block.scheduler_requirements,
-                _out_type: Default::default(),
-            },
+            block: self.block.add_operator(get_operator),
             env: self.env,
         }
     }
@@ -145,38 +104,43 @@ where
     /// connected to the previous one.
     ///
     /// `get_end_operator` is used to extend the operator chain of the old block with the last
-    /// operator (e.g. `operator::EndBlock`, `operator::GroupByEndOperator`). The end operator must
+    /// operator (e.g. `operator::End`, `operator::GroupByEndOperator`). The end operator must
     /// be an `Operator<()>`.
     ///
-    /// The new block is initialized with a `StartBlock`.
-    pub(crate) fn add_block<GetEndOp, Op, IndexFn>(
+    /// The new block is initialized with a `Start`.
+    pub(crate) fn split_block<GetEndOp, Op2, IndexFn>(
         self,
         get_end_operator: GetEndOp,
-        next_strategy: NextStrategy<Out, IndexFn>,
-    ) -> Stream<Out, impl Operator<Out>>
+        next_strategy: NextStrategy<I, IndexFn>,
+    ) -> Stream<I, impl Operator<I>>
     where
-        IndexFn: KeyerFn<u64, Out>,
-        Out: ExchangeData,
-        Op: Operator<()> + 'static,
-        GetEndOp: FnOnce(OperatorChain, NextStrategy<Out, IndexFn>, BatchMode) -> Op,
+        IndexFn: KeyerFn<u64, I>,
+        I: ExchangeData,
+        Op2: Operator<()> + 'static,
+        GetEndOp: FnOnce(Op, NextStrategy<I, IndexFn>, BatchMode) -> Op2,
     {
-        let batch_mode = self.block.batch_mode;
-        let state_lock = self.block.iteration_state_lock_stack.clone();
-        let mut old_stream =
-            self.add_operator(|prev| get_end_operator(prev, next_strategy.clone(), batch_mode));
-        old_stream.block.is_only_one_strategy = matches!(next_strategy, NextStrategy::OnlyOne);
-        let mut env = old_stream.env.lock();
-        let old_id = old_stream.block.id;
-        let new_id = env.new_block_id();
-        let scheduler = env.scheduler_mut();
-        scheduler.add_block(old_stream.block);
-        scheduler.connect_blocks(old_id, new_id, TypeId::of::<Out>());
-        drop(env);
+        let Stream { block, env } = self;
+        // Clone parameters for new block
+        let batch_mode = block.batch_mode;
+        let iteration_ctx = block.iteration_ctx.clone();
+        // Add end operator
+        let mut block =
+            block.add_operator(|prev| get_end_operator(prev, next_strategy.clone(), batch_mode));
+        block.is_only_one_strategy = matches!(next_strategy, NextStrategy::OnlyOne);
 
-        let start_block = StartBlock::single(old_id, state_lock.last().cloned());
+        // Close old block
+        let mut env_lock = env.lock();
+        let prev_id = env_lock.close_block(block);
+        // Create new block
+        let source = Start::single(prev_id, iteration_ctx.last().cloned());
+        let new_block = env_lock.new_block(source, batch_mode, iteration_ctx);
+        // Connect blocks
+        env_lock.connect_blocks::<I>(prev_id, new_block.id);
+
+        drop(env_lock);
         Stream {
-            block: InnerBlock::new(new_id, start_block, batch_mode, state_lock),
-            env: old_stream.env,
+            block: new_block,
+            env,
         }
     }
 
@@ -191,112 +155,98 @@ where
     /// The start operator of the new block must support multiple inputs: the provided function
     /// will be called with the ids of the 2 input blocks and should return the new start operator
     /// of the new block.
-    pub(crate) fn add_y_connection<
-        Out2,
-        OperatorChain2,
-        NewOut,
-        StartOperator,
-        GetStartOp,
-        IndexFn1,
-        IndexFn2,
-    >(
+    pub(crate) fn binary_connection<I2, Op2, O, S, Fs, Fi, Fj>(
         self,
-        oth: Stream<Out2, OperatorChain2>,
-        get_start_operator: GetStartOp,
-        next_strategy1: NextStrategy<Out, IndexFn1>,
-        next_strategy2: NextStrategy<Out2, IndexFn2>,
-    ) -> Stream<NewOut, StartOperator>
+        oth: Stream<I2, Op2>,
+        get_start_operator: Fs,
+        next_strategy1: NextStrategy<I, Fi>,
+        next_strategy2: NextStrategy<I2, Fj>,
+    ) -> Stream<O, S>
     where
-        Out: ExchangeData,
-        Out2: ExchangeData,
-        IndexFn1: KeyerFn<u64, Out>,
-        IndexFn2: KeyerFn<u64, Out2>,
-        OperatorChain2: Operator<Out2> + 'static,
-        NewOut: Data,
-        StartOperator: Operator<NewOut>,
-        GetStartOp:
-            FnOnce(BlockId, BlockId, bool, bool, Option<Arc<IterationStateLock>>) -> StartOperator,
+        I: ExchangeData,
+        I2: ExchangeData,
+        Fi: KeyerFn<u64, I>,
+        Fj: KeyerFn<u64, I2>,
+        Op2: Operator<I2> + 'static,
+        O: Data,
+        S: Operator<O> + Source<O>,
+        Fs: FnOnce(BlockId, BlockId, bool, bool, Option<Arc<IterationStateLock>>) -> S,
     {
-        let batch_mode = self.block.batch_mode;
-        let is_only_one1 = matches!(next_strategy1, NextStrategy::OnlyOne);
-        let is_only_one2 = matches!(next_strategy2, NextStrategy::OnlyOne);
-        let scheduler_requirements1 = self.block.scheduler_requirements.clone();
-        let scheduler_requirements2 = oth.block.scheduler_requirements.clone();
-        if is_only_one1
-            && is_only_one2
-            && scheduler_requirements1.max_parallelism != scheduler_requirements2.max_parallelism
-        {
+        let Stream { block: b1, env } = self;
+        let Stream { block: b2, .. } = oth;
+
+        let batch_mode = b1.batch_mode;
+        let is_one_1 = matches!(next_strategy1, NextStrategy::OnlyOne);
+        let is_one_2 = matches!(next_strategy2, NextStrategy::OnlyOne);
+        let sched_1 = b1.scheduler_requirements.clone();
+        let sched_2 = b2.scheduler_requirements.clone();
+        if is_one_1 && is_one_2 && sched_1.replication != sched_2.replication {
             panic!(
                 "The parallelism of the 2 blocks coming inside a Y connection must be equal. \
                 On the left ({}) is {:?}, on the right ({}) is {:?}",
-                self.block,
-                scheduler_requirements1.max_parallelism,
-                oth.block,
-                scheduler_requirements2.max_parallelism
+                b1, sched_1.replication, b2, sched_2.replication
             );
         }
 
-        let iteration_stack1 = self.block.iteration_stack();
-        let iteration_stack2 = oth.block.iteration_stack();
-        let (state_lock, left_cache, right_cache) = if iteration_stack1 == iteration_stack2 {
-            (self.block.iteration_state_lock_stack.clone(), false, false)
+        let iter_ctx_1 = b1.iteration_ctx();
+        let iter_ctx_2 = b2.iteration_ctx();
+        let (iteration_ctx, left_cache, right_cache) = if iter_ctx_1 == iter_ctx_2 {
+            (b1.iteration_ctx.clone(), false, false)
         } else {
-            if !iteration_stack1.is_empty() && !iteration_stack2.is_empty() {
+            if !iter_ctx_1.is_empty() && !iter_ctx_2.is_empty() {
                 panic!("Side inputs are supported only if one of the streams is coming from outside any iteration");
             }
-            if iteration_stack1.is_empty() {
+            if iter_ctx_1.is_empty() {
                 // self is the side input, cache it
-                (oth.block.iteration_state_lock_stack.clone(), true, false)
+                (b2.iteration_ctx.clone(), true, false)
             } else {
                 // oth is the side input, cache it
-                (self.block.iteration_state_lock_stack.clone(), false, true)
+                (b1.iteration_ctx.clone(), false, true)
             }
         };
 
         // close previous blocks
-        let mut old_stream1 =
-            self.add_operator(|prev| EndBlock::new(prev, next_strategy1, batch_mode));
-        let mut old_stream2 =
-            oth.add_operator(|prev| EndBlock::new(prev, next_strategy2, batch_mode));
-        old_stream1.block.is_only_one_strategy = is_only_one1;
-        old_stream2.block.is_only_one_strategy = is_only_one2;
 
-        let mut env = old_stream1.env.lock();
-        let old_id1 = old_stream1.block.id;
-        let old_id2 = old_stream2.block.id;
-        let new_id = env.new_block_id();
+        let mut b1 = b1.add_operator(|prev| End::new(prev, next_strategy1, batch_mode));
+        let mut b2 = b2.add_operator(|prev| End::new(prev, next_strategy2, batch_mode));
+        b1.is_only_one_strategy = is_one_1;
+        b2.is_only_one_strategy = is_one_2;
 
-        // add and connect the old blocks with the new one
-        let scheduler = env.scheduler_mut();
-        scheduler.add_block(old_stream1.block);
-        scheduler.add_block(old_stream2.block);
-        scheduler.connect_blocks(old_id1, new_id, TypeId::of::<Out>());
-        scheduler.connect_blocks(old_id2, new_id, TypeId::of::<Out2>());
-        drop(env);
+        let mut env_lock = env.lock();
+        let id_1 = b1.id;
+        let id_2 = b2.id;
 
-        let mut new_stream = Stream {
-            block: InnerBlock::new(
-                new_id,
-                get_start_operator(
-                    old_id1,
-                    old_id2,
-                    left_cache,
-                    right_cache,
-                    state_lock.last().cloned(),
-                ),
-                batch_mode,
-                state_lock,
-            ),
-            env: old_stream1.env,
-        };
+        env_lock.close_block(b1);
+        env_lock.close_block(b2);
+
+        let source = get_start_operator(
+            id_1,
+            id_2,
+            left_cache,
+            right_cache,
+            iteration_ctx.last().cloned(),
+        );
+
+        let mut new_block = env_lock.new_block(source, batch_mode, iteration_ctx);
+        let id_new = new_block.id;
+
+        env_lock.connect_blocks::<I>(id_1, id_new);
+        env_lock.connect_blocks::<I2>(id_2, id_new);
+
+        drop(env_lock);
+
         // make sure the new block has the same parallelism of the previous one with OnlyOne
         // strategy
-        new_stream.block.scheduler_requirements = match (is_only_one1, is_only_one2) {
-            (true, _) => scheduler_requirements1,
-            (_, true) => scheduler_requirements2,
+        new_block.scheduler_requirements = match (is_one_1, is_one_2) {
+            (true, _) => sched_1,
+            (_, true) => sched_2,
             _ => SchedulerRequirements::default(),
         };
-        new_stream
+
+        Stream {
+            block: new_block,
+            env,
+        }
     }
 
     /// Clone the given block, taking care of connecting the new block to the same previous blocks
@@ -323,21 +273,20 @@ where
     /// and just add the last block to the scheduler.
     pub(crate) fn finalize_block(self) {
         let mut env = self.env.lock();
-        info!("Finalizing block id={}", self.block.id);
-        env.scheduler_mut().add_block(self.block);
+        env.scheduler_mut().schedule_block(self.block);
     }
 }
 
 impl<Key: DataKey, Out: Data, OperatorChain> KeyedStream<Key, Out, OperatorChain>
 where
-    OperatorChain: Operator<KeyValue<Key, Out>> + 'static,
+    OperatorChain: Operator<(Key, Out)> + 'static,
 {
     pub(crate) fn add_operator<NewOut: Data, Op, GetOp>(
         self,
         get_operator: GetOp,
     ) -> KeyedStream<Key, NewOut, Op>
     where
-        Op: Operator<KeyValue<Key, NewOut>> + 'static,
+        Op: Operator<(Key, NewOut)> + 'static,
         GetOp: FnOnce(OperatorChain) -> Op,
     {
         KeyedStream(self.0.add_operator(get_operator))

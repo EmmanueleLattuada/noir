@@ -10,7 +10,10 @@ pub use file::*;
 pub use iterator::*;
 pub use parallel_iterator::*;
 
-use crate::operator::{Data, Operator};
+use crate::{
+    block::Replication,
+    operator::{Data, Operator},
+};
 
 use super::SnapshotId;
 
@@ -25,7 +28,7 @@ mod parallel_iterator;
 /// This trait marks all the operators that can be used as sources.
 pub trait Source<Out: Data>: Operator<Out> {
     /// The maximum parallelism offered by this operator.
-    fn get_max_parallelism(&self) -> Option<usize>;
+    fn replication(&self) -> Replication;
     /// Set a function to generate snapshot marker based on readed stream items
     fn set_snapshot_frequency_by_item(&mut self, item_interval: u64);
     /// Set a function to generate snapshot marker based on specified time interval

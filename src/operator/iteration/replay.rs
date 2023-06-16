@@ -6,8 +6,8 @@ use std::sync::Arc;
 use crate::block::{BlockStructure, NextStrategy, OperatorReceiver, OperatorStructure};
 use crate::environment::StreamEnvironmentInner;
 use crate::network::{Coord, OperatorCoord};
-use crate::operator::end::EndBlock;
-use crate::operator::iteration::iteration_end::IterationEndBlock;
+use crate::operator::end::End;
+use crate::operator::iteration::iteration_end::IterationEnd;
 use crate::operator::iteration::leader::IterationLeader;
 use crate::operator::iteration::state_handler::IterationStateHandler;
 use crate::operator::iteration::{
@@ -296,7 +296,7 @@ where
         // this is required because if the iteration block is not present on all the hosts, the ones
         // without it won't receive the state updates.
         assert!(
-            self.block.scheduler_requirements.max_parallelism.is_none(),
+            self.block.scheduler_requirements.replication.is_unlimited(),
             "Cannot have an iteration block with limited parallelism"
         );
 
@@ -304,7 +304,7 @@ where
         let state_clone = state.clone();
         let env = self.env.clone();
 
-        // the id of the block where IterationEndBlock is. At this moment we cannot know it, so we
+        // the id of the block where IterationEnd is. At this moment we cannot know it, so we
         // store a fake value inside this and as soon as we know it we set it to the right value.
         let feedback_block_id = Arc::new(AtomicUsize::new(0));
 
@@ -320,8 +320,7 @@ where
         );
         let leader_block_id = output_stream.block.id;
         // the output stream is outside this loop, so it doesn't have the lock for this state
-        output_stream.block.iteration_state_lock_stack =
-            self.block.iteration_state_lock_stack.clone();
+        output_stream.block.iteration_ctx = self.block.iteration_ctx.clone();
 
         // the lock for synchronizing the access to the state of this iteration
         let state_lock = Arc::new(IterationStateLock::default());
@@ -331,27 +330,27 @@ where
         let replay_block_id = iter_start.block.id;
 
         // save the stack of the iteration for checking the stream returned by the body
-        iter_start.block.iteration_state_lock_stack.push(state_lock);
-        let pre_iter_stack = iter_start.block.iteration_stack();
+        iter_start.block.iteration_ctx.push(state_lock);
+        let pre_iter_stack = iter_start.block.iteration_ctx();
 
         let mut iter_end = body(iter_start, state_clone)
             .key_by(|_| ())
             .fold(DeltaUpdate::default(), local_fold)
             .drop_key();
 
-        let post_iter_stack = iter_end.block.iteration_stack();
+        let post_iter_stack = iter_end.block.iteration_ctx();
         if pre_iter_stack != post_iter_stack {
             panic!("The body of the iteration should return the stream given as parameter");
         }
-        iter_end.block.iteration_state_lock_stack.pop().unwrap();
+        iter_end.block.iteration_ctx.pop().unwrap();
 
-        let iter_end = iter_end.add_operator(|prev| IterationEndBlock::new(prev, leader_block_id));
+        let iter_end = iter_end.add_operator(|prev| IterationEnd::new(prev, leader_block_id));
         let iteration_end_block_id = iter_end.block.id;
 
         let mut env = iter_end.env.lock();
         let scheduler = env.scheduler_mut();
-        scheduler.add_block(iter_end.block);
-        // connect the IterationEndBlock to the IterationLeader
+        scheduler.schedule_block(iter_end.block);
+        // connect the IterationEnd to the IterationLeader
         scheduler.connect_blocks(
             iteration_end_block_id,
             leader_block_id,
@@ -364,7 +363,7 @@ where
         );
         drop(env);
 
-        // store the id of the block containing the IterationEndBlock
+        // store the id of the block containing the IterationEnd
         feedback_block_id.store(iteration_end_block_id as usize, Ordering::Release);
 
         // TODO: check parallelism and make sure the blocks are spawned on the same replicas
@@ -373,6 +372,6 @@ where
         //        is not changed by the following operators. This because the next strategy affects
         //        the connections made by the scheduler and if accidentally set to OnlyOne will
         //        break the connections.
-        output_stream.add_block(EndBlock::new, NextStrategy::random())
+        output_stream.split_block(End::new, NextStrategy::random())
     }
 }

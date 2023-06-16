@@ -9,6 +9,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::block::Replication;
 use crate::block::{BlockStructure, OperatorKind, OperatorStructure};
 use crate::network::Coord;
 use crate::network::OperatorCoord;
@@ -85,8 +86,8 @@ impl FileSource {
 }
 
 impl Source<String> for FileSource {
-    fn get_max_parallelism(&self) -> Option<usize> {
-        None
+    fn replication(&self) -> Replication {
+        Replication::Unlimited
     }
 
     fn set_snapshot_frequency_by_item(&mut self, item_interval: u64) {
@@ -178,7 +179,7 @@ impl Operator<String> for FileSource {
                 }; 
                 self.persistency_service.save_terminated_state(self.operator_coord, state);            
             }
-            log::debug!("{} emitting terminate", self.coord.unwrap());
+            log::trace!("terminate {}", self.coord.unwrap());
             return StreamElement::Terminate;
         }
         // Check snapshot generator

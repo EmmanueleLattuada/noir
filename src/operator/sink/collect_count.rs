@@ -2,12 +2,10 @@ use std::fmt::Display;
 
 use crate::block::{BlockStructure, OperatorKind, OperatorStructure};
 use crate::network::OperatorCoord;
-use crate::operator::fold::Fold;
-use crate::operator::sink::{Sink, StreamOutput, StreamOutputRef};
-use crate::operator::{Data, Operator, StreamElement};
+use crate::operator::sink::{Sink, StreamOutputRef};
+use crate::operator::{Operator, StreamElement};
 use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
-use crate::stream::Stream;
 
 #[derive(Debug)]
 pub struct CollectCountSink<PreviousOperators>
@@ -25,14 +23,14 @@ impl<PreviousOperators> CollectCountSink<PreviousOperators>
 where
     PreviousOperators: Operator<usize>,
 {
-    fn new(prev: PreviousOperators, result: usize, output:StreamOutputRef<usize>) -> Self {
+    pub (crate) fn new(prev: PreviousOperators, output:StreamOutputRef<usize>) -> Self {
         let op_id = prev.get_op_id() + 1;
         Self {
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
             persistency_service: PersistencyService::default(),
-            result,
+            result: 0,
             output,
         }
     }
@@ -122,84 +120,9 @@ where
     PreviousOperators: Operator<usize>,
 {
     fn clone(&self) -> Self {
-        panic!("CollectVecSink cannot be cloned, max_parallelism should be 1");
+        panic!("CollectVecSink cannot be cloned, replication should be 1");
     }
 }
-
-impl<Out: Data, OperatorChain> Stream<Out, OperatorChain>
-where
-    OperatorChain: Operator<Out> + 'static,
-{
-    /// Close the stream and store all the resulting items into a [`Vec`] on a single host.
-    ///
-    /// If the stream is distributed among multiple replicas, a bottleneck is placed where all the
-    /// replicas sends the items to.
-    ///
-    /// **Note**: the order of items and keys is unspecified.
-    ///
-    /// **Note**: this operator will split the current block.
-    ///
-    /// ## Example
-    ///
-    /// ```
-    /// # use noir::{StreamEnvironment, EnvironmentConfig};
-    /// # use noir::operator::source::IteratorSource;
-    /// # let mut env = StreamEnvironment::new(EnvironmentConfig::local(1));
-    /// let s = env.stream(IteratorSource::new((0..10)));
-    /// let res = s.collect_vec();
-    ///
-    /// env.execute();
-    ///
-    /// assert_eq!(res.get().unwrap(), (0..10).collect::<Vec<_>>());
-    /// ```
-    pub fn collect_count(self) -> StreamOutput<usize> {
-        let output = StreamOutputRef::default();
-        self.add_operator(|prev| Fold::new(prev, 0, |acc, _| *acc += 1))
-            .max_parallelism(1)
-            .add_operator(|prev| CollectCountSink::new(
-                prev,
-                0,
-                output.clone(),
-            ))
-            .finalize_block();
-        StreamOutput { result: output }
-    }
-}
-
-// impl<Key: ExchangeDataKey, Out: ExchangeData, OperatorChain> KeyedStream<Key, Out, OperatorChain>
-// where
-//     OperatorChain: Operator<KeyValue<Key, Out>> + 'static,
-// {
-//     /// Close the stream and store all the resulting items into a [`Vec`] on a single host.
-//     ///
-//     /// If the stream is distributed among multiple replicas, a bottleneck is placed where all the
-//     /// replicas sends the items to.
-//     ///
-//     /// **Note**: the collected items are the pairs `(key, value)`.
-//     ///
-//     /// **Note**: the order of items and keys is unspecified.
-//     ///
-//     /// **Note**: this operator will split the current block.
-//     ///
-//     /// ## Example
-//     ///
-//     /// ```
-//     /// # use noir::{StreamEnvironment, EnvironmentConfig};
-//     /// # use noir::operator::source::IteratorSource;
-//     /// # let mut env = StreamEnvironment::new(EnvironmentConfig::local(1));
-//     /// let s = env.stream(IteratorSource::new((0..3))).group_by(|&n| n % 2);
-//     /// let res = s.collect_vec();
-//     ///
-//     /// env.execute();
-//     ///
-//     /// let mut res = res.get().unwrap();
-//     /// res.sort_unstable(); // the output order is nondeterministic
-//     /// assert_eq!(res, vec![(0, 0), (0, 2), (1, 1)]);
-//     /// ```
-//     pub fn collect_count(self) -> StreamOutput<Vec<(Key, Out)>> {
-//         self.unkey().collect_vec()
-//     }
-// }
 
 #[cfg(test)]
 mod tests {
@@ -236,7 +159,7 @@ mod tests {
         fake_operator.push(StreamElement::Snapshot(SnapshotId::new(2)));
 
         let output = StreamOutputRef::default();
-        let mut collect = CollectCountSink::new(fake_operator, 0, output.clone());
+        let mut collect = CollectCountSink::new(fake_operator, output.clone());
         collect.operator_coord = OperatorCoord{
             block_id: 0,
             host_id: 0,

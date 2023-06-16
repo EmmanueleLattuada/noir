@@ -7,11 +7,11 @@ use crate::operator::sink::Sink;
 use crate::operator::{Data, DataKey, Operator, StreamElement};
 use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
-use crate::stream::{KeyValue, KeyedStream, Stream};
+use crate::stream::{KeyedStream, Stream};
 
 #[derive(Clone, Derivative)]
 #[derivative(Debug)]
-pub struct ForEachSink<Out: Data, F, PreviousOperators>
+pub struct ForEach<Out: Data, F, PreviousOperators>
 where
     F: FnMut(Out) + Send + Clone,
     PreviousOperators: Operator<Out>,
@@ -24,12 +24,12 @@ where
     _out: PhantomData<Out>,
 }
 
-impl<Out: Data, F, PreviousOperators> ForEachSink<Out, F, PreviousOperators>
+impl<Out: Data, F, PreviousOperators> ForEach<Out, F, PreviousOperators>
 where
     F: FnMut(Out) + Send + Clone,
     PreviousOperators: Operator<Out>,
 {
-    fn new(prev: PreviousOperators, f: F) -> Self {
+    pub (crate) fn new(prev: PreviousOperators, f: F) -> Self {
         let op_id = prev.get_op_id() + 1;
         Self {
             prev,
@@ -42,8 +42,7 @@ where
     }
 }
 
-
-impl<Out: Data, F, PreviousOperators> Display for ForEachSink<Out, F, PreviousOperators>
+impl<Out: Data, F, PreviousOperators> Display for ForEach<Out, F, PreviousOperators>
 where
     F: FnMut(Out) + Send + Clone,
     PreviousOperators: Operator<Out>,
@@ -53,7 +52,7 @@ where
     }
 }
 
-impl<Out: Data, F, PreviousOperators> Operator<()> for ForEachSink<Out, F, PreviousOperators>
+impl<Out: Data, F, PreviousOperators> Operator<()> for ForEach<Out, F, PreviousOperators>
 where
     F: FnMut(Out) + Send + Clone,
     PreviousOperators: Operator<Out>,
@@ -108,70 +107,21 @@ where
     }
 }
 
-impl<Out: Data, F, PreviousOperators> Sink for ForEachSink<Out, F, PreviousOperators>
+impl<Out: Data, F, PreviousOperators> Sink for ForEach<Out, F, PreviousOperators>
 where
     F: FnMut(Out) + Send + Clone,
     PreviousOperators: Operator<Out>,
 {
 }
 
-impl<Out: Data, OperatorChain> Stream<Out, OperatorChain>
-where
-    OperatorChain: Operator<Out> + 'static,
+impl<Out: Data, OperatorChain> Stream<Out, OperatorChain> where
+    OperatorChain: Operator<Out> + 'static
 {
-    /// Apply the given function to all the elements of the stream, consuming the stream.
-    ///
-    /// ## Example
-    ///
-    /// ```
-    /// # use noir::{StreamEnvironment, EnvironmentConfig};
-    /// # use noir::operator::source::IteratorSource;
-    /// # let mut env = StreamEnvironment::new(EnvironmentConfig::local(1));
-    /// let s = env.stream(IteratorSource::new((0..5)));
-    /// s.for_each(|n| println!("Item: {}", n));
-    ///
-    /// env.execute();
-    /// ```
-    pub fn for_each<F>(self, f: F)
-    where
-        F: FnMut(Out) + Send + Clone + 'static,
-    {
-        self.add_operator(|prev| ForEachSink::new(
-            prev,
-            f,
-        ))
-        .finalize_block();
-    }
 }
 
-impl<Key: DataKey, Out: Data, OperatorChain> KeyedStream<Key, Out, OperatorChain>
-where
-    OperatorChain: Operator<KeyValue<Key, Out>> + 'static,
+impl<Key: DataKey, Out: Data, OperatorChain> KeyedStream<Key, Out, OperatorChain> where
+    OperatorChain: Operator<(Key, Out)> + 'static
 {
-    /// Apply the given function to all the elements of the stream, consuming the stream.
-    ///
-    /// ## Example
-    ///
-    /// ```
-    /// # use noir::{StreamEnvironment, EnvironmentConfig};
-    /// # use noir::operator::source::IteratorSource;
-    /// # let mut env = StreamEnvironment::new(EnvironmentConfig::local(1));
-    /// let s = env.stream(IteratorSource::new((0..5))).group_by(|&n| n % 2);
-    /// s.for_each(|(key, n)| println!("Item: {} has key {}", n, key));
-    ///
-    /// env.execute();
-    /// ```
-    pub fn for_each<F>(self, f: F)
-    where
-        F: FnMut((Key, Out)) + Send + Clone + 'static,
-    {
-        self.0
-            .add_operator(|prev| ForEachSink::new(
-                prev,
-                f,
-            ))
-            .finalize_block();
-    }
 }
 
 #[cfg(test)]

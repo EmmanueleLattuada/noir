@@ -1,4 +1,4 @@
-//! Some utility structures for building the join operators.
+//! Structures for building the join operators.
 //!
 //! The actual operators are [`Stream::join`], [`Stream::left_join`], [`Stream::outer_join`] and
 //! [`Stream::join_with`].
@@ -11,7 +11,7 @@ pub use ship::{ShipBroadcastRight, ShipHash, ShipStrategy};
 
 pub use crate::operator::join::ship::{JoinStreamShipBroadcastRight, JoinStreamShipHash};
 use crate::operator::{Data, DataKey, ExchangeData, KeyerFn, Operator};
-use crate::stream::{KeyValue, KeyedStream, Stream};
+use crate::stream::{KeyedStream, Stream};
 
 use super::ExchangeDataKey;
 
@@ -119,11 +119,7 @@ where
         rhs: Stream<Out2, OperatorChain2>,
         keyer1: Keyer1,
         keyer2: Keyer2,
-    ) -> KeyedStream<
-        Key,
-        InnerJoinTuple<Out, Out2>,
-        impl Operator<KeyValue<Key, InnerJoinTuple<Out, Out2>>>,
-    >
+    ) -> KeyedStream<Key, InnerJoinTuple<Out, Out2>, impl Operator<(Key, InnerJoinTuple<Out, Out2>)>>
     where
         Key: ExchangeDataKey,
         OperatorChain2: Operator<Out2> + 'static,
@@ -171,11 +167,7 @@ where
         rhs: Stream<Out2, OperatorChain2>,
         keyer1: Keyer1,
         keyer2: Keyer2,
-    ) -> KeyedStream<
-        Key,
-        LeftJoinTuple<Out, Out2>,
-        impl Operator<KeyValue<Key, LeftJoinTuple<Out, Out2>>>,
-    >
+    ) -> KeyedStream<Key, LeftJoinTuple<Out, Out2>, impl Operator<(Key, LeftJoinTuple<Out, Out2>)>>
     where
         Key: ExchangeDataKey,
         OperatorChain2: Operator<Out2> + 'static,
@@ -224,11 +216,7 @@ where
         rhs: Stream<Out2, OperatorChain2>,
         keyer1: Keyer1,
         keyer2: Keyer2,
-    ) -> KeyedStream<
-        Key,
-        OuterJoinTuple<Out, Out2>,
-        impl Operator<KeyValue<Key, OuterJoinTuple<Out, Out2>>>,
-    >
+    ) -> KeyedStream<Key, OuterJoinTuple<Out, Out2>, impl Operator<(Key, OuterJoinTuple<Out, Out2>)>>
     where
         Key: ExchangeDataKey,
         OperatorChain2: Operator<Out2> + 'static,

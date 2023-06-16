@@ -7,7 +7,6 @@ use crate::operator::{Data, DataKey};
 use crate::operator::{Operator, StreamElement};
 use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
-use crate::stream::{KeyValue, KeyedStream, Stream};
 
 #[derive(Clone, Derivative)]
 #[derivative(Debug)]
@@ -61,7 +60,7 @@ where
     }
 }
 
-impl<Key: DataKey, Out: Data, Keyer, OperatorChain> Operator<KeyValue<Key, Out>>
+impl<Key: DataKey, Out: Data, Keyer, OperatorChain> Operator<(Key, Out)>
     for KeyBy<Key, Out, Keyer, OperatorChain>
 where
     Keyer: Fn(&Out) -> Key + Send + Clone,
@@ -80,7 +79,7 @@ where
     }
 
     #[inline]
-    fn next(&mut self) -> StreamElement<KeyValue<Key, Out>> {
+    fn next(&mut self) -> StreamElement<(Key, Out)> {
         match self.prev.next() {
             StreamElement::Item(t) => StreamElement::Item(((self.keyer)(&t), t)),
             StreamElement::Timestamped(t, ts) => {
@@ -105,51 +104,16 @@ where
     }
 
     fn structure(&self) -> BlockStructure {
-        let mut operator = OperatorStructure::new::<KeyValue<Key, Out>, _>("KeyBy");
+        let mut operator = OperatorStructure::new::<(Key, Out), _>("KeyBy");
         let op_id = self.operator_coord.operator_id;
         operator.subtitle = format!("op id: {op_id}");
         self.prev
             .structure()
             .add_operator(operator)
     }
-
+    
     fn get_op_id(&self) -> OperatorId {
         self.operator_coord.operator_id
-    }
-}
-
-impl<Out: Data, OperatorChain> Stream<Out, OperatorChain>
-where
-    OperatorChain: Operator<Out> + 'static,
-{
-    /// Construct a [`KeyedStream`] from a [`Stream`] without shuffling the data.
-    ///
-    /// **Note**: this violates the semantics of [`KeyedStream`], without sending all the values
-    /// with the same key to the same replica some of the following operators may misbehave. You
-    /// probably need to use [`Stream::group_by`] instead.
-    ///
-    /// ## Example
-    /// ```
-    /// # use noir::{StreamEnvironment, EnvironmentConfig};
-    /// # use noir::operator::source::IteratorSource;
-    /// # let mut env = StreamEnvironment::new(EnvironmentConfig::local(1));
-    /// let s = env.stream(IteratorSource::new((0..5)));
-    /// let res = s.key_by(|&n| n % 2).collect_vec();
-    ///
-    /// env.execute();
-    ///
-    /// let mut res = res.get().unwrap();
-    /// res.sort_unstable();
-    /// assert_eq!(res, vec![(0, 0), (0, 2), (0, 4), (1, 1), (1, 3)]);
-    /// ```
-    pub fn key_by<Key: DataKey, Keyer>(
-        self,
-        keyer: Keyer,
-    ) -> KeyedStream<Key, Out, impl Operator<KeyValue<Key, Out>>>
-    where
-        Keyer: Fn(&Out) -> Key + Send + Clone + 'static,
-    {
-        KeyedStream(self.add_operator(|prev| KeyBy::new(prev, keyer)))
     }
 }
 

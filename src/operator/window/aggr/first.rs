@@ -1,6 +1,6 @@
 use super::super::*;
 use crate::operator::{Data, DataKey, Operator};
-use crate::stream::{KeyValue, KeyedStream, WindowedStream};
+use crate::stream::{KeyedStream, WindowedStream};
 
 #[derive(Clone)]
 pub(crate) struct First<T>(Option<T>);
@@ -24,7 +24,7 @@ impl<T: Data> WindowAccumulator for First<T> {
 
 impl<Key, Out, WindowDescr, OperatorChain> WindowedStream<Key, Out, OperatorChain, Out, WindowDescr>
 where
-    WindowDescr: WindowBuilder,
+    WindowDescr: WindowDescription,
     OperatorChain: Operator<KeyValue<Key, Out>> + 'static,
     Key: DataKey,
     Out: Data,

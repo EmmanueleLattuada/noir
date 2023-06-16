@@ -27,7 +27,7 @@ pub mod structure;
 /// `OperatorChain` is the type of the chain of operators inside the block. It must be an operator
 /// that yields values of type `Out`.
 #[derive(Debug, Clone)]
-pub(crate) struct InnerBlock<Out: Data, OperatorChain>
+pub(crate) struct Block<Out: Data, OperatorChain>
 where
     OperatorChain: Operator<Out>,
 {
@@ -39,13 +39,35 @@ where
     pub(crate) batch_mode: BatchMode,
     /// This block may be inside a number of iteration loops, this stack keeps track of the state
     /// lock for each of them.
-    pub(crate) iteration_state_lock_stack: Vec<Arc<IterationStateLock>>,
+    pub(crate) iteration_ctx: Vec<Arc<IterationStateLock>>,
     /// Whether this block has `NextStrategy::OnlyOne`.
     pub(crate) is_only_one_strategy: bool,
     /// The set of requirements that the block imposes on the scheduler.
     pub(crate) scheduler_requirements: SchedulerRequirements,
 
     pub _out_type: PhantomData<Out>,
+}
+
+impl<Out: Data, OperatorChain> Block<Out, OperatorChain>
+where
+    OperatorChain: Operator<Out>,
+{
+    /// Add an operator to the end of the block
+    pub fn add_operator<NewOut: Data, Op, GetOp>(self, get_operator: GetOp) -> Block<NewOut, Op>
+    where
+        Op: Operator<NewOut> + 'static,
+        GetOp: FnOnce(OperatorChain) -> Op,
+    {
+        Block {
+            id: self.id,
+            operators: get_operator(self.operators),
+            batch_mode: self.batch_mode,
+            iteration_ctx: self.iteration_ctx,
+            is_only_one_strategy: false,
+            scheduler_requirements: self.scheduler_requirements,
+            _out_type: Default::default(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -55,10 +77,65 @@ pub(crate) struct SchedulerRequirements {
     /// this block as it likes.
     ///
     /// The value specified is only an upper bound, the scheduler is allowed to spawn less blocks,
-    pub(crate) max_parallelism: Option<CoordUInt>,
+    pub(crate) replication: Replication,
 }
 
-impl<Out: Data, OperatorChain> InnerBlock<Out, OperatorChain>
+/// Replication factor for a block
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
+pub enum Replication {
+    /// The number of replicas is unlimited and will be determined by the launch configuration.
+    #[default]
+    Unlimited,
+    /// The number of replicas is limited to a fixed number.
+    Limited(CoordUInt),
+    /// The number of replicas is limited to one per host.
+    Host,
+    /// The number of replicas is limited to one across all the hosts.
+    One,
+}
+
+impl Replication {
+    pub fn new_unlimited() -> Self {
+        Self::Unlimited
+    }
+
+    pub fn new_limited(size: CoordUInt) -> Self {
+        assert!(size > 0, "Replication limit must be greater than zero!");
+        Self::Limited(size)
+    }
+
+    pub fn new_host() -> Self {
+        Self::Host
+    }
+
+    pub fn new_one() -> Self {
+        Self::One
+    }
+
+    pub fn is_unlimited(&self) -> bool {
+        matches!(self, Replication::Unlimited)
+    }
+    pub fn intersect(&self, rhs: Self) -> Self {
+        match (*self, rhs) {
+            (Replication::One, _) | (_, Replication::One) => Replication::One,
+            (Replication::Host, _) | (_, Replication::Host) => Replication::Host,
+            (Replication::Limited(n), Replication::Limited(m)) => Replication::Limited(n.min(m)),
+            (Replication::Limited(n), _) | (_, Replication::Limited(n)) => Replication::Limited(n),
+            (Replication::Unlimited, Replication::Unlimited) => Replication::Unlimited,
+        }
+    }
+
+    pub(crate) fn clamp(&self, n: CoordUInt) -> CoordUInt {
+        match self {
+            Replication::Unlimited => n,
+            Replication::Limited(q) => n.min(*q),
+            Replication::Host => 1,
+            Replication::One => 1,
+        }
+    }
+}
+
+impl<Out: Data, OperatorChain> Block<Out, OperatorChain>
 where
     OperatorChain: Operator<Out>,
 {
@@ -66,13 +143,13 @@ where
         id: BlockId,
         operators: OperatorChain,
         batch_mode: BatchMode,
-        iteration_state_lock_stack: Vec<Arc<IterationStateLock>>,
+        iteration_ctx: Vec<Arc<IterationStateLock>>,
     ) -> Self {
         Self {
             id,
             operators,
             batch_mode,
-            iteration_state_lock_stack,
+            iteration_ctx,
             is_only_one_strategy: false,
             scheduler_requirements: Default::default(),
             _out_type: Default::default(),
@@ -83,15 +160,15 @@ where
     ///
     /// An empty vector is returned when the block is outside any iterations, more than one element
     /// if it's inside nested iterations.
-    pub(crate) fn iteration_stack(&self) -> Vec<*const ()> {
-        self.iteration_state_lock_stack
+    pub(crate) fn iteration_ctx(&self) -> Vec<*const ()> {
+        self.iteration_ctx
             .iter()
             .map(|s| Arc::as_ptr(s) as *const ())
             .collect()
     }
 }
 
-impl<Out: Data, OperatorChain> Display for InnerBlock<Out, OperatorChain>
+impl<Out: Data, OperatorChain> Display for Block<Out, OperatorChain>
 where
     OperatorChain: Operator<Out>,
 {
@@ -102,12 +179,8 @@ where
 
 impl SchedulerRequirements {
     /// Limit the maximum parallelism of this block.
-    pub(crate) fn max_parallelism(&mut self, max_parallelism: CoordUInt) {
-        if let Some(old) = self.max_parallelism {
-            self.max_parallelism = Some(old.min(max_parallelism));
-        } else {
-            self.max_parallelism = Some(max_parallelism);
-        }
+    pub(crate) fn replication(&mut self, replication: Replication) {
+        self.replication = self.replication.intersect(replication);
     }
 }
 

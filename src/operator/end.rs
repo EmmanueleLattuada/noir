@@ -24,7 +24,7 @@ impl BlockSenders {
 
 #[derive(Derivative)]
 #[derivative(Clone, Debug)]
-pub struct EndBlock<Out: ExchangeData, OperatorChain, IndexFn>
+pub struct End<Out: ExchangeData, OperatorChain, IndexFn>
 where
     IndexFn: KeyerFn<u64, Out>,
     OperatorChain: Operator<Out>,
@@ -43,7 +43,7 @@ where
     terminated: bool,
 }
 
-impl<Out: ExchangeData, OperatorChain, IndexFn> Display for EndBlock<Out, OperatorChain, IndexFn>
+impl<Out: ExchangeData, OperatorChain, IndexFn> Display for End<Out, OperatorChain, IndexFn>
 where
     IndexFn: KeyerFn<u64, Out>,
     OperatorChain: Operator<Out>,
@@ -57,7 +57,7 @@ where
     }
 }
 
-impl<Out: ExchangeData, OperatorChain, IndexFn> EndBlock<Out, OperatorChain, IndexFn>
+impl<Out: ExchangeData, OperatorChain, IndexFn> End<Out, OperatorChain, IndexFn>
 where
     IndexFn: KeyerFn<u64, Out>,
     OperatorChain: Operator<Out>,
@@ -113,7 +113,7 @@ where
         }
     }
 
-    /// Mark this `EndBlock` as the end of a feedback loop.
+    /// Mark this `End` as the end of a feedback loop.
     ///
     /// This will avoid this block from sending `Terminate` in the feedback loop, the destination
     /// should be already gone.
@@ -126,8 +126,7 @@ where
     }
 }
 
-impl<Out: ExchangeData, OperatorChain, IndexFn> Operator<()>
-    for EndBlock<Out, OperatorChain, IndexFn>
+impl<Out: ExchangeData, OperatorChain, IndexFn> Operator<()> for End<Out, OperatorChain, IndexFn>
 where
     IndexFn: KeyerFn<u64, Out>,
     OperatorChain: Operator<Out>,
@@ -225,7 +224,7 @@ where
             }
             StreamElement::Terminate => {
                 log::debug!(
-                    "EndBlock at {} received Terminate, closing {} channels",
+                    "{} received terminate, closing {} channels",
                     self.coord.unwrap(),
                     self.senders.len()
                 );
@@ -240,7 +239,7 @@ where
     }
 
     fn structure(&self) -> BlockStructure {
-        let mut operator = OperatorStructure::new::<Out, _>("EndBlock");
+        let mut operator = OperatorStructure::new::<Out, _>("End");
         let op_id = self.operator_coord.operator_id;
         operator.subtitle = format!("op id: {op_id}");
         for sender_group in &self.block_senders {

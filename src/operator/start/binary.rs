@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::block::{BlockStructure, OperatorReceiver, OperatorStructure};
 use crate::channel::{RecvTimeoutError, SelectResult};
 use crate::network::{Coord, NetworkMessage};
-use crate::operator::start::{SingleStartBlockReceiver, StartBlockReceiver};
+use crate::operator::start::{SimpleStartReceiver, StartReceiver};
 use crate::operator::{Data, ExchangeData, StreamElement};
 use crate::scheduler::{BlockId, ExecutionMetadata};
 
@@ -15,7 +15,7 @@ use crate::scheduler::{BlockId, ExecutionMetadata};
 /// Since those two parts are merged the information about which one ends is lost, therefore there
 /// are two extra variants to keep track of that.
 #[derive(Clone, Debug, Serialize, Deserialize, Ord, PartialOrd, Eq, PartialEq)]
-pub(crate) enum TwoSidesItem<OutL: Data, OutR: Data> {
+pub(crate) enum BinaryElement<OutL: Data, OutR: Data> {
     /// An element of the stream on the left.
     Left(OutL),
     /// An element of the stream on the right.
@@ -30,7 +30,7 @@ pub(crate) enum TwoSidesItem<OutL: Data, OutR: Data> {
 #[derive(Clone, Debug)]
 struct SideReceiver<Out: ExchangeData, Item: ExchangeData> {
     /// The internal receiver for this side.
-    receiver: SingleStartBlockReceiver<Out>,
+    receiver: SimpleStartReceiver<Out>,
     /// The number of replicas this side has.
     instances: usize,
     /// How many replicas from this side has not yet sent `StreamElement::FlushAndRestart`.
@@ -50,7 +50,7 @@ struct SideReceiver<Out: ExchangeData, Item: ExchangeData> {
 impl<Out: ExchangeData, Item: ExchangeData> SideReceiver<Out, Item> {
     fn new(previous_block_id: BlockId, cached: bool) -> Self {
         Self {
-            receiver: SingleStartBlockReceiver::new(previous_block_id),
+            receiver: SimpleStartReceiver::new(previous_block_id),
             instances: 0,
             missing_flush_and_restart: 0,
             missing_terminate: 0,
@@ -120,13 +120,13 @@ impl<Out: ExchangeData, Item: ExchangeData> SideReceiver<Out, Item> {
 /// To do so it will first select on the two channels, and wrap each element into an enumeration
 /// that discriminates the two sides.
 #[derive(Clone, Debug)]
-pub(crate) struct MultipleStartBlockReceiver<OutL: ExchangeData, OutR: ExchangeData> {
-    left: SideReceiver<OutL, TwoSidesItem<OutL, OutR>>,
-    right: SideReceiver<OutR, TwoSidesItem<OutL, OutR>>,
+pub(crate) struct BinaryStartReceiver<OutL: ExchangeData, OutR: ExchangeData> {
+    left: SideReceiver<OutL, BinaryElement<OutL, OutR>>,
+    right: SideReceiver<OutR, BinaryElement<OutL, OutR>>,
     first_message: bool,
 }
 
-impl<OutL: ExchangeData, OutR: ExchangeData> MultipleStartBlockReceiver<OutL, OutR> {
+impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
     pub(super) fn new(
         left_block_id: BlockId,
         right_block_id: BlockId,
@@ -151,11 +151,11 @@ impl<OutL: ExchangeData, OutR: ExchangeData> MultipleStartBlockReceiver<OutL, Ou
     /// `StreamElement::FlushAndRestart` messages and eventually emit the `LeftEnd`/`RightEnd`
     /// accordingly.
     fn process_side<Out: ExchangeData>(
-        side: &mut SideReceiver<Out, TwoSidesItem<OutL, OutR>>,
+        side: &mut SideReceiver<Out, BinaryElement<OutL, OutR>>,
         message: NetworkMessage<Out>,
-        wrap: fn(Out) -> TwoSidesItem<OutL, OutR>,
-        end: TwoSidesItem<OutL, OutR>,
-    ) -> NetworkMessage<TwoSidesItem<OutL, OutR>> {
+        wrap: fn(Out) -> BinaryElement<OutL, OutR>,
+        end: BinaryElement<OutL, OutR>,
+    ) -> NetworkMessage<BinaryElement<OutL, OutR>> {
         let sender = message.sender();
         let data = message
             .into_iter()
@@ -204,7 +204,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> MultipleStartBlockReceiver<OutL, Ou
     fn select(
         &mut self,
         timeout: Option<Duration>,
-    ) -> Result<NetworkMessage<TwoSidesItem<OutL, OutR>>, RecvTimeoutError> {
+    ) -> Result<NetworkMessage<BinaryElement<OutL, OutR>>, RecvTimeoutError> {
         // both sides received all the `StreamElement::Terminate`, but the cached ones have never
         // been emitted
         if self.left.is_terminated() && self.right.is_terminated() {
@@ -306,22 +306,22 @@ impl<OutL: ExchangeData, OutR: ExchangeData> MultipleStartBlockReceiver<OutL, Ou
             Side::Left(Ok(left)) => Ok(Self::process_side(
                 &mut self.left,
                 left,
-                TwoSidesItem::Left,
-                TwoSidesItem::LeftEnd,
+                BinaryElement::Left,
+                BinaryElement::LeftEnd,
             )),
             Side::Right(Ok(right)) => Ok(Self::process_side(
                 &mut self.right,
                 right,
-                TwoSidesItem::Right,
-                TwoSidesItem::RightEnd,
+                BinaryElement::Right,
+                BinaryElement::RightEnd,
             )),
             Side::Left(Err(e)) | Side::Right(Err(e)) => Err(e),
         }
     }
 }
 
-impl<OutL: ExchangeData, OutR: ExchangeData> StartBlockReceiver<TwoSidesItem<OutL, OutR>>
-    for MultipleStartBlockReceiver<OutL, OutR>
+impl<OutL: ExchangeData, OutR: ExchangeData> StartReceiver<BinaryElement<OutL, OutR>>
+    for BinaryStartReceiver<OutL, OutR>
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.left.setup(metadata);
@@ -348,16 +348,16 @@ impl<OutL: ExchangeData, OutR: ExchangeData> StartBlockReceiver<TwoSidesItem<Out
     fn recv_timeout(
         &mut self,
         timeout: Duration,
-    ) -> Result<NetworkMessage<TwoSidesItem<OutL, OutR>>, RecvTimeoutError> {
+    ) -> Result<NetworkMessage<BinaryElement<OutL, OutR>>, RecvTimeoutError> {
         self.select(Some(timeout))
     }
 
-    fn recv(&mut self) -> NetworkMessage<TwoSidesItem<OutL, OutR>> {
+    fn recv(&mut self) -> NetworkMessage<BinaryElement<OutL, OutR>> {
         self.select(None).expect("receiver failed")
     }
 
     fn structure(&self) -> BlockStructure {
-        let mut operator = OperatorStructure::new::<TwoSidesItem<OutL, OutR>, _>("StartBlock");
+        let mut operator = OperatorStructure::new::<BinaryElement<OutL, OutR>, _>("Start");
         // op id must be 0
         operator.subtitle = format!("op id: 0");
         operator.receivers.push(OperatorReceiver::new::<OutL>(
@@ -370,7 +370,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> StartBlockReceiver<TwoSidesItem<Out
         BlockStructure::default().add_operator(operator)
     }
 
-    type ReceiverState = MultipleReceiverState<TwoSidesItem<OutL, OutR>>;
+    type ReceiverState = MultipleReceiverState<BinaryElement<OutL, OutR>>;
 
     fn get_state(&self) -> Option<Self::ReceiverState> {
         let left = SideReceiverState {
@@ -448,7 +448,7 @@ mod tests {
 
     use serial_test::serial;
 
-    use crate::{network::NetworkMessage, test::{FakeNetworkTopology, REDIS_TEST_CONFIGURATION}, operator::{StartBlock, TwoSidesItem, StreamElement, Operator, SideReceiverState, MultipleReceiverState, start::{StartBlockState, watermark_frontier::WatermarkFrontier}, MultipleStartBlockReceiver, SnapshotId}, persistency::{PersistencyService, PersistencyServices}, config::PersistencyConfig};
+    use crate::{network::NetworkMessage, test::{FakeNetworkTopology, REDIS_TEST_CONFIGURATION}, operator::{Start, BinaryElement, StreamElement, Operator, SideReceiverState, MultipleReceiverState, start::{StartState, watermark_frontier::WatermarkFrontier}, BinaryStartReceiver, SnapshotId}, persistency::{PersistencyService, PersistencyServices}, config::PersistencyConfig};
 
     #[test]
     #[serial]
@@ -457,7 +457,7 @@ mod tests {
         let (from1, sender1) = t.senders_mut()[0].pop().unwrap();
         let (from2, sender2) = t.senders_mut()[1].pop().unwrap();
 
-        let mut start_block = StartBlock::<TwoSidesItem<i32, i32>, _>::multiple(
+        let mut start_block = Start::<BinaryElement<i32, i32>, _>::multiple(
             from1.block_id,
             from2.block_id,
             true,
@@ -499,9 +499,9 @@ mod tests {
             ))
             .unwrap();
 
-        assert_eq!(StreamElement::Item(TwoSidesItem::Left(1)), start_block.next());
+        assert_eq!(StreamElement::Item(BinaryElement::Left(1)), start_block.next());
         assert_eq!(StreamElement::Snapshot(SnapshotId::new(1)), start_block.next());
-        assert_eq!(StreamElement::Item(TwoSidesItem::Left(2)), start_block.next());
+        assert_eq!(StreamElement::Item(BinaryElement::Left(2)), start_block.next());
 
         sender2
             .send(NetworkMessage::new_single(
@@ -532,16 +532,16 @@ mod tests {
             .unwrap();     
 
         
-        assert_eq!(StreamElement::Item(TwoSidesItem::Right(3)), start_block.next());
-        assert_eq!(StreamElement::Item(TwoSidesItem::Right(4)), start_block.next());
-        assert_eq!(StreamElement::Item(TwoSidesItem::Right(5)), start_block.next());
+        assert_eq!(StreamElement::Item(BinaryElement::Right(3)), start_block.next());
+        assert_eq!(StreamElement::Item(BinaryElement::Right(4)), start_block.next());
+        assert_eq!(StreamElement::Item(BinaryElement::Right(5)), start_block.next());
         
-        let left_side: SideReceiverState<TwoSidesItem<i32, i32>> = SideReceiverState{
+        let left_side: SideReceiverState<BinaryElement<i32, i32>> = SideReceiverState{
             missing_flush_and_restart: 1,
             missing_terminate: 1,
             cached: true,
             cache: vec![NetworkMessage::new_single(
-                            StreamElement::Item(TwoSidesItem::Left(1)),
+                            StreamElement::Item(BinaryElement::Left(1)),
                             from1,
                         ),
                     ],
@@ -549,7 +549,7 @@ mod tests {
             cache_pointer: 1,
         };
 
-        let right_side: SideReceiverState<TwoSidesItem<i32, i32>> = SideReceiverState{
+        let right_side: SideReceiverState<BinaryElement<i32, i32>> = SideReceiverState{
             missing_flush_and_restart: 1,
             missing_terminate: 1,
             cached: false,
@@ -564,7 +564,7 @@ mod tests {
             first_message: false,
         };
 
-        let state: StartBlockState<TwoSidesItem<i32, i32>, MultipleStartBlockReceiver<i32, i32>> = StartBlockState {
+        let state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = StartState {
             missing_flush_and_restart: 2,
             missing_terminate: 2,
             wait_for_state: false,
@@ -573,18 +573,18 @@ mod tests {
             receiver_state: Some(recv_state),
             terminated_replicas: vec![],
             message_queue: VecDeque::from([
-                (from2, StreamElement::Item(TwoSidesItem::Right(3))), 
-                (from2, StreamElement::Item(TwoSidesItem::Right(4))),
+                (from2, StreamElement::Item(BinaryElement::Right(3))), 
+                (from2, StreamElement::Item(BinaryElement::Right(4))),
             ]),
         };
 
-        let retrived_state: StartBlockState<TwoSidesItem<i32, i32>, MultipleStartBlockReceiver<i32, i32>> = start_block.persistency_service.get_state(start_block.operator_coord, SnapshotId::new(1)).unwrap();
+        let retrived_state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = start_block.persistency_service.get_state(start_block.operator_coord, SnapshotId::new(1)).unwrap();
 
         assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
         assert_eq!(state.missing_terminate, retrived_state.missing_terminate);
         assert_eq!(state.wait_for_state, retrived_state.wait_for_state);
         assert_eq!(state.state_generation, retrived_state.state_generation);
-        assert_eq!(state.watermark_forntier.get_frontier(), retrived_state.watermark_forntier.get_frontier());
+        assert_eq!(state.watermark_forntier.compute_frontier(), retrived_state.watermark_forntier.compute_frontier());
         assert_eq!(state.terminated_replicas, retrived_state.terminated_replicas);
         assert_eq!(state.message_queue, retrived_state.message_queue);
         // Check receiver state
@@ -617,7 +617,7 @@ mod tests {
         let (from1, sender1) = t.senders_mut()[0].pop().unwrap();
         let (from2, sender2) = t.senders_mut()[1].pop().unwrap();
 
-        let mut start_block = StartBlock::<TwoSidesItem<i32, i32>, _>::multiple(
+        let mut start_block = Start::<BinaryElement<i32, i32>, _>::multiple(
             from1.block_id,
             from2.block_id,
             true,
@@ -673,11 +673,11 @@ mod tests {
             ))
             .unwrap();
 
-        assert_eq!(StreamElement::Item(TwoSidesItem::Left(1)), start_block.next());
+        assert_eq!(StreamElement::Item(BinaryElement::Left(1)), start_block.next());
         assert_eq!(StreamElement::Snapshot(SnapshotId::new(1)), start_block.next());
-        assert_eq!(StreamElement::Item(TwoSidesItem::Left(2)), start_block.next());
+        assert_eq!(StreamElement::Item(BinaryElement::Left(2)), start_block.next());
         assert_eq!(StreamElement::Snapshot(SnapshotId::new(2)), start_block.next());
-        assert_eq!(StreamElement::Item(TwoSidesItem::Left(3)), start_block.next());
+        assert_eq!(StreamElement::Item(BinaryElement::Left(3)), start_block.next());
 
         sender2
             .send(NetworkMessage::new_single(
@@ -722,17 +722,17 @@ mod tests {
             .unwrap();    
 
         
-        assert_eq!(StreamElement::Item(TwoSidesItem::Right(5)), start_block.next());
-        assert_eq!(StreamElement::Item(TwoSidesItem::Right(6)), start_block.next());
-        assert_eq!(StreamElement::Item(TwoSidesItem::Right(7)), start_block.next());
+        assert_eq!(StreamElement::Item(BinaryElement::Right(5)), start_block.next());
+        assert_eq!(StreamElement::Item(BinaryElement::Right(6)), start_block.next());
+        assert_eq!(StreamElement::Item(BinaryElement::Right(7)), start_block.next());
         
         
-        let left_side: SideReceiverState<TwoSidesItem<i32, i32>> = SideReceiverState{
+        let left_side: SideReceiverState<BinaryElement<i32, i32>> = SideReceiverState{
             missing_flush_and_restart: 1,
             missing_terminate: 1,
             cached: true,
             cache: vec![NetworkMessage::new_single(
-                            StreamElement::Item(TwoSidesItem::Left(1)),
+                            StreamElement::Item(BinaryElement::Left(1)),
                             from1,
                         ),
                     ],
@@ -740,7 +740,7 @@ mod tests {
             cache_pointer: 1,
         };
 
-        let right_side: SideReceiverState<TwoSidesItem<i32, i32>> = SideReceiverState{
+        let right_side: SideReceiverState<BinaryElement<i32, i32>> = SideReceiverState{
             missing_flush_and_restart: 1,
             missing_terminate: 1,
             cached: false,
@@ -755,7 +755,7 @@ mod tests {
             first_message: false,
         };
 
-        let state: StartBlockState<TwoSidesItem<i32, i32>, MultipleStartBlockReceiver<i32, i32>> = StartBlockState {
+        let state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = StartState {
             missing_flush_and_restart: 2,
             missing_terminate: 2,
             wait_for_state: false,
@@ -764,12 +764,12 @@ mod tests {
             receiver_state: Some(recv_state),
             terminated_replicas: vec![],
             message_queue: VecDeque::from([
-                (from2, StreamElement::Item(TwoSidesItem::Right(5))), 
-                (from2, StreamElement::Item(TwoSidesItem::Right(6))),
+                (from2, StreamElement::Item(BinaryElement::Right(5))), 
+                (from2, StreamElement::Item(BinaryElement::Right(6))),
             ]),
         };
 
-        let retrived_state: StartBlockState<TwoSidesItem<i32, i32>, MultipleStartBlockReceiver<i32, i32>> = start_block.persistency_service.get_state(start_block.operator_coord, SnapshotId::new(1)).unwrap();
+        let retrived_state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = start_block.persistency_service.get_state(start_block.operator_coord, SnapshotId::new(1)).unwrap();
 
         assert_eq!(state.message_queue, retrived_state.message_queue);
         // Check receiver state
@@ -781,19 +781,19 @@ mod tests {
         assert_eq!(receiver.right.cache_pointer, retrived_receiver.right.cache_pointer);
         assert_eq!(receiver.right.cache, retrived_receiver.right.cache);
 
-        assert_eq!(StreamElement::Item(TwoSidesItem::Right(8)), start_block.next());
+        assert_eq!(StreamElement::Item(BinaryElement::Right(8)), start_block.next());
         
         
-        let left_side: SideReceiverState<TwoSidesItem<i32, i32>> = SideReceiverState{
+        let left_side: SideReceiverState<BinaryElement<i32, i32>> = SideReceiverState{
             missing_flush_and_restart: 1,
             missing_terminate: 1,
             cached: true,
             cache: vec![NetworkMessage::new_single(
-                            StreamElement::Item(TwoSidesItem::Left(1)),
+                            StreamElement::Item(BinaryElement::Left(1)),
                             from1,
                         ),
                         NetworkMessage::new_single(
-                            StreamElement::Item(TwoSidesItem::Left(2)),
+                            StreamElement::Item(BinaryElement::Left(2)),
                             from1,
                         ),
                     ],
@@ -801,7 +801,7 @@ mod tests {
             cache_pointer: 2,
         };
 
-        let right_side: SideReceiverState<TwoSidesItem<i32, i32>> = SideReceiverState{
+        let right_side: SideReceiverState<BinaryElement<i32, i32>> = SideReceiverState{
             missing_flush_and_restart: 1,
             missing_terminate: 1,
             cached: false,
@@ -816,7 +816,7 @@ mod tests {
             first_message: false,
         };
 
-        let state: StartBlockState<TwoSidesItem<i32, i32>, MultipleStartBlockReceiver<i32, i32>> = StartBlockState {
+        let state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = StartState {
             missing_flush_and_restart: 2,
             missing_terminate: 2,
             wait_for_state: false,
@@ -825,13 +825,13 @@ mod tests {
             receiver_state: Some(recv_state),
             terminated_replicas: vec![],
             message_queue: VecDeque::from([
-                (from2, StreamElement::Item(TwoSidesItem::Right(5))),
-                (from2, StreamElement::Item(TwoSidesItem::Right(6))),
-                (from2, StreamElement::Item(TwoSidesItem::Right(7))),
+                (from2, StreamElement::Item(BinaryElement::Right(5))),
+                (from2, StreamElement::Item(BinaryElement::Right(6))),
+                (from2, StreamElement::Item(BinaryElement::Right(7))),
             ]),
         };
 
-        let retrived_state: StartBlockState<TwoSidesItem<i32, i32>, MultipleStartBlockReceiver<i32, i32>> = start_block.persistency_service.get_state(start_block.operator_coord, SnapshotId::new(2)).unwrap();
+        let retrived_state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = start_block.persistency_service.get_state(start_block.operator_coord, SnapshotId::new(2)).unwrap();
 
         assert_eq!(state.message_queue, retrived_state.message_queue);
         // Check receiver state
@@ -857,7 +857,7 @@ mod tests {
         let (from1, sender1) = t.senders_mut()[0].pop().unwrap();
         let (from2, sender2) = t.senders_mut()[1].pop().unwrap();
 
-        let mut start_block = StartBlock::<TwoSidesItem<i32, i32>, _>::multiple(
+        let mut start_block = Start::<BinaryElement<i32, i32>, _>::multiple(
             from1.block_id,
             from2.block_id,
             true,
@@ -893,12 +893,12 @@ mod tests {
             ))
             .unwrap();
 
-        assert_eq!(StreamElement::Item(TwoSidesItem::Left(1)), start_block.next());
+        assert_eq!(StreamElement::Item(BinaryElement::Left(1)), start_block.next());
         assert_eq!(StreamElement::Snapshot(SnapshotId::new(1)), start_block.next());
-        assert_eq!(StreamElement::Item(TwoSidesItem::Left(2)), start_block.next());
+        assert_eq!(StreamElement::Item(BinaryElement::Left(2)), start_block.next());
         assert_eq!(StreamElement::Snapshot(SnapshotId::new(2)), start_block.next());
-        assert_eq!(StreamElement::Item(TwoSidesItem::Left(3)), start_block.next());
-        assert_eq!(StreamElement::Item(TwoSidesItem::LeftEnd), start_block.next());
+        assert_eq!(StreamElement::Item(BinaryElement::Left(3)), start_block.next());
+        assert_eq!(StreamElement::Item(BinaryElement::LeftEnd), start_block.next());
 
         sender2
             .send(NetworkMessage::new_batch(
@@ -914,20 +914,20 @@ mod tests {
             .unwrap();    
 
         
-        assert_eq!(StreamElement::Item(TwoSidesItem::Right(5)), start_block.next());
-        assert_eq!(StreamElement::Item(TwoSidesItem::Right(6)), start_block.next());
-        assert_eq!(StreamElement::Item(TwoSidesItem::RightEnd), start_block.next());
+        assert_eq!(StreamElement::Item(BinaryElement::Right(5)), start_block.next());
+        assert_eq!(StreamElement::Item(BinaryElement::Right(6)), start_block.next());
+        assert_eq!(StreamElement::Item(BinaryElement::RightEnd), start_block.next());
                
         
-        let left_side: SideReceiverState<TwoSidesItem<i32, i32>> = SideReceiverState{
+        let left_side: SideReceiverState<BinaryElement<i32, i32>> = SideReceiverState{
             missing_flush_and_restart: 0,
             missing_terminate: 0,
             cached: true,
             cache: vec![NetworkMessage::new_batch( vec![
-                            StreamElement::Item(TwoSidesItem::Left(1)),
-                            StreamElement::Item(TwoSidesItem::Left(2)),
-                            StreamElement::Item(TwoSidesItem::Left(3)),
-                            StreamElement::Item(TwoSidesItem::LeftEnd),
+                            StreamElement::Item(BinaryElement::Left(1)),
+                            StreamElement::Item(BinaryElement::Left(2)),
+                            StreamElement::Item(BinaryElement::Left(3)),
+                            StreamElement::Item(BinaryElement::LeftEnd),
                             StreamElement::FlushAndRestart
                             ],
                             from1,
@@ -937,7 +937,7 @@ mod tests {
             cache_pointer: 1,
         };
 
-        let right_side: SideReceiverState<TwoSidesItem<i32, i32>> = SideReceiverState{
+        let right_side: SideReceiverState<BinaryElement<i32, i32>> = SideReceiverState{
             missing_flush_and_restart: 1,
             missing_terminate: 1,
             cached: false,
@@ -952,7 +952,7 @@ mod tests {
             first_message: false,
         };
 
-        let state: StartBlockState<TwoSidesItem<i32, i32>, MultipleStartBlockReceiver<i32, i32>> = StartBlockState {
+        let state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = StartState {
             missing_flush_and_restart: 1,
             missing_terminate: 2,
             wait_for_state: false,
@@ -961,12 +961,12 @@ mod tests {
             receiver_state: Some(recv_state),
             terminated_replicas: vec![],
             message_queue: VecDeque::from([
-                (from2, StreamElement::Item(TwoSidesItem::Right(5))),
-                (from2, StreamElement::Item(TwoSidesItem::Right(6))),
+                (from2, StreamElement::Item(BinaryElement::Right(5))),
+                (from2, StreamElement::Item(BinaryElement::Right(6))),
             ]),
         };
 
-        let retrived_state: StartBlockState<TwoSidesItem<i32, i32>, MultipleStartBlockReceiver<i32, i32>> = start_block.persistency_service.get_state(start_block.operator_coord, SnapshotId::new(2)).unwrap();
+        let retrived_state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = start_block.persistency_service.get_state(start_block.operator_coord, SnapshotId::new(2)).unwrap();
 
         assert_eq!(state.terminated_replicas, retrived_state.terminated_replicas);
         assert_eq!(state.message_queue, retrived_state.message_queue);
@@ -990,21 +990,21 @@ mod tests {
             .unwrap(); 
         
         assert_eq!(StreamElement::Snapshot(SnapshotId::new(3)), start_block.next());
-        assert_eq!(StreamElement::Item(TwoSidesItem::Left(1)), start_block.next());
+        assert_eq!(StreamElement::Item(BinaryElement::Left(1)), start_block.next());
         
 
         // Extract manually the state
         let retrived_state = start_block.on_going_snapshots.get(&SnapshotId::new(3)).unwrap().clone().0;
         
-        let left_side: SideReceiverState<TwoSidesItem<i32, i32>> = SideReceiverState{
+        let left_side: SideReceiverState<BinaryElement<i32, i32>> = SideReceiverState{
             missing_flush_and_restart: 1,
             missing_terminate: 0,
             cached: true,
             cache: vec![NetworkMessage::new_batch(vec![
-                            StreamElement::Item(TwoSidesItem::Left(1)),
-                            StreamElement::Item(TwoSidesItem::Left(2)),
-                            StreamElement::Item(TwoSidesItem::Left(3)),
-                            StreamElement::Item(TwoSidesItem::LeftEnd),
+                            StreamElement::Item(BinaryElement::Left(1)),
+                            StreamElement::Item(BinaryElement::Left(2)),
+                            StreamElement::Item(BinaryElement::Left(3)),
+                            StreamElement::Item(BinaryElement::LeftEnd),
                             StreamElement::FlushAndRestart
                             ],
                             from1,
@@ -1014,7 +1014,7 @@ mod tests {
             cache_pointer: 0,
         };
 
-        let right_side: SideReceiverState<TwoSidesItem<i32, i32>> = SideReceiverState{
+        let right_side: SideReceiverState<BinaryElement<i32, i32>> = SideReceiverState{
             missing_flush_and_restart: 1,
             missing_terminate: 1,
             cached: false,
@@ -1029,7 +1029,7 @@ mod tests {
             first_message: false,
         };
 
-        let state: StartBlockState<TwoSidesItem<i32, i32>, MultipleStartBlockReceiver<i32, i32>> = StartBlockState {
+        let state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = StartState {
             missing_flush_and_restart: 2,
             missing_terminate: 2,
             wait_for_state: true,
@@ -1038,7 +1038,7 @@ mod tests {
             receiver_state: Some(recv_state),
             terminated_replicas: vec![],
             message_queue: VecDeque::from([
-                (from1, StreamElement::Item(TwoSidesItem::Left(1))),
+                (from1, StreamElement::Item(BinaryElement::Left(1))),
             ]),
         };
 
@@ -1046,7 +1046,7 @@ mod tests {
         assert_eq!(state.missing_terminate, retrived_state.missing_terminate);
         assert_eq!(state.wait_for_state, retrived_state.wait_for_state);
         assert_eq!(state.state_generation, retrived_state.state_generation);
-        assert_eq!(state.watermark_forntier.get_frontier(), retrived_state.watermark_forntier.get_frontier());
+        assert_eq!(state.watermark_forntier.compute_frontier(), retrived_state.watermark_forntier.compute_frontier());
         assert_eq!(state.terminated_replicas, retrived_state.terminated_replicas);
         assert_eq!(state.message_queue, retrived_state.message_queue);
         // Check receiver state

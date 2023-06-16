@@ -141,6 +141,7 @@ where
     }
 }
 
+/// Window of fixed count of elements
 #[derive(Clone)]
 pub struct CountWindow {
     pub size: usize,
@@ -183,7 +184,7 @@ impl CountWindow {
     }
 }
 
-impl<T: Data> WindowBuilder<T> for CountWindow {
+impl<T: Data> WindowDescription<T> for CountWindow {
     type Manager<A: WindowAccumulator<In = T>> = CountWindowManager<A>;
 
     #[inline]

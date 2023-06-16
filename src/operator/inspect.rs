@@ -3,10 +3,9 @@ use std::marker::PhantomData;
 
 use crate::block::{BlockStructure, OperatorStructure};
 use crate::network::OperatorCoord;
-use crate::operator::{Data, DataKey, Operator, StreamElement};
+use crate::operator::{Data, Operator, StreamElement};
 use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
-use crate::stream::{KeyValue, KeyedStream, Stream};
 
 #[derive(Clone, Derivative)]
 #[derivative(Debug)]
@@ -28,7 +27,7 @@ where
     F: FnMut(&Out) + Send + Clone,
     PreviousOperators: Operator<Out>,
 {
-    fn new(prev: PreviousOperators, f: F) -> Self {
+    pub fn new(prev: PreviousOperators, f: F) -> Self {
         let op_id = prev.get_op_id() + 1;
         Self {
             prev,
@@ -37,7 +36,7 @@ where
 
             f,
             persistency_service: PersistencyService::default(),
-            _out: Default::default(),
+            _out: PhantomData,
         }
     }
 }
@@ -101,68 +100,5 @@ where
 
     fn get_op_id(&self) -> OperatorId {
         self.operator_coord.operator_id
-    }
-}
-
-impl<Out: Data, OperatorChain> Stream<Out, OperatorChain>
-where
-    OperatorChain: Operator<Out> + 'static,
-{
-    /// Apply the given function to all the elements of the stream, consuming the stream.
-    ///
-    /// ## Example
-    ///
-    /// ```
-    /// # use noir::{StreamEnvironment, EnvironmentConfig};
-    /// # use noir::operator::source::IteratorSource;
-    /// # let mut env = StreamEnvironment::new(EnvironmentConfig::local(1));
-    /// let s = env.stream(IteratorSource::new((0..5)));
-    /// s.inspect(|n| println!("Item: {}", n)).for_each(std::mem::drop);
-    ///
-    /// env.execute();
-    /// ```
-    pub fn inspect<F>(self, f: F) -> Stream<Out, impl Operator<Out>>
-    where
-        F: FnMut(&Out) + Send + Clone + 'static,
-    {
-        /*
-        self.add_operator(|prev| Inspect {
-            prev,
-            op_id: prev.get_op_id() + 1,
-            f,
-            _out: Default::default(),
-        })*/
-        self.add_operator(|prev| Inspect::new(prev, f))
-    }
-}
-
-impl<Key: DataKey, Out: Data, OperatorChain> KeyedStream<Key, Out, OperatorChain>
-where
-    OperatorChain: Operator<KeyValue<Key, Out>> + 'static,
-{
-    /// Apply the given function to all the elements of the stream, consuming the stream.
-    ///
-    /// ## Example
-    ///
-    /// ```
-    /// # use noir::{StreamEnvironment, EnvironmentConfig};
-    /// # use noir::operator::source::IteratorSource;
-    /// # let mut env = StreamEnvironment::new(EnvironmentConfig::local(1));
-    /// let s = env.stream(IteratorSource::new((0..5))).group_by(|&n| n % 2);
-    /// s.inspect(|(key, n)| println!("Item: {} has key {}", n, key)).for_each(std::mem::drop);
-    ///
-    /// env.execute();
-    /// ```
-    pub fn inspect<F>(self, f: F) -> KeyedStream<Key, Out, impl Operator<KeyValue<Key, Out>>>
-    where
-        F: FnMut(&(Key, Out)) + Send + Clone + 'static,
-    {
-        /*self.add_operator(|prev| Inspect {
-            prev,
-            op_id: prev.get_op_id() + 1,
-            f,
-            _out: Default::default(),
-        })*/
-        self.add_operator(|prev| Inspect::new(prev, f))
     }
 }

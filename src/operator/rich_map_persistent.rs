@@ -7,15 +7,15 @@ use crate::network::OperatorCoord;
 use crate::operator::{Data, Operator, StreamElement};
 use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
-use crate::stream::{KeyValue, KeyedStream, Stream};
+use crate::stream::{KeyedStream, Stream};
 
 use super::{ExchangeData, ExchangeDataKey};
 
 #[derive(Debug)]
 struct RichMapPersistent<Key: ExchangeDataKey, Out: Data, NewOut: Data, F, State: ExchangeData, OperatorChain>
 where
-    F: Fn(KeyValue<&Key, Out>, &mut State) -> NewOut + Send + Clone,
-    OperatorChain: Operator<KeyValue<Key, Out>>,
+    F: Fn((&Key, Out), &mut State) -> NewOut + Send + Clone,
+    OperatorChain: Operator<(Key, Out)>,
 {
     prev: OperatorChain,
     operator_coord: OperatorCoord,
@@ -30,8 +30,8 @@ where
 impl<Key: ExchangeDataKey, Out: Data, NewOut: Data, F: Clone, State: ExchangeData, OperatorChain: Clone> Clone
     for RichMapPersistent<Key, Out, NewOut, F, State, OperatorChain>
 where
-    F: Fn(KeyValue<&Key, Out>, &mut State) -> NewOut + Send + Clone,
-    OperatorChain: Operator<KeyValue<Key, Out>>,
+    F: Fn((&Key, Out), &mut State) -> NewOut + Send + Clone,
+    OperatorChain: Operator<(Key, Out)>,
 {
     fn clone(&self) -> Self {
         Self {
@@ -50,8 +50,8 @@ where
 impl<Key: ExchangeDataKey, Out: Data, NewOut: Data, F, State: ExchangeData, OperatorChain> Display
     for RichMapPersistent<Key, Out, NewOut, F, State, OperatorChain>
 where
-    F: Fn(KeyValue<&Key, Out>, &mut State) -> NewOut + Send + Clone,
-    OperatorChain: Operator<KeyValue<Key, Out>>,
+    F: Fn((&Key, Out), &mut State) -> NewOut + Send + Clone,
+    OperatorChain: Operator<(Key, Out)>,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -67,8 +67,8 @@ where
 impl<Key: ExchangeDataKey, Out: Data, NewOut: Data, F, State: ExchangeData, OperatorChain>
     RichMapPersistent<Key, Out, NewOut, F, State, OperatorChain>
 where
-    F: Fn(KeyValue<&Key, Out>, &mut State) -> NewOut + Send + Clone,
-    OperatorChain: Operator<KeyValue<Key, Out>>,
+    F: Fn((&Key, Out), &mut State) -> NewOut + Send + Clone,
+    OperatorChain: Operator<(Key, Out)>,
 {
     fn new(prev: OperatorChain, f: F, state: State) -> Self {
         let op_id = prev.get_op_id() + 1;
@@ -88,11 +88,11 @@ where
     }
 }
 
-impl<Key: ExchangeDataKey, Out: Data, NewOut: Data, F, State: ExchangeData, OperatorChain> Operator<KeyValue<Key, NewOut>>
+impl<Key: ExchangeDataKey, Out: Data, NewOut: Data, F, State: ExchangeData, OperatorChain> Operator<(Key, NewOut)>
     for RichMapPersistent<Key, Out, NewOut, F, State, OperatorChain>
 where
-    F: Fn(KeyValue<&Key, Out>, &mut State) -> NewOut + Send + Clone,
-    OperatorChain: Operator<KeyValue<Key, Out>>,
+    F: Fn((&Key, Out), &mut State) -> NewOut + Send + Clone,
+    OperatorChain: Operator<(Key, Out)>,
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
@@ -250,7 +250,7 @@ where
 
 impl<Key: ExchangeDataKey, Out: Data, OperatorChain> KeyedStream<Key, Out, OperatorChain>
 where
-    OperatorChain: Operator<KeyValue<Key, Out>> + 'static,
+    OperatorChain: Operator<(Key, Out)> + 'static,
 {
     /// Map the elements of the stream into new elements. 
     /// 
@@ -263,9 +263,9 @@ where
         self,
         state: State,
         f: F,
-    ) -> KeyedStream<Key, NewOut, impl Operator<KeyValue<Key, NewOut>>>
+    ) -> KeyedStream<Key, NewOut, impl Operator<(Key, NewOut)>>
     where
-        F: Fn(KeyValue<&Key, Out>, &mut State) -> NewOut + Send + Clone + 'static,
+        F: Fn((&Key, Out), &mut State) -> NewOut + Send + Clone + 'static,
     {
         self.add_operator(|prev| RichMapPersistent::new(prev, f, state))
     }

@@ -6,12 +6,10 @@ use serde::{Serialize, Deserialize};
 
 use crate::block::{BlockStructure, OperatorStructure};
 use crate::network::OperatorCoord;
-use crate::operator::{Operator, StreamElement, Timestamp};
+use crate::operator::{ExchangeData, Operator, StreamElement, Timestamp};
 use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
-use crate::{KeyValue, KeyedStream, Stream};
 
-use super::{ExchangeData, ExchangeDataKey};
 
 #[derive(Clone, Serialize, Deserialize)]
 struct TimestampedItem<Out> {
@@ -188,31 +186,6 @@ where
 
     fn get_op_id(&self) -> OperatorId {
         self.operator_coord.operator_id
-    }
-}
-
-impl<Key: ExchangeDataKey, Out, OperatorChain> KeyedStream<Key, Out, OperatorChain>
-where
-    Key: ExchangeDataKey,
-    OperatorChain: Operator<KeyValue<Key, Out>> + 'static,
-    Out: ExchangeData + Clone,
-{
-    /// # TODO
-    /// Reorder timestamped items
-    pub fn reorder(self) -> KeyedStream<Key, Out, impl Operator<KeyValue<Key, Out>>> {
-        self.add_operator(|prev| Reorder::new(prev))
-    }
-}
-
-impl<Out, OperatorChain> Stream<Out, OperatorChain>
-where
-    OperatorChain: Operator<Out> + 'static,
-    Out: ExchangeData + Clone,
-{
-    /// # TODO
-    /// Reorder timestamped items
-    pub fn reorder(self) -> Stream<Out, impl Operator<Out>> {
-        self.add_operator(|prev| Reorder::new(prev))
     }
 }
 

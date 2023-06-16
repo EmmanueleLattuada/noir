@@ -193,7 +193,7 @@ impl Display for Coord {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Coord[b{}, h{}, r{}]",
+            "(b{:02}.h{:02}.r{:02})",
             self.block_id, self.host_id, self.replica_id
         )
     }
@@ -211,7 +211,7 @@ impl Display for OperatorCoord {
 
 impl Display for BlockCoord {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "BlockCoord[b{}, h{}]", self.block_id, self.host_id)
+        write!(f, "(b{:02}.h{:02})", self.block_id, self.host_id)
     }
 }
 
@@ -219,15 +219,15 @@ impl Display for ReceiverEndpoint {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "ReceiverEndpoint[{}, prev {}]",
-            self.coord, self.prev_block_id
+            "Endpoint{{(b{:02}) -> {}}}",
+            self.prev_block_id, self.coord
         )
     }
 }
 
 impl Display for DemuxCoord {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DemuxCoord[{}, prev {}]", self.coord, self.prev_block_id)
+        write!(f, "Demux{{(b{:02}) -> {}}}", self.prev_block_id, self.coord)
     }
 }
 

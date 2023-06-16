@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 
 use crate::operator::Operator;
-use crate::stream::{KeyValue, KeyedStream, WindowedStream};
+use crate::stream::{KeyedStream, WindowedStream};
 
 use super::super::*;
 
@@ -108,8 +108,8 @@ where
 
 impl<Key, Out, WindowDescr, OperatorChain> WindowedStream<Key, Out, OperatorChain, Out, WindowDescr>
 where
-    WindowDescr: WindowBuilder<Out>,
-    OperatorChain: Operator<KeyValue<Key, Out>> + 'static,
+    WindowDescr: WindowDescription<Out>,
+    OperatorChain: Operator<(Key, Out)> + 'static,
     Key: ExchangeDataKey,
     Out: ExchangeData,
 {
@@ -145,7 +145,7 @@ where
         self,
         init: NewOut,
         fold: F,
-    ) -> KeyedStream<Key, NewOut, impl Operator<KeyValue<Key, NewOut>>>
+    ) -> KeyedStream<Key, NewOut, impl Operator<(Key, NewOut)>>
     where
         F: FnMut(&mut NewOut, Out) + Clone + Send + 'static,
     {
@@ -157,7 +157,7 @@ where
     ///
     /// TODO DOCS
     ///
-    pub fn fold_first<F>(self, fold: F) -> KeyedStream<Key, Out, impl Operator<KeyValue<Key, Out>>>
+    pub fn fold_first<F>(self, fold: F) -> KeyedStream<Key, Out, impl Operator<(Key, Out)>>
     where
         F: FnMut(&mut Out, Out) + Clone + Send + 'static,
     {

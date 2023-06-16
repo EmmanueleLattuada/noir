@@ -1,6 +1,6 @@
 use super::super::*;
 use crate::operator::{ExchangeData, ExchangeDataKey, Operator};
-use crate::stream::{KeyValue, KeyedStream, WindowedStream};
+use crate::stream::{KeyedStream, WindowedStream};
 
 #[derive(Clone)]
 pub(crate) struct First<T>(Option<T>);
@@ -63,12 +63,12 @@ impl<T: ExchangeData> WindowAccumulator for Last<T> {
 
 impl<Key, Out, WindowDescr, OperatorChain> WindowedStream<Key, Out, OperatorChain, Out, WindowDescr>
 where
-    WindowDescr: WindowBuilder<Out>,
-    OperatorChain: Operator<KeyValue<Key, Out>> + 'static,
+    WindowDescr: WindowDescription<Out>,
+    OperatorChain: Operator<(Key, Out)> + 'static,
     Key: ExchangeDataKey,
     Out: ExchangeData,
 {
-    pub fn first(self) -> KeyedStream<Key, Out, impl Operator<KeyValue<Key, Out>>> {
+    pub fn first(self) -> KeyedStream<Key, Out, impl Operator<(Key, Out)>> {
         let acc = First(None);
         self.add_window_operator("WindowFirst", acc)
     }
@@ -76,12 +76,12 @@ where
 
 impl<Key, Out, WindowDescr, OperatorChain> WindowedStream<Key, Out, OperatorChain, Out, WindowDescr>
 where
-    WindowDescr: WindowBuilder<Out>,
-    OperatorChain: Operator<KeyValue<Key, Out>> + 'static,
+    WindowDescr: WindowDescription<Out>,
+    OperatorChain: Operator<(Key, Out)> + 'static,
     Key: ExchangeDataKey,
     Out: ExchangeData,
 {
-    pub fn last(self) -> KeyedStream<Key, Out, impl Operator<KeyValue<Key, Out>>> {
+    pub fn last(self) -> KeyedStream<Key, Out, impl Operator<(Key, Out)>> {
         let acc = Last(None);
         self.add_window_operator("WindowLast", acc)
     }

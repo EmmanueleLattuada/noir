@@ -5,10 +5,9 @@ use serde::{Serialize, Deserialize};
 
 use crate::block::{BlockStructure, OperatorStructure};
 use crate::network::OperatorCoord;
-use crate::operator::{Data, DataKey, Operator, StreamElement, Timestamp};
+use crate::operator::{Data, Operator, StreamElement, Timestamp};
 use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
-use crate::stream::{KeyValue, KeyedStream, Stream};
 
 #[derive(Clone)]
 pub struct AddTimestamp<Out: Data, TimestampGen, WatermarkGen, OperatorChain>
@@ -51,7 +50,11 @@ where
     TimestampGen: FnMut(&Out) -> Timestamp + Clone + Send + 'static,
     WatermarkGen: FnMut(&Out, &Timestamp) -> Option<Timestamp> + Clone + Send + 'static,
 {
-    fn new(prev: OperatorChain, timestamp_gen: TimestampGen, watermark_gen: WatermarkGen) -> Self {
+    pub(super) fn new(
+        prev: OperatorChain,
+        timestamp_gen: TimestampGen,
+        watermark_gen: WatermarkGen,
+    ) -> Self {
         let op_id = prev.get_op_id() + 1;
         Self {
             prev,
@@ -167,7 +170,7 @@ impl<Out: Data, OperatorChain> DropTimestamp<Out, OperatorChain>
 where
     OperatorChain: Operator<Out>,
 {
-    fn new(prev: OperatorChain) -> Self {
+    pub (super) fn new(prev: OperatorChain) -> Self {
         let op_id = prev.get_op_id() + 1;
         Self {
             prev,
@@ -229,109 +232,6 @@ where
 
     fn get_op_id(&self) -> OperatorId {
         self.operator_coord.operator_id
-    }
-}
-
-impl<Out: Data, OperatorChain> Stream<Out, OperatorChain>
-where
-    OperatorChain: Operator<Out> + 'static,
-{
-    /// Given a stream without timestamps nor watermarks, tag each item with a timestamp and insert
-    /// watermarks.
-    ///
-    /// The two functions given to this operator are the following:
-    /// - `timestamp_gen` returns the timestamp assigned to the provided element of the stream
-    /// - `watermark_gen` returns an optional watermark to add after the provided element
-    ///
-    /// Note that the two functions **must** follow the watermark semantics.
-    /// TODO: link to watermark semantics
-    ///
-    /// ## Example
-    ///
-    /// In this example the stream contains the integers from 0 to 9, each will be tagged with a
-    /// timestamp with the value of the item as milliseconds, and after each even number a watermark
-    /// will be inserted.
-    ///
-    /// ```
-    /// # use noir::{StreamEnvironment, EnvironmentConfig};
-    /// # use noir::operator::source::IteratorSource;
-    /// use noir::operator::Timestamp;
-    /// # let mut env = StreamEnvironment::new(EnvironmentConfig::local(1));
-    ///
-    /// let s = env.stream(IteratorSource::new((0..10)));
-    /// s.add_timestamps(
-    ///     |&n| n,
-    ///     |&n, &ts| if n % 2 == 0 { Some(ts) } else { None }
-    /// );
-    /// ```
-    pub fn add_timestamps<TimestampGen, WatermarkGen>(
-        self,
-        timestamp_gen: TimestampGen,
-        watermark_gen: WatermarkGen,
-    ) -> Stream<Out, impl Operator<Out>>
-    where
-        TimestampGen: FnMut(&Out) -> Timestamp + Clone + Send + 'static,
-        WatermarkGen: FnMut(&Out, &Timestamp) -> Option<Timestamp> + Clone + Send + 'static,
-    {
-        self.add_operator(|prev| AddTimestamp::new(prev, timestamp_gen, watermark_gen))
-    }
-
-    pub fn drop_timestamps(self) -> Stream<Out, impl Operator<Out>> {
-        self.add_operator(|prev| DropTimestamp::new(prev))
-    }
-}
-
-impl<Key, Out, OperatorChain> KeyedStream<Key, Out, OperatorChain>
-where
-    Key: DataKey,
-    Out: Data,
-    OperatorChain: Operator<KeyValue<Key, Out>> + 'static,
-{
-    /// Given a keyed stream without timestamps nor watermarks, tag each item with a timestamp and insert
-    /// watermarks.
-    ///
-    /// The two functions given to this operator are the following:
-    /// - `timestamp_gen` returns the timestamp assigned to the provided element of the stream
-    /// - `watermark_gen` returns an optional watermark to add after the provided element
-    ///
-    /// Note that the two functions **must** follow the watermark semantics.
-    /// TODO: link to watermark semantics
-    ///
-    /// ## Example
-    ///
-    /// In this example the stream contains the integers from 0 to 9 and group them by parity, each will be tagged with a
-    /// timestamp with the value of the item as milliseconds, and after each even number a watermark
-    /// will be inserted.
-    ///
-    /// ```
-    /// # use noir::{StreamEnvironment, EnvironmentConfig};
-    /// # use noir::operator::source::IteratorSource;
-    /// use noir::operator::Timestamp;
-    /// # let mut env = StreamEnvironment::new(EnvironmentConfig::local(1));
-    ///
-    /// let s = env.stream(IteratorSource::new((0..10)));
-    /// s
-    ///     .group_by(|i| i % 2)
-    ///     .add_timestamps(
-    ///     |&(_k, n)| n,
-    ///     |&(_k, n), &ts| if n % 2 == 0 { Some(ts) } else { None }
-    /// );
-    /// ```
-    pub fn add_timestamps<TimestampGen, WatermarkGen>(
-        self,
-        timestamp_gen: TimestampGen,
-        watermark_gen: WatermarkGen,
-    ) -> KeyedStream<Key, Out, impl Operator<KeyValue<Key, Out>>>
-    where
-        TimestampGen: FnMut(&KeyValue<Key, Out>) -> Timestamp + Clone + Send + 'static,
-        WatermarkGen:
-            FnMut(&KeyValue<Key, Out>, &Timestamp) -> Option<Timestamp> + Clone + Send + 'static,
-    {
-        self.add_operator(|prev| AddTimestamp::new(prev, timestamp_gen, watermark_gen))
-    }
-
-    pub fn drop_timestamps(self) -> KeyedStream<Key, Out, impl Operator<KeyValue<Key, Out>>> {
-        self.add_operator(|prev| DropTimestamp::new(prev))
     }
 }
 

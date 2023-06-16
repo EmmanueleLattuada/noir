@@ -10,15 +10,15 @@ use crate::{
     block::{NextStrategy, OperatorStructure},
     network::{Coord, OperatorCoord},
     operator::{
-        Data, DataKey, ExchangeData, MultipleStartBlockReceiverOperator, Operator, StartBlock,
-        StreamElement, TwoSidesItem,
+        BinaryElement, BinaryStartOperator, Data, DataKey, ExchangeData, Operator, Start,
+        StreamElement,
     },
-    KeyValue, KeyedStream, scheduler::OperatorId, persistency::{PersistencyService, PersistencyServices},
+    KeyedStream, scheduler::OperatorId, persistency::{PersistencyService, PersistencyServices},
 };
 
 use super::{InnerJoinTuple, JoinVariant, OuterJoinTuple};
 
-type TwoSidesTuple<K, V1, V2> = TwoSidesItem<KeyValue<K, V1>, KeyValue<K, V2>>;
+type BinaryTuple<K, V1, V2> = BinaryElement<(K, V1), (K, V2)>;
 
 /// This type keeps the elements of a side of the join.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,7 +50,7 @@ impl<Key: DataKey, Out> Default for SideHashMap<Key, Out> {
 
 #[derive(Clone)]
 struct JoinKeyedOuter<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> {
-    prev: MultipleStartBlockReceiverOperator<KeyValue<K, V1>, KeyValue<K, V2>>,
+    prev: BinaryStartOperator<(K, V1), (K, V2)>,
     operator_coord: OperatorCoord,
     persistency_service: PersistencyService,
     variant: JoinVariant,
@@ -64,18 +64,11 @@ struct JoinKeyedOuter<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeD
     /// The content of the right side.
     right: SideHashMap<K, V2>,
 
-    buffer: VecDeque<KeyValue<K, OuterJoinTuple<V1, V2>>>,
+    buffer: VecDeque<(K, OuterJoinTuple<V1, V2>)>,
 }
 
 impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> JoinKeyedOuter<K, V1, V2> {
-    pub(crate) fn new<O1, O2>(
-        prev: MultipleStartBlockReceiverOperator<KeyValue<K, V1>, KeyValue<K, V2>>,
-        variant: JoinVariant,
-    ) -> Self
-    where
-        O1: Operator<KeyValue<K, V1>> + 'static,
-        O2: Operator<KeyValue<K, V2>> + 'static,
-    {
+    pub(crate) fn new(prev: BinaryStartOperator<(K, V1), (K, V2)>, variant: JoinVariant) -> Self {
         let op_id = prev.get_op_id() + 1;
         JoinKeyedOuter {
             prev,
@@ -93,11 +86,11 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> JoinKeyedOut
         }
     }
 
-    fn process_item(&mut self, item: TwoSidesTuple<K, V1, V2>) {
+    fn process_item(&mut self, item: BinaryTuple<K, V1, V2>) {
         let left_outer = self.variant.left_outer();
         let right_outer = self.variant.right_outer();
         match item {
-            TwoSidesItem::Left((key, v1)) => {
+            BinaryElement::Left((key, v1)) => {
                 self.left.count += 1;
                 if let Some(right) = self.right.data.get(&key) {
                     // the left item has at least one right matching element
@@ -118,7 +111,7 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> JoinKeyedOut
                     self.left.data.entry(key).or_default().push(v1);
                 }
             }
-            TwoSidesItem::Right((key, v2)) => {
+            BinaryElement::Right((key, v2)) => {
                 self.right.count += 1;
                 if let Some(left) = self.left.data.get(&key) {
                     // the left item has at least one right matching element
@@ -139,7 +132,7 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> JoinKeyedOut
                     self.right.data.entry(key).or_default().push(v2);
                 }
             }
-            TwoSidesItem::LeftEnd => {
+            BinaryElement::LeftEnd => {
                 log::debug!(
                     "Left side of join ended with {} elements on the left \
                     and {} elements on the right",
@@ -165,7 +158,7 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> JoinKeyedOut
                 self.left.keys.clear();
                 self.left.ended = true;
             }
-            TwoSidesItem::RightEnd => {
+            BinaryElement::RightEnd => {
                 log::debug!(
                     "Right side of join ended with {} elements on the left \
                     and {} elements on the right",
@@ -214,11 +207,11 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> Display
 struct JoinKeyedOuterState<K: DataKey, V1, V2> {    
     left: SideHashMap<K, V1>,
     right: SideHashMap<K, V2>,
-    buffer: VecDeque<KeyValue<K, OuterJoinTuple<V1, V2>>>,
+    buffer: VecDeque<(K, OuterJoinTuple<V1, V2>)>,
 }
 
 impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
-    Operator<KeyValue<K, OuterJoinTuple<V1, V2>>> for JoinKeyedOuter<K, V1, V2>
+    Operator<(K, OuterJoinTuple<V1, V2>)> for JoinKeyedOuter<K, V1, V2>
 {
     fn setup(&mut self, metadata: &mut crate::ExecutionMetadata) {
         self.prev.setup(metadata);
@@ -244,7 +237,7 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
         }
     }
 
-    fn next(&mut self) -> crate::operator::StreamElement<KeyValue<K, OuterJoinTuple<V1, V2>>> {
+    fn next(&mut self) -> crate::operator::StreamElement<(K, OuterJoinTuple<V1, V2>)> {
         while self.buffer.is_empty() {
             match self.prev.next() {
                 StreamElement::Item(el) => self.process_item(el),
@@ -298,10 +291,7 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
     }
 
     fn structure(&self) -> crate::block::BlockStructure {
-        let mut operator = OperatorStructure::new::<
-            KeyValue<K, InnerJoinTuple<V1, V2>>,
-            _,
-        >("JoinKeyed");
+        let mut operator = OperatorStructure::new::<(K, InnerJoinTuple<V1, V2>), _>("JoinKeyed");
         let op_id = self.operator_coord.operator_id;
         operator.subtitle = format!("op id: {op_id}");
         self.prev.structure().add_operator(operator)
@@ -314,7 +304,7 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
 
 #[derive(Clone)]
 struct JoinKeyedInner<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> {
-    prev: MultipleStartBlockReceiverOperator<KeyValue<K, V1>, KeyValue<K, V2>>,
+    prev: BinaryStartOperator<(K, V1), (K, V2)>,
     operator_coord: OperatorCoord,
     persistency_service: PersistencyService,
     _k: PhantomData<K>,
@@ -330,7 +320,7 @@ struct JoinKeyedInner<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeD
     left_ended: bool,
     right_ended: bool,
 
-    buffer: VecDeque<KeyValue<K, InnerJoinTuple<V1, V2>>>,
+    buffer: VecDeque<(K, InnerJoinTuple<V1, V2>)>,
 }
 
 impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> Display
@@ -351,13 +341,7 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> Display
 impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeData + Debug>
     JoinKeyedInner<K, V1, V2>
 {
-    pub(crate) fn new<O1, O2>(
-        prev: MultipleStartBlockReceiverOperator<KeyValue<K, V1>, KeyValue<K, V2>>,
-    ) -> Self
-    where
-        O1: Operator<KeyValue<K, V1>> + 'static,
-        O2: Operator<KeyValue<K, V2>> + 'static,
-    {
+    pub(crate) fn new(prev: BinaryStartOperator<(K, V1), (K, V2)>) -> Self {
         let op_id = prev.get_op_id() + 1;
         JoinKeyedInner {
             prev,
@@ -376,9 +360,9 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
         }
     }
 
-    fn process_item(&mut self, item: TwoSidesTuple<K, V1, V2>) {
+    fn process_item(&mut self, item: BinaryTuple<K, V1, V2>) {
         match item {
-            TwoSidesItem::Left((key, v1)) => {
+            BinaryElement::Left((key, v1)) => {
                 if let Some(right) = self.right.get(&key) {
                     // the left item has at least one right matching element
                     for v2 in right {
@@ -388,7 +372,7 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
                 }
                 self.left.entry(key).or_default().push(v1);
             }
-            TwoSidesItem::Right((key, v2)) => {
+            BinaryElement::Right((key, v2)) => {
                 if let Some(left) = self.left.get(&key) {
                     // the left item has at least one right matching element
                     for v1 in left {
@@ -398,7 +382,7 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
                 }
                 self.right.entry(key).or_default().push(v2);
             }
-            TwoSidesItem::LeftEnd => {
+            BinaryElement::LeftEnd => {
                 self.left_ended = true;
                 self.right.clear();
                 if self.right_ended {
@@ -406,7 +390,7 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
                     self.right.clear();
                 }
             }
-            TwoSidesItem::RightEnd => {
+            BinaryElement::RightEnd => {
                 self.right_ended = true;
                 self.left.clear();
                 if self.left_ended {
@@ -424,11 +408,11 @@ struct JoinKeyedInnerState<K: DataKey, V1, V2> {
     right: HashMap<K, Vec<V2>, crate::block::CoordHasherBuilder>,
     left_ended: bool,
     right_ended: bool,
-    buffer: VecDeque<KeyValue<K, InnerJoinTuple<V1, V2>>>,
+    buffer: VecDeque<(K, InnerJoinTuple<V1, V2>)>,
 }
 
 impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeData + Debug>
-    Operator<KeyValue<K, InnerJoinTuple<V1, V2>>> for JoinKeyedInner<K, V1, V2>
+    Operator<(K, InnerJoinTuple<V1, V2>)> for JoinKeyedInner<K, V1, V2>
 {
     fn setup(&mut self, metadata: &mut crate::ExecutionMetadata) {
         self.coord = Some(metadata.coord);
@@ -456,7 +440,7 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
         }
     }
 
-    fn next(&mut self) -> crate::operator::StreamElement<KeyValue<K, InnerJoinTuple<V1, V2>>> {
+    fn next(&mut self) -> crate::operator::StreamElement<(K, InnerJoinTuple<V1, V2>)> {
         while self.buffer.is_empty() {
             match self.prev.next() {
                 StreamElement::Item(el) => self.process_item(el),
@@ -508,10 +492,7 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
     }
 
     fn structure(&self) -> crate::block::BlockStructure {
-        let mut operator = OperatorStructure::new::<
-            KeyValue<K, InnerJoinTuple<V1, V2>>,
-            _,
-        >("JoinKeyed");
+        let mut operator = OperatorStructure::new::<(K, InnerJoinTuple<V1, V2>), _>("JoinKeyed");
         let op_id = self.operator_coord.operator_id;
         operator.subtitle = format!("op id: {op_id}");
         self.prev.structure().add_operator(operator)
@@ -524,24 +505,23 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
 
 impl<K: DataKey + ExchangeData + Debug, V1: Data + ExchangeData + Debug, O1> KeyedStream<K, V1, O1>
 where
-    O1: Operator<KeyValue<K, V1>> + 'static,
+    O1: Operator<(K, V1)> + 'static,
 {
     pub fn join_outer<V2: Data + ExchangeData + Debug, O2>(
         self,
         rhs: KeyedStream<K, V2, O2>,
     ) -> KeyedStream<K, (Option<V1>, Option<V2>), impl Operator<(K, (Option<V1>, Option<V2>))>>
     where
-        O2: Operator<KeyValue<K, V2>> + 'static,
+        O2: Operator<(K, V2)> + 'static,
     {
         let next_strategy1 = NextStrategy::only_one();
         let next_strategy2 = NextStrategy::only_one();
 
         let inner =
             self.0
-                .add_y_connection(rhs.0, StartBlock::multiple, next_strategy1, next_strategy2);
+                .binary_connection(rhs.0, Start::multiple, next_strategy1, next_strategy2);
 
-        let s =
-            inner.add_operator(move |prev| JoinKeyedOuter::new::<O1, O2>(prev, JoinVariant::Outer));
+        let s = inner.add_operator(move |prev| JoinKeyedOuter::new(prev, JoinVariant::Outer));
         KeyedStream(s)
     }
 
@@ -550,16 +530,16 @@ where
         rhs: KeyedStream<K, V2, O2>,
     ) -> KeyedStream<K, (V1, V2), impl Operator<(K, (V1, V2))>>
     where
-        O2: Operator<KeyValue<K, V2>> + 'static,
+        O2: Operator<(K, V2)> + 'static,
     {
         let next_strategy1 = NextStrategy::only_one();
         let next_strategy2 = NextStrategy::only_one();
 
         let inner =
             self.0
-                .add_y_connection(rhs.0, StartBlock::multiple, next_strategy1, next_strategy2);
+                .binary_connection(rhs.0, Start::multiple, next_strategy1, next_strategy2);
 
-        let s = inner.add_operator(move |prev| JoinKeyedInner::new::<O1, O2>(prev));
+        let s = inner.add_operator(move |prev| JoinKeyedInner::new(prev));
         KeyedStream(s)
     }
 }

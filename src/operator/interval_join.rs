@@ -7,13 +7,12 @@ use serde::{Serialize, Deserialize};
 use crate::block::{BlockStructure, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::merge::MergeElement;
-use crate::operator::reorder::Reorder;
+
 use crate::operator::{ExchangeData, ExchangeDataKey, Operator, StreamElement, Timestamp};
 use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
-use crate::stream::{KeyValue, KeyedStream, Stream};
 
-type OutputElement<Key, Out, Out2> = KeyValue<Key, (Out, Out2)>;
+type OutputElement<Key, Out, Out2> = (Key, (Out, Out2));
 
 /// Operator that performs an interval join.
 ///
@@ -23,18 +22,18 @@ type OutputElement<Key, Out, Out2> = KeyValue<Key, (Out, Out2)>;
 ///
 /// This operator assumes elements are received in increasing order of timestamp.
 #[derive(Clone, Debug)]
-struct IntervalJoin<Key, Out, Out2, OperatorChain>
+pub struct IntervalJoin<Key, Out, Out2, OperatorChain>
 where
     Key: ExchangeDataKey,
     Out: ExchangeData,
     Out2: ExchangeData,
-    OperatorChain: Operator<KeyValue<Key, MergeElement<Out, Out2>>>,
+    OperatorChain: Operator<(Key, MergeElement<Out, Out2>)>,
 {
     prev: OperatorChain,
     operator_coord: OperatorCoord,
     persistency_service: PersistencyService,
     /// Elements of the left side to be processed.
-    left: VecDeque<(Timestamp, KeyValue<Key, Out>)>,
+    left: VecDeque<(Timestamp, (Key, Out))>,
     /// Elements of the right side that might still be matched.
     right: HashMap<Key, VecDeque<(Timestamp, Out2)>, crate::block::GroupHasherBuilder>,
     /// Elements ready to be sent downstream.
@@ -54,14 +53,14 @@ where
     Key: ExchangeDataKey,
     Out: ExchangeData,
     Out2: ExchangeData,
-    OperatorChain: Operator<KeyValue<Key, MergeElement<Out, Out2>>>,
+    OperatorChain: Operator<(Key, MergeElement<Out, Out2>)>,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "{} -> IntervalJoin<{}, {:?}, {:?}>",
             self.prev,
-            std::any::type_name::<KeyValue<Key, (Out, Out2)>>(),
+            std::any::type_name::<(Key, (Out, Out2))>(),
             self.lower_bound,
             self.upper_bound,
         )
@@ -73,9 +72,9 @@ where
     Key: ExchangeDataKey,
     Out: ExchangeData,
     Out2: ExchangeData,
-    OperatorChain: Operator<KeyValue<Key, MergeElement<Out, Out2>>>,
+    OperatorChain: Operator<(Key, MergeElement<Out, Out2>)>,
 {
-    fn new(prev: OperatorChain, lower_bound: Timestamp, upper_bound: Timestamp) -> Self {
+    pub(super) fn new(prev: OperatorChain, lower_bound: Timestamp, upper_bound: Timestamp) -> Self {
         let op_id = prev.get_op_id() + 1;
         Self {
             prev,
@@ -152,7 +151,7 @@ where
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct IntervalJoinState<K: Hash + Eq, O, O2> {
     /// Elements of the left side to be processed.
-    left: VecDeque<(Timestamp, KeyValue<K, O>)>,
+    left: VecDeque<(Timestamp, (K, O))>,
     /// Elements of the right side that might still be matched.
     right: HashMap<K, VecDeque<(Timestamp, O2)>, crate::block::GroupHasherBuilder>,
     /// Elements ready to be sent downstream.
@@ -164,13 +163,13 @@ struct IntervalJoinState<K: Hash + Eq, O, O2> {
 }
 
 
-impl<Key, Out, Out2, OperatorChain> Operator<KeyValue<Key, (Out, Out2)>>
+impl<Key, Out, Out2, OperatorChain> Operator<(Key, (Out, Out2))>
     for IntervalJoin<Key, Out, Out2, OperatorChain>
 where
     Key: ExchangeDataKey,
     Out: ExchangeData,
     Out2: ExchangeData,
-    OperatorChain: Operator<KeyValue<Key, MergeElement<Out, Out2>>>,
+    OperatorChain: Operator<(Key, MergeElement<Out, Out2>)>,
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
@@ -265,7 +264,7 @@ where
     }
 
     fn structure(&self) -> BlockStructure {
-        let mut operator = OperatorStructure::new::<KeyValue<Key, (Out, Out2)>, _>(
+        let mut operator = OperatorStructure::new::<(Key, (Out, Out2)), _>(
             "IntervalJoin",
         );
         let op_id = self.operator_coord.operator_id;
@@ -277,73 +276,5 @@ where
 
     fn get_op_id(&self) -> OperatorId {
         self.operator_coord.operator_id
-    }
-}
-
-impl<Out: ExchangeData, OperatorChain> Stream<Out, OperatorChain>
-where
-    OperatorChain: Operator<Out> + 'static,
-{
-    /// Given two streams **with timestamps** join them according to an interval centered around the
-    /// timestamp of the left side.
-    ///
-    /// This means that an element on the left side with timestamp T will be joined to all the
-    /// elements on the right with timestamp Q such that `T - lower_bound <= Q <= T + upper_bound`.
-    ///
-    /// **Note**: this operator is not parallelized, all the elements are sent to a single node to
-    /// perform the join.
-    ///
-    /// **Note**: this operator will split the current block.
-    ///
-    /// ## Example
-    /// TODO: example
-    pub fn interval_join<Out2, OperatorChain2>(
-        self,
-        right: Stream<Out2, OperatorChain2>,
-        lower_bound: Timestamp,
-        upper_bound: Timestamp,
-    ) -> Stream<(Out, Out2), impl Operator<(Out, Out2)>>
-    where
-        Out2: ExchangeData,
-        OperatorChain2: Operator<Out2> + 'static,
-    {
-        let left = self.max_parallelism(1);
-        let right = right.max_parallelism(1);
-        left.merge_distinct(right)
-            .key_by(|_| ())
-            .add_operator(Reorder::new)
-            .add_operator(|prev| IntervalJoin::new(prev, lower_bound, upper_bound))
-            .drop_key()
-    }
-}
-
-impl<Key: ExchangeDataKey, Out: ExchangeData, OperatorChain> KeyedStream<Key, Out, OperatorChain>
-where
-    OperatorChain: Operator<KeyValue<Key, Out>> + 'static,
-{
-    /// Given two streams **with timestamps** join them according to an interval centered around the
-    /// timestamp of the left side.
-    ///
-    /// This means that an element on the left side with timestamp T will be joined to all the
-    /// elements on the right with timestamp Q such that `T - lower_bound <= Q <= T + upper_bound`.
-    /// Only items with the same key can be joined together.
-    ///
-    /// **Note**: this operator will split the current block.
-    ///
-    /// ## Example
-    /// TODO: example
-    pub fn interval_join<Out2, OperatorChain2>(
-        self,
-        right: KeyedStream<Key, Out2, OperatorChain2>,
-        lower_bound: Timestamp,
-        upper_bound: Timestamp,
-    ) -> KeyedStream<Key, (Out, Out2), impl Operator<KeyValue<Key, (Out, Out2)>>>
-    where
-        Out2: ExchangeData,
-        OperatorChain2: Operator<KeyValue<Key, Out2>> + 'static,
-    {
-        self.merge_distinct(right)
-            .add_operator(Reorder::new)
-            .add_operator(|prev| IntervalJoin::new(prev, lower_bound, upper_bound))
     }
 }

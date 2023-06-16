@@ -7,13 +7,12 @@ use crate::network::OperatorCoord;
 use crate::operator::{Data, DataKey, Operator, StreamElement};
 use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
-use crate::stream::{KeyValue, KeyedStream, Stream};
 
 #[derive(Debug)]
-struct RichMap<Key: DataKey, Out: Data, NewOut: Data, F, OperatorChain>
+pub struct RichMap<Key: DataKey, Out: Data, NewOut: Data, F, OperatorChain>
 where
-    F: FnMut(KeyValue<&Key, Out>) -> NewOut + Clone + Send,
-    OperatorChain: Operator<KeyValue<Key, Out>>,
+    F: FnMut((&Key, Out)) -> NewOut + Clone + Send,
+    OperatorChain: Operator<(Key, Out)>,
 {
     prev: OperatorChain,
     operator_coord: OperatorCoord,
@@ -27,8 +26,8 @@ where
 impl<Key: DataKey, Out: Data, NewOut: Data, F: Clone, OperatorChain: Clone> Clone
     for RichMap<Key, Out, NewOut, F, OperatorChain>
 where
-    F: FnMut(KeyValue<&Key, Out>) -> NewOut + Clone + Send,
-    OperatorChain: Operator<KeyValue<Key, Out>>,
+    F: FnMut((&Key, Out)) -> NewOut + Clone + Send,
+    OperatorChain: Operator<(Key, Out)>,
 {
     fn clone(&self) -> Self {
         Self {
@@ -46,8 +45,8 @@ where
 impl<Key: DataKey, Out: Data, NewOut: Data, F, OperatorChain> Display
     for RichMap<Key, Out, NewOut, F, OperatorChain>
 where
-    F: FnMut(KeyValue<&Key, Out>) -> NewOut + Clone + Send,
-    OperatorChain: Operator<KeyValue<Key, Out>>,
+    F: FnMut((&Key, Out)) -> NewOut + Clone + Send,
+    OperatorChain: Operator<(Key, Out)>,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -63,10 +62,10 @@ where
 impl<Key: DataKey, Out: Data, NewOut: Data, F, OperatorChain>
     RichMap<Key, Out, NewOut, F, OperatorChain>
 where
-    F: FnMut(KeyValue<&Key, Out>) -> NewOut + Clone + Send,
-    OperatorChain: Operator<KeyValue<Key, Out>>,
+    F: FnMut((&Key, Out)) -> NewOut + Clone + Send,
+    OperatorChain: Operator<(Key, Out)>,
 {
-    fn new(prev: OperatorChain, f: F) -> Self {
+    pub(super) fn new(prev: OperatorChain, f: F) -> Self {
         let op_id = prev.get_op_id() + 1;
         Self {
             prev,
@@ -83,11 +82,11 @@ where
     }
 }
 
-impl<Key: DataKey, Out: Data, NewOut: Data, F, OperatorChain> Operator<KeyValue<Key, NewOut>>
+impl<Key: DataKey, Out: Data, NewOut: Data, F, OperatorChain> Operator<(Key, NewOut)>
     for RichMap<Key, Out, NewOut, F, OperatorChain>
 where
-    F: FnMut(KeyValue<&Key, Out>) -> NewOut + Clone + Send,
-    OperatorChain: Operator<KeyValue<Key, Out>>,
+    F: FnMut((&Key, Out)) -> NewOut + Clone + Send,
+    OperatorChain: Operator<(Key, Out)>,
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
@@ -144,93 +143,5 @@ where
 
     fn get_op_id(&self) -> OperatorId {
         self.operator_coord.operator_id
-    }
-}
-
-impl<Out: Data, OperatorChain> Stream<Out, OperatorChain>
-where
-    OperatorChain: Operator<Out> + 'static,
-{
-    /// Map the elements of the stream into new elements. The mapping function can be stateful.
-    ///
-    /// This is equivalent to [`Stream::map`] but with a stateful function.
-    ///
-    /// Since the mapping function can be stateful, it is a `FnMut`. This allows expressing simple
-    /// algorithms with very few lines of code (see examples).
-    ///
-    /// The mapping function is _cloned_ inside each replica, and they will not share state between
-    /// each other. If you want that only a single replica handles all the items you may want to
-    /// change the parallelism of this operator with [`Stream::max_parallelism`].
-    ///
-    /// ## Examples
-    ///
-    /// This is a simple implementation of the prefix-sum using a single replica (i.e. each element
-    /// is mapped to the sum of all the elements up to that point). Note that this won't work if
-    /// there are more replicas.
-    ///
-    /// ```
-    /// # use noir::{StreamEnvironment, EnvironmentConfig};
-    /// # use noir::operator::source::IteratorSource;
-    /// # let mut env = StreamEnvironment::new(EnvironmentConfig::local(1));
-    /// let s = env.stream(IteratorSource::new((1..=5)));
-    /// let res = s.rich_map({
-    ///     let mut sum = 0;
-    ///     move |x| {
-    ///         sum += x;
-    ///         sum
-    ///     }
-    /// }).collect_vec();
-    ///
-    /// env.execute();
-    ///
-    /// assert_eq!(res.get().unwrap(), vec![1, 1 + 2, 1 + 2 + 3, 1 + 2 + 3 + 4, 1 + 2 + 3 + 4 + 5]);
-    /// ```    
-    ///
-    /// This will enumerate all the elements that reach a replica. This is basically equivalent to
-    /// the `enumerate` function in Python.
-    ///
-    /// ```
-    /// # use noir::{StreamEnvironment, EnvironmentConfig};
-    /// # use noir::operator::source::IteratorSource;
-    /// # let mut env = StreamEnvironment::new(EnvironmentConfig::local(1));
-    /// let s = env.stream(IteratorSource::new((1..=5)));
-    /// let res = s.rich_map({
-    ///     let mut id = 0;
-    ///     move |x| {
-    ///         id += 1;
-    ///         (id - 1, x)
-    ///     }
-    /// }).collect_vec();
-    ///
-    /// env.execute();
-    ///
-    /// assert_eq!(res.get().unwrap(), vec![(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)]);
-    /// ```
-    pub fn rich_map<NewOut: Data, F>(self, mut f: F) -> Stream<NewOut, impl Operator<NewOut>>
-    where
-        F: FnMut(Out) -> NewOut + Send + Clone + 'static,
-    {
-        self.key_by(|_| ())
-            .add_operator(|prev| RichMap::new(prev, move |(_, value)| f(value)))
-            .drop_key()
-    }
-}
-
-impl<Key: DataKey, Out: Data, OperatorChain> KeyedStream<Key, Out, OperatorChain>
-where
-    OperatorChain: Operator<KeyValue<Key, Out>> + 'static,
-{
-    /// Map the elements of the stream into new elements. The mapping function can be stateful.
-    ///
-    /// This is exactly like [`Stream::rich_map`], but the function is cloned for each key. This
-    /// means that each key will have a unique mapping function (and therefore a unique state).
-    pub fn rich_map<NewOut: Data, F>(
-        self,
-        f: F,
-    ) -> KeyedStream<Key, NewOut, impl Operator<KeyValue<Key, NewOut>>>
-    where
-        F: FnMut(KeyValue<&Key, Out>) -> NewOut + Clone + Send + 'static,
-    {
-        self.add_operator(|prev| RichMap::new(prev, f))
     }
 }

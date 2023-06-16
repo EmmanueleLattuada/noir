@@ -9,7 +9,7 @@ use std::time::Duration;
 use csv::{Reader, ReaderBuilder, Terminator, Trim};
 use serde::{Deserialize, Serialize};
 
-use crate::block::{BlockStructure, OperatorKind, OperatorStructure};
+use crate::block::{BlockStructure, OperatorKind, OperatorStructure, Replication};
 use crate::network::OperatorCoord;
 use crate::operator::source::Source;
 use crate::operator::{Data, Operator, StreamElement};
@@ -276,8 +276,8 @@ impl<Out: Data + for<'a> Deserialize<'a>> CsvSource<Out> {
 }
 
 impl<Out: Data + for<'a> Deserialize<'a>> Source<Out> for CsvSource<Out> {
-    fn get_max_parallelism(&self) -> Option<usize> {
-        None
+    fn replication(&self) -> Replication {
+        Replication::Unlimited
     }
 
     fn set_snapshot_frequency_by_item(&mut self, item_interval: u64) {

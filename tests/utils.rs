@@ -238,6 +238,8 @@ impl TestHelper {
     where
         F: Fn(StreamEnvironment) + Send + Sync + 'static,
     {
+        // TODO: FIX THIS
+        /*
         let body = Arc::new(body);
         
         let local_cores =
@@ -247,8 +249,7 @@ impl TestHelper {
                 Self::local_env(body.clone(), num_cores, Some(pers_conf));
             }
         }
-        // TODO: FIX THIS
-        /*
+        
         let remote_hosts =
             Self::parse_list_from_env("RSTREAM_TEST_REMOTE_HOSTS").unwrap_or_else(|| vec![4]);
         let remote_cores =

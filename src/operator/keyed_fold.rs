@@ -7,23 +7,20 @@ use std::hash::Hash;
 
 use serde::{Serialize, Deserialize};
 
-use crate::block::{group_by_hash, BlockStructure, NextStrategy, OperatorStructure};
+use crate::block::{BlockStructure, OperatorStructure};
+
 use crate::network::OperatorCoord;
-use crate::operator::end::EndBlock;
-use crate::operator::key_by::KeyBy;
-use crate::operator::{
-    Data, ExchangeData, ExchangeDataKey, Operator, StreamElement, Timestamp,
-};
+use crate::operator::{Data, ExchangeData, ExchangeDataKey, Operator, StreamElement, Timestamp};
 use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
-use crate::stream::{KeyValue, KeyedStream, Stream};
+
 
 #[derive(Derivative)]
 #[derivative(Debug, Clone)]
 pub struct KeyedFold<Key: ExchangeDataKey, Out: Data, NewOut: ExchangeData, F, PreviousOperators>
 where
     F: Fn(&mut NewOut, Out) + Send + Clone,
-    PreviousOperators: Operator<KeyValue<Key, Out>>,
+    PreviousOperators: Operator<(Key, Out)>,
 {
     prev: PreviousOperators,
     operator_coord: OperatorCoord,
@@ -33,7 +30,7 @@ where
     init: NewOut,
     accumulators: HashMap<Key, NewOut, crate::block::GroupHasherBuilder>,
     timestamps: HashMap<Key, Timestamp, crate::block::GroupHasherBuilder>,
-    ready: Vec<StreamElement<KeyValue<Key, NewOut>>>,
+    ready: Vec<StreamElement<(Key, NewOut)>>,
     max_watermark: Option<Timestamp>,
     received_end: bool,
     received_end_iter: bool,
@@ -44,25 +41,25 @@ impl<Key: ExchangeDataKey, Out: Data, NewOut: ExchangeData, F, PreviousOperators
     for KeyedFold<Key, Out, NewOut, F, PreviousOperators>
 where
     F: Fn(&mut NewOut, Out) + Send + Clone,
-    PreviousOperators: Operator<KeyValue<Key, Out>>,
+    PreviousOperators: Operator<(Key, Out)>,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "{} -> KeyedFold<{} -> {}>",
             self.prev,
-            std::any::type_name::<KeyValue<Key, Out>>(),
-            std::any::type_name::<KeyValue<Key, NewOut>>()
+            std::any::type_name::<(Key, Out)>(),
+            std::any::type_name::<(Key, NewOut)>()
         )
     }
 }
 
-impl<Key: ExchangeDataKey, Out: Data, NewOut: ExchangeData, F, PreviousOperators: Operator<KeyValue<Key, Out>>>
+impl<Key: ExchangeDataKey, Out: Data, NewOut: ExchangeData, F, PreviousOperators: Operator<(Key, Out)>>
     KeyedFold<Key, Out, NewOut, F, PreviousOperators>
 where
     F: Fn(&mut NewOut, Out) + Send + Clone,
 {
-    fn new(prev: PreviousOperators, init: NewOut, fold: F) -> Self {
+    pub(super) fn new(prev: PreviousOperators, init: NewOut, fold: F) -> Self {
         let op_id = prev.get_op_id() + 1;
         KeyedFold {
             prev,
@@ -101,17 +98,17 @@ where
 struct KeyedFoldState<K: Hash + Eq, O> {
     accumulators: HashMap<K, O, crate::block::GroupHasherBuilder>,
     timestamps: HashMap<K, Timestamp, crate::block::GroupHasherBuilder>,
-    ready: Vec<StreamElement<KeyValue<K, O>>>,
+    ready: Vec<StreamElement<(K, O)>>,
     max_watermark: Option<Timestamp>,
     received_end: bool,
     received_end_iter: bool,
 }
 
-impl<Key: ExchangeDataKey, Out: Data, NewOut: ExchangeData, F, PreviousOperators> Operator<KeyValue<Key, NewOut>>
+impl<Key: ExchangeDataKey, Out: Data, NewOut: ExchangeData, F, PreviousOperators> Operator<(Key, NewOut)>
     for KeyedFold<Key, Out, NewOut, F, PreviousOperators>
 where
     F: Fn(&mut NewOut, Out) + Send + Clone,
-    PreviousOperators: Operator<KeyValue<Key, Out>>,
+    PreviousOperators: Operator<(Key, Out)>,
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
@@ -140,7 +137,7 @@ where
     }
 
     #[inline]
-    fn next(&mut self) -> StreamElement<KeyValue<Key, NewOut>> {
+    fn next(&mut self) -> StreamElement<(Key, NewOut)> {
         while !self.received_end {
             match self.prev.next() {
                 StreamElement::Terminate => self.received_end = true,
@@ -225,7 +222,7 @@ where
     }
 
     fn structure(&self) -> BlockStructure {
-        let mut operator = OperatorStructure::new::<KeyValue<Key, NewOut>, _>(
+        let mut operator = OperatorStructure::new::<(Key, NewOut), _>(
             "KeyedFold",
         );
         let op_id = self.operator_coord.operator_id;
@@ -237,135 +234,6 @@ where
 
     fn get_op_id(&self) -> OperatorId {
         self.operator_coord.operator_id
-    }
-}
-
-impl<Out: Data, OperatorChain> Stream<Out, OperatorChain>
-where
-    OperatorChain: Operator<Out> + 'static,
-{
-    /// Perform the folding operation separately for each key.
-    ///
-    /// This is equivalent of partitioning the stream using the `keyer` function, and then applying
-    /// [`Stream::fold_assoc`] to each partition separately.
-    ///
-    /// Note however that there is a difference between `stream.group_by(keyer).fold(...)` and
-    /// `stream.group_by_fold(keyer, ...)`. The first performs the network shuffle of every item in
-    /// the stream, and **later** performs the folding (i.e. nearly all the elements will be sent to
-    /// the network). The latter avoids sending the items by performing first a local reduction on
-    /// each host, and then send only the locally folded results (i.e. one message per replica, per
-    /// key); then the global step is performed aggregating the results.
-    ///
-    /// The resulting stream will still be keyed and will contain only a single message per key (the
-    /// final result).
-    ///
-    /// Note that the output type may be different from the input type, therefore requireing
-    /// different function for the aggregation. Consider using [`Stream::group_by_reduce`] if the
-    /// output type is the same as the input type.
-    ///
-    /// **Note**: this operator will retain all the messages of the stream and emit the values only
-    /// when the stream ends. Therefore this is not properly _streaming_.
-    ///
-    /// **Note**: this operator will split the current block.
-    ///
-    /// ## Example
-    /// ```
-    /// # use noir::{StreamEnvironment, EnvironmentConfig};
-    /// # use noir::operator::source::IteratorSource;
-    /// # let mut env = StreamEnvironment::new(EnvironmentConfig::local(1));
-    /// let s = env.stream(IteratorSource::new((0..5)));
-    /// let res = s
-    ///     .group_by_fold(|&n| n % 2, 0, |acc, value| *acc += value, |acc, value| *acc += value)
-    ///     .collect_vec();
-    ///
-    /// env.execute();
-    ///
-    /// let mut res = res.get().unwrap();
-    /// res.sort_unstable();
-    /// assert_eq!(res, vec![(0, 0 + 2 + 4), (1, 1 + 3)]);
-    /// ```
-    pub fn group_by_fold<Key: ExchangeDataKey, NewOut: ExchangeData, Keyer, Local, Global>(
-        self,
-        keyer: Keyer,
-        init: NewOut,
-        local: Local,
-        global: Global,
-    ) -> KeyedStream<Key, NewOut, impl Operator<KeyValue<Key, NewOut>>>
-    where
-        Keyer: Fn(&Out) -> Key + Send + Clone + 'static,
-        Local: Fn(&mut NewOut, Out) + Send + Clone + 'static,
-        Global: Fn(&mut NewOut, NewOut) + Send + Clone + 'static,
-    {
-        // GroupBy based on key
-        let next_strategy = NextStrategy::GroupBy(
-            move |(key, _): &(Key, NewOut)| group_by_hash(&key),
-            Default::default(),
-        );
-
-        let new_stream = self
-            // key_by with given keyer
-            .add_operator(|prev| KeyBy::new(prev, keyer.clone()))
-            // local fold
-            .add_operator(|prev| KeyedFold::new(prev, init.clone(), local))
-            // group by key
-            .add_block(EndBlock::new, next_strategy)
-            // global fold
-            .add_operator(|prev| KeyedFold::new(prev, init.clone(), global));
-
-        KeyedStream(new_stream)
-    }
-}
-
-impl<Key: ExchangeDataKey, Out: Data, OperatorChain> KeyedStream<Key, Out, OperatorChain>
-where
-    OperatorChain: Operator<KeyValue<Key, Out>> + 'static,
-{
-    /// Perform the folding operation separately for each key.
-    ///
-    /// Note that there is a difference between `stream.group_by(keyer).fold(...)` and
-    /// `stream.group_by_fold(keyer, ...)`. The first performs the network shuffle of every item in
-    /// the stream, and **later** performs the folding (i.e. nearly all the elements will be sent to
-    /// the network). The latter avoids sending the items by performing first a local reduction on
-    /// each host, and then send only the locally folded results (i.e. one message per replica, per
-    /// key); then the global step is performed aggregating the results.
-    ///
-    /// The resulting stream will still be keyed and will contain only a single message per key (the
-    /// final result).
-    ///
-    /// Note that the output type may be different from the input type. Consider using
-    /// [`KeyedStream::reduce`] if the output type is the same as the input type.
-    ///
-    /// **Note**: this operator will retain all the messages of the stream and emit the values only
-    /// when the stream ends. Therefore this is not properly _streaming_.
-    ///
-    /// **Note**: this operator will split the current block.
-    ///
-    /// ## Example
-    ///
-    /// ```
-    /// # use noir::{StreamEnvironment, EnvironmentConfig};
-    /// # use noir::operator::source::IteratorSource;
-    /// # let mut env = StreamEnvironment::new(EnvironmentConfig::local(1));
-    /// let s = env.stream(IteratorSource::new((0..5))).group_by(|&n| n % 2);
-    /// let res = s
-    ///     .fold(0, |acc, value| *acc += value)
-    ///     .collect_vec();
-    ///
-    /// env.execute();
-    ///
-    /// let mut res = res.get().unwrap();
-    /// res.sort_unstable();
-    /// assert_eq!(res, vec![(0, 0 + 2 + 4), (1, 1 + 3)]);
-    /// ```
-    pub fn fold<NewOut: ExchangeData, F>(
-        self,
-        init: NewOut,
-        f: F,
-    ) -> KeyedStream<Key, NewOut, impl Operator<KeyValue<Key, NewOut>>>
-    where
-        F: Fn(&mut NewOut, Out) + Send + Clone + 'static,
-    {
-        self.add_operator(|prev| KeyedFold::new(prev, init, f))
     }
 }
 

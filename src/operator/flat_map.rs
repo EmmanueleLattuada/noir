@@ -7,7 +7,6 @@ use crate::network::OperatorCoord;
 use crate::operator::{Data, DataKey, Operator, StreamElement, Timestamp};
 use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
-use crate::stream::{KeyValue, KeyedStream, Stream};
 
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -53,6 +52,7 @@ where
             operator_coord: self.operator_coord,
             f: self.f.clone(),
             frontiter: None,
+            #[cfg(feature = "timestamp")]
             timestamp: self.timestamp,
             persistency_service: self.persistency_service.clone(),
             _out: self._out,
@@ -147,7 +147,7 @@ where
             match self.prev.next() {
                 #[cfg(not(feature = "timestamp"))]
                 StreamElement::Item(inner) | StreamElement::Timestamped(inner, _) => {
-                    self.frontiter = Some(inner.into_iter());
+                    self.frontiter = Some((self.f)(inner).into_iter());
                 }
 
                 #[cfg(feature = "timestamp")]
@@ -194,41 +194,6 @@ where
     }
 }
 
-impl<Out: Data, OperatorChain> Stream<Out, OperatorChain>
-where
-    OperatorChain: Operator<Out> + 'static,
-{
-    /// Apply a mapping operation to each element of the stream, the resulting stream will be the
-    /// flatMaped values of the result of the mapping.
-    ///
-    /// **Note**: this is very similar to [`Iteartor::flat_map`](std::iter::Iterator::flat_map)
-    ///
-    /// ## Example
-    ///
-    /// ```
-    /// # use noir::{StreamEnvironment, EnvironmentConfig};
-    /// # use noir::operator::source::IteratorSource;
-    /// # let mut env = StreamEnvironment::new(EnvironmentConfig::local(1));
-    /// let s = env.stream(IteratorSource::new((0..3)));
-    /// let res = s.flat_map(|n| vec![n, n]).collect_vec();
-    ///
-    /// env.execute();
-    ///
-    /// assert_eq!(res.get().unwrap(), vec![0, 0, 1, 1, 2, 2]);
-    /// ```
-    pub fn flat_map<MapOut: 'static, NewOut: Data, F>(
-        self,
-        f: F,
-    ) -> Stream<NewOut, impl Operator<NewOut>>
-    where
-        MapOut: IntoIterator<Item = NewOut>,
-        <MapOut as IntoIterator>::IntoIter: Send + 'static,
-        F: Fn(Out) -> MapOut + Send + Clone + 'static,
-    {
-        self.add_operator(|prev| FlatMap::new(prev, f))
-    }
-}
-
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct KeyedFlatMap<Key, In, Out, Iter, F, PreviousOperators>
@@ -236,7 +201,7 @@ where
     In: Data,
     Key: DataKey,
     Out: Data,
-    PreviousOperators: Operator<KeyValue<Key, In>>,
+    PreviousOperators: Operator<(Key, In)>,
     Iter: IntoIterator<Item = Out>,
     <Iter as IntoIterator>::IntoIter: Send + 'static,
     F: Fn((&Key, In)) -> Iter + Clone + Send + 'static,
@@ -264,7 +229,7 @@ where
     In: Data,
     Key: DataKey,
     Out: Data,
-    PreviousOperators: Operator<KeyValue<Key, In>>,
+    PreviousOperators: Operator<(Key, In)>,
     Iter: IntoIterator<Item = Out>,
     <Iter as IntoIterator>::IntoIter: Send + 'static,
     F: Fn((&Key, In)) -> Iter + Clone + Send + 'static,
@@ -290,7 +255,7 @@ where
     In: Data,
     Key: DataKey,
     Out: Data,
-    PreviousOperators: Operator<KeyValue<Key, In>>,
+    PreviousOperators: Operator<(Key, In)>,
     Iter: IntoIterator<Item = Out>,
     <Iter as IntoIterator>::IntoIter: Send + 'static,
     F: Fn((&Key, In)) -> Iter + Clone + Send + 'static,
@@ -312,12 +277,12 @@ where
     In: Data,
     Key: DataKey,
     Out: Data,
-    PreviousOperators: Operator<KeyValue<Key, In>>,
+    PreviousOperators: Operator<(Key, In)>,
     Iter: IntoIterator<Item = Out>,
     <Iter as IntoIterator>::IntoIter: Send + 'static,
     F: Fn((&Key, In)) -> Iter + Clone + Send + 'static,
 {
-    fn new(prev: PreviousOperators, f: F) -> Self {
+    pub(super) fn new(prev: PreviousOperators, f: F) -> Self {
         let op_id = prev.get_op_id() + 1;
         Self {
             prev,
@@ -335,13 +300,13 @@ where
     }
 }
 
-impl<Key, In, Out, Iter, F, PreviousOperators> Operator<KeyValue<Key, Out>>
+impl<Key, In, Out, Iter, F, PreviousOperators> Operator<(Key, Out)>
     for KeyedFlatMap<Key, In, Out, Iter, F, PreviousOperators>
 where
     In: Data,
     Key: DataKey,
     Out: Data,
-    PreviousOperators: Operator<KeyValue<Key, In>>,
+    PreviousOperators: Operator<(Key, In)>,
     Iter: IntoIterator<Item = Out>,
     <Iter as IntoIterator>::IntoIter: Send + 'static,
     F: Fn((&Key, In)) -> Iter + Clone + Send + 'static,
@@ -359,7 +324,7 @@ where
     }
 
     #[inline]
-    fn next(&mut self) -> StreamElement<KeyValue<Key, Out>> {
+    fn next(&mut self) -> StreamElement<(Key, Out)> {
         loop {
             if let Some((ref key, ref mut inner)) = self.frontiter {
                 match inner.next() {
@@ -376,7 +341,8 @@ where
             match self.prev.next() {
                 #[cfg(not(feature = "timestamp"))]
                 StreamElement::Item((key, inner)) | StreamElement::Timestamped((key, inner), _) => {
-                    self.frontiter = Some((key, inner.into_iter()));
+                    let iter = (self.f)((&key, inner)).into_iter();
+                    self.frontiter = Some((key, iter));
                 }
                 #[cfg(feature = "timestamp")]
                 StreamElement::Item((key, inner)) => {
@@ -421,43 +387,6 @@ where
 
     fn get_op_id(&self) -> OperatorId {
         self.operator_coord.operator_id
-    }
-}
-
-impl<Key: DataKey, Out: Data, OperatorChain> KeyedStream<Key, Out, OperatorChain>
-where
-    OperatorChain: Operator<KeyValue<Key, Out>> + 'static,
-{
-    /// Apply a mapping operation to each element of the stream, the resulting stream will be the
-    /// flatMaped values of the result of the mapping.
-    ///
-    /// **Note**: this is very similar to [`Iteartor::flat_map`](std::iter::Iterator::flat_map).
-    ///
-    /// ## Example
-    ///
-    /// ```
-    /// # use noir::{StreamEnvironment, EnvironmentConfig};
-    /// # use noir::operator::source::IteratorSource;
-    /// # let mut env = StreamEnvironment::new(EnvironmentConfig::local(1));
-    /// let s = env.stream(IteratorSource::new((0..3))).group_by(|&n| n % 2);
-    /// let res = s.flat_map(|(_key, n)| vec![n, n]).collect_vec();
-    ///
-    /// env.execute();
-    ///
-    /// let mut res = res.get().unwrap();
-    /// res.sort_unstable();
-    /// assert_eq!(res, vec![(0, 0), (0, 0), (0, 2), (0, 2), (1, 1), (1, 1)]);
-    /// ```
-    pub fn flat_map<NewOut: Data, MapOut: 'static, F>(
-        self,
-        f: F,
-    ) -> KeyedStream<Key, NewOut, impl Operator<KeyValue<Key, NewOut>>>
-    where
-        MapOut: IntoIterator<Item = NewOut>,
-        <MapOut as IntoIterator>::IntoIter: Send + 'static,
-        F: Fn(KeyValue<&Key, Out>) -> MapOut + Send + Clone + 'static,
-    {
-        self.add_operator(|prev| KeyedFlatMap::new(prev, f))
     }
 }
 

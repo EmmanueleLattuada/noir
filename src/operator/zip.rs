@@ -1,21 +1,23 @@
 use std::collections::VecDeque;
 use std::fmt::Display;
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::block::{BlockStructure, NextStrategy, OperatorReceiver, OperatorStructure};
+use crate::block::{BlockStructure, OperatorReceiver, OperatorStructure, Replication};
 use crate::network::OperatorCoord;
 use crate::operator::iteration::IterationStateLock;
-use crate::operator::start::{MultipleStartBlockReceiverOperator, StartBlock, TwoSidesItem};
+use crate::operator::start::{BinaryElement, BinaryStartOperator, Start};
 use crate::operator::{ExchangeData, Operator, StreamElement};
 use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{BlockId, ExecutionMetadata, OperatorId};
-use crate::stream::Stream;
+
+use super::source::Source;
 
 #[derive(Clone)]
 pub struct Zip<Out1: ExchangeData, Out2: ExchangeData> {
-    prev: MultipleStartBlockReceiverOperator<Out1, Out2>,
+    prev: BinaryStartOperator<Out1, Out2>,
     operator_coord: OperatorCoord,
     persistency_service: PersistencyService,
     stash1: VecDeque<StreamElement<Out1>>,
@@ -36,7 +38,7 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Display for Zip<Out1, Out2> {
 }
 
 impl<Out1: ExchangeData, Out2: ExchangeData> Zip<Out1, Out2> {
-    fn new(
+    pub(super) fn new(
         prev_block_id1: BlockId,
         prev_block_id2: BlockId,
         left_cache: bool,
@@ -44,7 +46,7 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Zip<Out1, Out2> {
         state_lock: Option<Arc<IterationStateLock>>,
     ) -> Self {
         Self {
-            prev: StartBlock::multiple(
+            prev: Start::multiple(
                 prev_block_id1,
                 prev_block_id2,
                 left_cache,
@@ -98,16 +100,16 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Operator<(Out1, Out2)> for Zip<Out1
         while self.stash1.is_empty() || self.stash2.is_empty() {
             let item = self.prev.next();
             match item {
-                StreamElement::Item(TwoSidesItem::Left(left)) => {
+                StreamElement::Item(BinaryElement::Left(left)) => {
                     self.stash1.push_back(StreamElement::Item(left))
                 }
-                StreamElement::Timestamped(TwoSidesItem::Left(left), ts) => {
+                StreamElement::Timestamped(BinaryElement::Left(left), ts) => {
                     self.stash1.push_back(StreamElement::Timestamped(left, ts))
                 }
-                StreamElement::Item(TwoSidesItem::Right(right)) => {
+                StreamElement::Item(BinaryElement::Right(right)) => {
                     self.stash2.push_back(StreamElement::Item(right))
                 }
-                StreamElement::Timestamped(TwoSidesItem::Right(right), ts) => {
+                StreamElement::Timestamped(BinaryElement::Right(right), ts) => {
                     self.stash2.push_back(StreamElement::Timestamped(right, ts))
                 }
                 // ignore LeftEnd | RightEnd
@@ -185,49 +187,19 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Operator<(Out1, Out2)> for Zip<Out1
     }
 }
 
-impl<Out1: ExchangeData, OperatorChain1> Stream<Out1, OperatorChain1>
-where
-    OperatorChain1: Operator<Out1> + 'static,
-{
-    /// Given two [`Stream`]s, zip their elements together: the resulting stream will be a stream of
-    /// pairs, each of which is an element from both streams respectively.
-    ///
-    /// **Note**: all the elements after the end of one of the streams are discarded (i.e. the
-    /// resulting stream will have a number of elements that is the minimum between the lengths of
-    /// the two input streams).
-    ///
-    /// **Note**: this operator will split the current block.
-    ///
-    /// ## Example
-    ///
-    /// ```
-    /// # use noir::{StreamEnvironment, EnvironmentConfig};
-    /// # use noir::operator::source::IteratorSource;
-    /// # let mut env = StreamEnvironment::new(EnvironmentConfig::local(1));
-    /// let s1 = env.stream(IteratorSource::new(vec!['A', 'B', 'C', 'D'].into_iter()));
-    /// let s2 = env.stream(IteratorSource::new(vec![1, 2, 3].into_iter()));
-    /// let res = s1.zip(s2).collect_vec();
-    ///
-    /// env.execute();
-    ///
-    /// assert_eq!(res.get().unwrap(), vec![('A', 1), ('B', 2), ('C', 3)]);
-    /// ```
-    pub fn zip<Out2: ExchangeData, OperatorChain2>(
-        self,
-        oth: Stream<Out2, OperatorChain2>,
-    ) -> Stream<(Out1, Out2), impl Operator<(Out1, Out2)>>
-    where
-        OperatorChain2: Operator<Out2> + 'static,
-    {
-        let mut new_stream = self.add_y_connection(
-            oth,
-            Zip::new,
-            NextStrategy::only_one(),
-            NextStrategy::only_one(),
-        );
-        // if the zip operator is partitioned there could be some loss of data
-        new_stream.block.scheduler_requirements.max_parallelism(1);
-        new_stream
+impl<Out1: ExchangeData, Out2: ExchangeData> Source<(Out1, Out2)> for Zip<Out1, Out2> {
+    fn replication(&self) -> Replication {
+        Replication::Unlimited
+    }
+
+    fn set_snapshot_frequency_by_item(&mut self, _item_interval: u64) {
+        // Forbidden action
+        panic!("It is not possible to set snapshot frequency for zip operator");
+    }
+
+    fn set_snapshot_frequency_by_time(&mut self, _time_interval: Duration) {
+        // Forbidden action
+        panic!("It is not possible to set snapshot frequency for zip operator");
     }
 }
 

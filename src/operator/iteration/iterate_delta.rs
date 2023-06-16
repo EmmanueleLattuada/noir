@@ -4,7 +4,7 @@ use crate::block::{BlockStructure, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::iteration::IterationStateHandle;
 use crate::operator::{
-   ExchangeData, ExchangeDataKey, Operator, SingleStartBlockReceiverOperator, StreamElement,
+    ExchangeData, ExchangeDataKey, Operator, SimpleStartOperator, StreamElement,
 };
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::KeyedStream;
@@ -66,12 +66,12 @@ pub struct DeltaIterate<
     D: ExchangeData,
     O: ExchangeData,
 > {
-    prev: SingleStartBlockReceiverOperator<(Key, Msg<I, U, D, O>)>,
+    prev: SimpleStartOperator<(Key, Msg<I, U, D, O>)>,
     operator_coord: OperatorCoord,
 }
 
 impl<Key: ExchangeData, I: ExchangeData, U: ExchangeData, D: ExchangeData, O: ExchangeData> DeltaIterate< Key, I, U, D, O> {
-    fn new(prev: SingleStartBlockReceiverOperator<(Key, Msg<I, U, D, O>)>) ->  Self {
+    fn new(prev: SimpleStartOperator<(Key, Msg<I, U, D, O>)>) ->  Self {
         let op_id = prev.get_op_id() + 1;
         Self {
             prev,
