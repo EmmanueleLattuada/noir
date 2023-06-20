@@ -210,12 +210,10 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
             // Save current state, messages will be add then 
             let state: StartState<Out, Receiver>= StartState{
                 missing_flush_and_restart: self.missing_flush_and_restart as u64,
-                missing_terminate: self.missing_terminate as u64,
                 wait_for_state: self.wait_for_state,
                 state_generation: self.state_generation as u64,
                 watermark_forntier: self.watermark_frontier.clone(),
                 receiver_state: self.receiver.get_state(),
-                terminated_replicas: self.terminated_replicas.clone(),
                 message_queue: VecDeque::default(),
             };
 
@@ -254,7 +252,13 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
         let mut snapshot_id = self.last_snapshots.get(&sender)
             .unwrap_or(&SnapshotId::new(0))
             .clone();
+        if snapshot_id.terminate() {
+            // Sender has already terminated, we can just ignore it 
+            return None;
+        }
         snapshot_id = snapshot_id + 1;
+        let term_snap = SnapshotId::new_terminate(snapshot_id.id());
+        self.last_snapshots.insert(sender, term_snap);
         let mut result: Option<SnapshotId> = None;
         // Add sender to terminated replicas
         self.terminated_replicas.push(sender);        
@@ -281,12 +285,10 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
             // Save current state, messages will be add then 
             let state: StartState<Out, Receiver>= StartState{
                 missing_flush_and_restart: self.missing_flush_and_restart as u64,
-                missing_terminate: self.missing_terminate as u64,
                 wait_for_state: self.wait_for_state,
                 state_generation: self.state_generation as u64,
                 watermark_forntier: self.watermark_frontier.clone(),
                 receiver_state: self.receiver.get_state(),
-                terminated_replicas: self.terminated_replicas.clone(),
                 message_queue: VecDeque::default(),
             };
 
@@ -314,7 +316,6 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StartState<Out, Receiver: StartReceiver<Out>> {
-    missing_terminate: u64,
     missing_flush_and_restart: u64,
 
     wait_for_state: bool,
@@ -326,8 +327,6 @@ struct StartState<Out, Receiver: StartReceiver<Out>> {
         deserialize = "Receiver::ReceiverState: Deserialize<'de>",
     ))]
     receiver_state: Option<<Receiver as StartReceiver<Out>>::ReceiverState>,
-
-    terminated_replicas: Vec<Coord>,
 
     message_queue: VecDeque<(Coord, StreamElement<Out>)>,
 }
@@ -363,13 +362,11 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Operator<
             // Get and resume the persisted state
             let opt_state: Option<StartState<Out, Receiver>> = self.persistency_service.get_state(self.operator_coord, snap_id);
             if let Some(state) = opt_state {
-                self.missing_terminate = state.missing_terminate as usize;
                 self.missing_flush_and_restart = state.missing_flush_and_restart as usize;
                 self.wait_for_state = state.wait_for_state;
                 self.state_generation = state.state_generation as usize;
                 self.watermark_frontier = state.watermark_forntier;
                 self.receiver.set_state(state.receiver_state);
-                self.terminated_replicas = state.terminated_replicas;
                 self.persisted_message_queue = state.message_queue;  
                 // Set last snapshots off all previous replicas to this snapshot_id
                 for prev_rep in self.receiver.prev_replicas() {
@@ -392,12 +389,10 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Operator<
                 if self.persistency_service.is_active() {
                     let state: StartState<Out, Receiver>= StartState{
                         missing_flush_and_restart: self.missing_flush_and_restart as u64,
-                        missing_terminate: self.missing_terminate as u64,
                         wait_for_state: self.wait_for_state,
                         state_generation: self.state_generation as u64,
                         watermark_forntier: self.watermark_frontier.clone(),
                         receiver_state: self.receiver.get_state(),
-                        terminated_replicas: self.terminated_replicas.clone(),
                         // This is empty since all previous replicas terminated, so no more messages will arrive
                         message_queue: VecDeque::default(),
                     };
@@ -954,12 +949,10 @@ mod tests {
 
         let state: StartState<i32, SimpleStartReceiver<i32>> = StartState {
             missing_flush_and_restart: 2,
-            missing_terminate: 2,
             wait_for_state: false,
             state_generation: 0,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: None,
-            terminated_replicas: vec![],
             message_queue: VecDeque::from([
                 (from2, StreamElement::Item(3)), 
                 (from2, StreamElement::Item(4)),
@@ -969,12 +962,10 @@ mod tests {
         let retrived_state: StartState<i32, SimpleStartReceiver<i32>> = start_block.persistency_service.get_state(start_block.operator_coord, SnapshotId::new(1)).unwrap();
 
         assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
-        assert_eq!(state.missing_terminate, retrived_state.missing_terminate);
         assert_eq!(state.wait_for_state, retrived_state.wait_for_state);
         assert_eq!(state.state_generation, retrived_state.state_generation);
         assert_eq!(state.watermark_forntier.compute_frontier(), retrived_state.watermark_forntier.compute_frontier());
         assert_eq!(state.receiver_state, retrived_state.receiver_state);
-        assert_eq!(state.terminated_replicas, retrived_state.terminated_replicas);
         assert_eq!(state.message_queue, retrived_state.message_queue);
         
         // Clean redis
@@ -1046,12 +1037,10 @@ mod tests {
 
         let state: StartState<i32, SimpleStartReceiver<i32>> = StartState {
             missing_flush_and_restart: 2,
-            missing_terminate: 2,
             wait_for_state: false,
             state_generation: 0,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: None,
-            terminated_replicas: vec![],
             message_queue: VecDeque::from([
                 (from2, StreamElement::Item(5)), 
                 (from2, StreamElement::Item(6)),
@@ -1061,24 +1050,20 @@ mod tests {
         let retrived_state: StartState<i32, SimpleStartReceiver<i32>> = start_block.persistency_service.get_state(start_block.operator_coord, SnapshotId::new(1)).unwrap();
 
         assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
-        assert_eq!(state.missing_terminate, retrived_state.missing_terminate);
         assert_eq!(state.wait_for_state, retrived_state.wait_for_state);
         assert_eq!(state.state_generation, retrived_state.state_generation);
         assert_eq!(state.watermark_forntier.compute_frontier(), retrived_state.watermark_forntier.compute_frontier());
         assert_eq!(state.receiver_state, retrived_state.receiver_state);
-        assert_eq!(state.terminated_replicas, retrived_state.terminated_replicas);
         assert_eq!(state.message_queue, retrived_state.message_queue);
 
         assert_eq!(StreamElement::Item(8), start_block.next());
 
         let state: StartState<i32, SimpleStartReceiver<i32>> = StartState {
             missing_flush_and_restart: 2,
-            missing_terminate: 2,
             wait_for_state: false,
             state_generation: 0,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: None,
-            terminated_replicas: vec![],
             message_queue: VecDeque::from([
                 (from2, StreamElement::Item(5)), 
                 (from2, StreamElement::Item(6)),
@@ -1089,12 +1074,10 @@ mod tests {
         let retrived_state: StartState<i32, SimpleStartReceiver<i32>> = start_block.persistency_service.get_state(start_block.operator_coord, SnapshotId::new(2)).unwrap();
 
         assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
-        assert_eq!(state.missing_terminate, retrived_state.missing_terminate);
         assert_eq!(state.wait_for_state, retrived_state.wait_for_state);
         assert_eq!(state.state_generation, retrived_state.state_generation);
         assert_eq!(state.watermark_forntier.compute_frontier(), retrived_state.watermark_forntier.compute_frontier());
         assert_eq!(state.receiver_state, retrived_state.receiver_state);
-        assert_eq!(state.terminated_replicas, retrived_state.terminated_replicas);
         assert_eq!(state.message_queue, retrived_state.message_queue);
         
         // Clean redis
@@ -1160,7 +1143,6 @@ mod tests {
                     StreamElement::FlushAndRestart,
                     StreamElement::Snapshot(SnapshotId::new(2)),
                     StreamElement::Terminate,
-                    //StreamElement::Item(8), // Just for simplify this test, it cannot happen during normal execution
                     ],
                 from2,
             ))
@@ -1172,12 +1154,10 @@ mod tests {
 
         let state: StartState<i32, SimpleStartReceiver<i32>> = StartState {
             missing_flush_and_restart: 2,
-            missing_terminate: 2,
             wait_for_state: false,
             state_generation: 0,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: None,
-            terminated_replicas: vec![],
             message_queue: VecDeque::from([
                 (from2, StreamElement::Item(5)), 
                 (from2, StreamElement::Item(6)),
@@ -1187,12 +1167,10 @@ mod tests {
         let retrived_state: StartState<i32, SimpleStartReceiver<i32>> = start_block.persistency_service.get_state(start_block.operator_coord, SnapshotId::new(1)).unwrap();
 
         assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
-        assert_eq!(state.missing_terminate, retrived_state.missing_terminate);
         assert_eq!(state.wait_for_state, retrived_state.wait_for_state);
         assert_eq!(state.state_generation, retrived_state.state_generation);
         assert_eq!(state.watermark_forntier.compute_frontier(), retrived_state.watermark_forntier.compute_frontier());
         assert_eq!(state.receiver_state, retrived_state.receiver_state);
-        assert_eq!(state.terminated_replicas, retrived_state.terminated_replicas);
         assert_eq!(state.message_queue, retrived_state.message_queue);
         
         sender1
@@ -1212,24 +1190,20 @@ mod tests {
 
         let state: StartState<i32, SimpleStartReceiver<i32>> = StartState {
             missing_flush_and_restart: 1,
-            missing_terminate: 1,
             wait_for_state: false,
             state_generation: 0,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: None,
-            terminated_replicas: vec![from2],
             message_queue: VecDeque::from([]),
         };
 
         let retrived_state: StartState<i32, SimpleStartReceiver<i32>> = start_block.persistency_service.get_state(start_block.operator_coord, SnapshotId::new(4)).unwrap();
 
         assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
-        assert_eq!(state.missing_terminate, retrived_state.missing_terminate);
         assert_eq!(state.wait_for_state, retrived_state.wait_for_state);
         assert_eq!(state.state_generation, retrived_state.state_generation);
         assert_eq!(state.watermark_forntier.compute_frontier(), retrived_state.watermark_forntier.compute_frontier());
         assert_eq!(state.receiver_state, retrived_state.receiver_state);
-        assert_eq!(state.terminated_replicas, retrived_state.terminated_replicas);
         assert_eq!(state.message_queue, retrived_state.message_queue);
         
         

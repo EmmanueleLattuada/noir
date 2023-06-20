@@ -375,7 +375,6 @@ impl<OutL: ExchangeData, OutR: ExchangeData> StartReceiver<BinaryElement<OutL, O
     fn get_state(&self) -> Option<Self::ReceiverState> {
         let left = SideReceiverState {
             missing_flush_and_restart: self.left.missing_flush_and_restart as u64,
-            missing_terminate: self.left.missing_terminate as u64,
             cached: self.left.cached,
             cache: self.left.cache.clone(),
             cache_full: self.left.cache_full,
@@ -383,7 +382,6 @@ impl<OutL: ExchangeData, OutR: ExchangeData> StartReceiver<BinaryElement<OutL, O
         };
         let right = SideReceiverState {
             missing_flush_and_restart: self.right.missing_flush_and_restart as u64,
-            missing_terminate: self.right.missing_terminate as u64,
             cached: self.right.cached,
             cache: self.right.cache.clone(),
             cache_full: self.right.cache_full,
@@ -401,13 +399,11 @@ impl<OutL: ExchangeData, OutR: ExchangeData> StartReceiver<BinaryElement<OutL, O
         let state = receiver_state.unwrap();
         self.first_message = state.first_message;
         self.left.missing_flush_and_restart = state.left.missing_flush_and_restart as usize;
-        self.left.missing_terminate = state.left.missing_terminate as usize;
         self.left.cached = state.left.cached;
         self.left.cache = state.left.cache;
         self.left.cache_full = state.left.cache_full;
         self.left.cache_pointer = state.left.cache_pointer as usize;
         self.right.missing_flush_and_restart = state.right.missing_flush_and_restart as usize;
-        self.right.missing_terminate = state.right.missing_terminate as usize;
         self.right.cached = state.right.cached;
         self.right.cache = state.right.cache;
         self.right.cache_full = state.right.cache_full;
@@ -420,7 +416,6 @@ impl<OutL: ExchangeData, OutR: ExchangeData> StartReceiver<BinaryElement<OutL, O
 #[derive(Clone, Serialize, Deserialize)]
 pub (crate) struct SideReceiverState<Item> {
     missing_flush_and_restart: u64,
-    missing_terminate: u64,
     cached: bool,
     cache: Vec<NetworkMessage<Item>>,
     cache_full: bool,
@@ -538,7 +533,6 @@ mod tests {
         
         let left_side: SideReceiverState<BinaryElement<i32, i32>> = SideReceiverState{
             missing_flush_and_restart: 1,
-            missing_terminate: 1,
             cached: true,
             cache: vec![NetworkMessage::new_single(
                             StreamElement::Item(BinaryElement::Left(1)),
@@ -551,7 +545,6 @@ mod tests {
 
         let right_side: SideReceiverState<BinaryElement<i32, i32>> = SideReceiverState{
             missing_flush_and_restart: 1,
-            missing_terminate: 1,
             cached: false,
             cache: vec![],
             cache_full: false,
@@ -566,12 +559,10 @@ mod tests {
 
         let state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = StartState {
             missing_flush_and_restart: 2,
-            missing_terminate: 2,
             wait_for_state: false,
             state_generation: 0,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: Some(recv_state),
-            terminated_replicas: vec![],
             message_queue: VecDeque::from([
                 (from2, StreamElement::Item(BinaryElement::Right(3))), 
                 (from2, StreamElement::Item(BinaryElement::Right(4))),
@@ -581,24 +572,20 @@ mod tests {
         let retrived_state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = start_block.persistency_service.get_state(start_block.operator_coord, SnapshotId::new(1)).unwrap();
 
         assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
-        assert_eq!(state.missing_terminate, retrived_state.missing_terminate);
         assert_eq!(state.wait_for_state, retrived_state.wait_for_state);
         assert_eq!(state.state_generation, retrived_state.state_generation);
         assert_eq!(state.watermark_forntier.compute_frontier(), retrived_state.watermark_forntier.compute_frontier());
-        assert_eq!(state.terminated_replicas, retrived_state.terminated_replicas);
         assert_eq!(state.message_queue, retrived_state.message_queue);
         // Check receiver state
         let receiver = state.receiver_state.unwrap();
         let retrived_receiver = retrived_state.receiver_state.unwrap();
         assert_eq!(receiver.first_message, retrived_receiver.first_message);
         assert_eq!(receiver.left.missing_flush_and_restart, retrived_receiver.left.missing_flush_and_restart);
-        assert_eq!(receiver.left.missing_terminate, retrived_receiver.left.missing_terminate);
         assert_eq!(receiver.left.cached, retrived_receiver.left.cached);
         assert_eq!(receiver.left.cache_full, retrived_receiver.left.cache_full);
         assert_eq!(receiver.left.cache_pointer, retrived_receiver.left.cache_pointer);
         assert_eq!(receiver.left.cache, retrived_receiver.left.cache);
         assert_eq!(receiver.right.missing_flush_and_restart, retrived_receiver.right.missing_flush_and_restart);
-        assert_eq!(receiver.right.missing_terminate, retrived_receiver.right.missing_terminate);
         assert_eq!(receiver.right.cached, retrived_receiver.right.cached);
         assert_eq!(receiver.right.cache_full, retrived_receiver.right.cache_full);
         assert_eq!(receiver.right.cache_pointer, retrived_receiver.right.cache_pointer);
@@ -729,7 +716,6 @@ mod tests {
         
         let left_side: SideReceiverState<BinaryElement<i32, i32>> = SideReceiverState{
             missing_flush_and_restart: 1,
-            missing_terminate: 1,
             cached: true,
             cache: vec![NetworkMessage::new_single(
                             StreamElement::Item(BinaryElement::Left(1)),
@@ -742,7 +728,6 @@ mod tests {
 
         let right_side: SideReceiverState<BinaryElement<i32, i32>> = SideReceiverState{
             missing_flush_and_restart: 1,
-            missing_terminate: 1,
             cached: false,
             cache: vec![],
             cache_full: false,
@@ -757,12 +742,10 @@ mod tests {
 
         let state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = StartState {
             missing_flush_and_restart: 2,
-            missing_terminate: 2,
             wait_for_state: false,
             state_generation: 0,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: Some(recv_state),
-            terminated_replicas: vec![],
             message_queue: VecDeque::from([
                 (from2, StreamElement::Item(BinaryElement::Right(5))), 
                 (from2, StreamElement::Item(BinaryElement::Right(6))),
@@ -786,7 +769,6 @@ mod tests {
         
         let left_side: SideReceiverState<BinaryElement<i32, i32>> = SideReceiverState{
             missing_flush_and_restart: 1,
-            missing_terminate: 1,
             cached: true,
             cache: vec![NetworkMessage::new_single(
                             StreamElement::Item(BinaryElement::Left(1)),
@@ -803,7 +785,6 @@ mod tests {
 
         let right_side: SideReceiverState<BinaryElement<i32, i32>> = SideReceiverState{
             missing_flush_and_restart: 1,
-            missing_terminate: 1,
             cached: false,
             cache: vec![],
             cache_full: false,
@@ -818,12 +799,10 @@ mod tests {
 
         let state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = StartState {
             missing_flush_and_restart: 2,
-            missing_terminate: 2,
             wait_for_state: false,
             state_generation: 0,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: Some(recv_state),
-            terminated_replicas: vec![],
             message_queue: VecDeque::from([
                 (from2, StreamElement::Item(BinaryElement::Right(5))),
                 (from2, StreamElement::Item(BinaryElement::Right(6))),
@@ -921,7 +900,6 @@ mod tests {
         
         let left_side: SideReceiverState<BinaryElement<i32, i32>> = SideReceiverState{
             missing_flush_and_restart: 0,
-            missing_terminate: 0,
             cached: true,
             cache: vec![NetworkMessage::new_batch( vec![
                             StreamElement::Item(BinaryElement::Left(1)),
@@ -939,7 +917,6 @@ mod tests {
 
         let right_side: SideReceiverState<BinaryElement<i32, i32>> = SideReceiverState{
             missing_flush_and_restart: 1,
-            missing_terminate: 1,
             cached: false,
             cache: vec![],
             cache_full: false,
@@ -954,12 +931,10 @@ mod tests {
 
         let state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = StartState {
             missing_flush_and_restart: 1,
-            missing_terminate: 2,
             wait_for_state: false,
             state_generation: 0,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: Some(recv_state),
-            terminated_replicas: vec![],
             message_queue: VecDeque::from([
                 (from2, StreamElement::Item(BinaryElement::Right(5))),
                 (from2, StreamElement::Item(BinaryElement::Right(6))),
@@ -968,7 +943,6 @@ mod tests {
 
         let retrived_state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = start_block.persistency_service.get_state(start_block.operator_coord, SnapshotId::new(2)).unwrap();
 
-        assert_eq!(state.terminated_replicas, retrived_state.terminated_replicas);
         assert_eq!(state.message_queue, retrived_state.message_queue);
         // Check receiver state
         let receiver = state.receiver_state.unwrap();
@@ -998,7 +972,6 @@ mod tests {
         
         let left_side: SideReceiverState<BinaryElement<i32, i32>> = SideReceiverState{
             missing_flush_and_restart: 1,
-            missing_terminate: 0,
             cached: true,
             cache: vec![NetworkMessage::new_batch(vec![
                             StreamElement::Item(BinaryElement::Left(1)),
@@ -1016,7 +989,6 @@ mod tests {
 
         let right_side: SideReceiverState<BinaryElement<i32, i32>> = SideReceiverState{
             missing_flush_and_restart: 1,
-            missing_terminate: 1,
             cached: false,
             cache: vec![],
             cache_full: false,
@@ -1031,36 +1003,30 @@ mod tests {
 
         let state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = StartState {
             missing_flush_and_restart: 2,
-            missing_terminate: 2,
             wait_for_state: true,
             state_generation: 2,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: Some(recv_state),
-            terminated_replicas: vec![],
             message_queue: VecDeque::from([
                 (from1, StreamElement::Item(BinaryElement::Left(1))),
             ]),
         };
 
         assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
-        assert_eq!(state.missing_terminate, retrived_state.missing_terminate);
         assert_eq!(state.wait_for_state, retrived_state.wait_for_state);
         assert_eq!(state.state_generation, retrived_state.state_generation);
         assert_eq!(state.watermark_forntier.compute_frontier(), retrived_state.watermark_forntier.compute_frontier());
-        assert_eq!(state.terminated_replicas, retrived_state.terminated_replicas);
         assert_eq!(state.message_queue, retrived_state.message_queue);
         // Check receiver state
         let receiver = state.receiver_state.unwrap();
         let retrived_receiver = retrived_state.receiver_state.unwrap();
         assert_eq!(receiver.first_message, retrived_receiver.first_message);
         assert_eq!(receiver.left.missing_flush_and_restart, retrived_receiver.left.missing_flush_and_restart);
-        assert_eq!(receiver.left.missing_terminate, retrived_receiver.left.missing_terminate);
         assert_eq!(receiver.left.cached, retrived_receiver.left.cached);
         assert_eq!(receiver.left.cache_full, retrived_receiver.left.cache_full);
         assert_eq!(receiver.left.cache_pointer, retrived_receiver.left.cache_pointer);
         assert_eq!(receiver.left.cache, retrived_receiver.left.cache);
         assert_eq!(receiver.right.missing_flush_and_restart, retrived_receiver.right.missing_flush_and_restart);
-        assert_eq!(receiver.right.missing_terminate, retrived_receiver.right.missing_terminate);
         assert_eq!(receiver.right.cached, retrived_receiver.right.cached);
         assert_eq!(receiver.right.cache_full, retrived_receiver.right.cache_full);
         assert_eq!(receiver.right.cache_pointer, retrived_receiver.right.cache_pointer);
