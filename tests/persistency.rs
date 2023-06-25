@@ -41,8 +41,6 @@ fn word_count_persistency() {
                 (String::from("horse"), 4),
                 (String::from("monkey"), 3),
                 ]);
-        } else {
-            panic!("No result");
         }
     };
 

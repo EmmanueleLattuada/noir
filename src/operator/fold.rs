@@ -77,7 +77,6 @@ struct FoldState<T> {
     accumulator: Option<T>,
     timestamp: Option<Timestamp>,
     max_watermark: Option<Timestamp>,
-    received_end: bool,
     received_end_iter: bool,
 }
 
@@ -95,7 +94,6 @@ where
         self.operator_coord.replica_id = metadata.coord.replica_id;
 
         self.persistency_service = metadata.persistency_service.clone();
-        self.persistency_service.setup();
         let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
         if snapshot_id.is_some() {
             // Get and resume the persisted state
@@ -104,7 +102,6 @@ where
                 self.accumulator = state.accumulator;
                 self.timestamp = state.timestamp;
                 self.max_watermark = state.max_watermark;
-                self.received_end = state.received_end;
                 self.received_end_iter = state.received_end_iter;
             } else {
                 panic!("No persisted state founded for op: {0}", self.operator_coord);
@@ -146,7 +143,6 @@ where
                         accumulator: acc,
                         timestamp: self.timestamp,
                         max_watermark: self.max_watermark,
-                        received_end: self.received_end,
                         received_end_iter: self.received_end_iter,
                     }; 
                     self.persistency_service.save_state(self.operator_coord, snap_id, state);
@@ -183,7 +179,6 @@ where
                 accumulator: acc,
                 timestamp: self.timestamp,
                 max_watermark: self.max_watermark,
-                received_end: self.received_end,
                 received_end_iter: self.received_end_iter,
             };                          
             self.persistency_service.save_terminated_state(self.operator_coord, state);
@@ -291,7 +286,6 @@ mod tests {
                 restart_from: None,
             }
         ));
-        fold.persistency_service.setup();
 
         assert_eq!(fold.next(), StreamElement::Snapshot(SnapshotId::new(1)));
         let state: Option<FoldState<i32>> = fold.persistency_service.get_state(fold.operator_coord, SnapshotId::new(1));

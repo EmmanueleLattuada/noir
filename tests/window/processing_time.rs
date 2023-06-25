@@ -1,10 +1,7 @@
 use std::time::Duration;
 
-use noir::StreamEnvironment;
 use noir::operator::source::IteratorSource;
 use noir::operator::window::ProcessingTimeWindow;
-use noir::prelude::Source;
-use serial_test::serial;
 
 use super::utils::TestHelper;
 
@@ -34,7 +31,9 @@ fn tumbling_processing_time() {
 }
 
 // TODO: FIX THIS
-// #[test]
+// processing time windows does not support persistency
+/*
+#[test]
 #[serial]
 fn tumbling_processing_time_persistency() {
     let body = |mut env: StreamEnvironment| {
@@ -75,3 +74,4 @@ fn tumbling_processing_time_persistency() {
     TestHelper::local_remote_env_with_persistency(body, execution_list);
 
 }
+*/

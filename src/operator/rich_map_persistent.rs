@@ -102,7 +102,6 @@ where
         self.operator_coord.replica_id = metadata.coord.replica_id;
 
         self.persistency_service = metadata.persistency_service.clone();
-        self.persistency_service.setup();
         let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
         if snapshot_id.is_some() {
             // Get and resume the persisted state
@@ -313,7 +312,6 @@ mod tests {
                 restart_from: None,
             }
         ));
-        rich_map_persistent.persistency_service.setup();
 
         assert_eq!(rich_map_persistent.next(), StreamElement::Item((1, 1)));
         assert_eq!(rich_map_persistent.next(), StreamElement::Item((1, 3)));
@@ -367,7 +365,6 @@ mod tests {
                 restart_from: None,
             }
         ));
-        rich_map_persistent.persistency_service.setup();
 
         assert_eq!(rich_map_persistent.next(), StreamElement::Item((1, 1)));
         assert_eq!(rich_map_persistent.next(), StreamElement::Item((2, 2)));

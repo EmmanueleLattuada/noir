@@ -266,7 +266,6 @@ where
         self.operator_coord.replica_id = metadata.coord.replica_id;
 
         self.persistency_service = metadata.persistency_service.clone();
-        self.persistency_service.setup();
         let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
         if let Some(snap_id) = snapshot_id {
             // Get and resume the persisted state

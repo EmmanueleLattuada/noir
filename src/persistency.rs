@@ -1,5 +1,7 @@
-extern crate redis;
-use redis::{Commands, Client};
+extern crate r2d2_redis;
+
+use r2d2_redis::{RedisConnectionManager, r2d2::Pool, redis::Commands};
+
 
 use bincode::{DefaultOptions, Options, config::{WithOtherTrailing, WithOtherIntEncoding, FixintEncoding, RejectTrailing}};
 use once_cell::sync::Lazy;
@@ -59,8 +61,6 @@ fn serialize_snapshot_id(snapshot_id: SnapshotId) -> Vec<u8> {
 } 
 
 pub(crate) trait PersistencyServices {  
-    /// Setup connection with the database
-    fn setup(&mut self);
     /// Method to save the state of the operator
     fn save_state<State: ExchangeData>(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId, state: State);
     /// Method to save a void state, used for operators with no state, is necessary to be able to get last valid snapshot a posteriori
@@ -129,12 +129,9 @@ impl PersistencyService {
         if !self.is_active() {
             panic!("Persistency serviced aren't active");
         }
-        // This is called before setup, clone self to compute it
-        let mut tmp = self.clone();
-        tmp.setup();
-
+        
         let mut op_iter = operators.into_iter();
-        let last_snap = tmp.get_last_snapshot(op_iter.next().unwrap_or_else(||
+        let last_snap = self.get_last_snapshot(op_iter.next().unwrap_or_else(||
             panic!("No operators provided")
         ));
         if last_snap.is_none() {
@@ -144,7 +141,7 @@ impl PersistencyService {
         }
         let mut last_snap = last_snap.unwrap();
         for op in op_iter {
-            let opt_snap = tmp.get_last_snapshot(op);
+            let opt_snap = self.get_last_snapshot(op);
             match opt_snap {
                 Some(snap_id) => {
                     if snap_id.terminate() && last_snap.terminate() {
@@ -237,15 +234,11 @@ impl PersistencyService {
     /// Method to remove all persisted data.
     /// You must includes all coordinates of each operator in the graph to have a complete cleaning.
     pub (crate) fn clean_persisted_state(&mut self, operators: Vec<OperatorCoord>){
-        // This is called before setup, clone self to compute it
-        let mut tmp = self.clone();
-        tmp.setup();
-
         for op_coord in operators {
-            let mut last_opt_snap = tmp.get_last_snapshot(op_coord);
+            let mut last_opt_snap = self.get_last_snapshot(op_coord);
             while last_opt_snap.is_some() {
-                tmp.delete_state(op_coord, last_opt_snap.unwrap());
-                last_opt_snap = tmp.get_last_snapshot(op_coord);
+                self.delete_state(op_coord, last_opt_snap.unwrap());
+                last_opt_snap = self.get_last_snapshot(op_coord);
             } 
         }
     }
@@ -253,12 +246,7 @@ impl PersistencyService {
 
 // Just wrap methods and check snapshot id constraints
 impl PersistencyServices for PersistencyService{
-    fn setup(&mut self) {
-        if self.active {
-            self.handler.setup();
-        }
-    }
-
+    
     fn save_state<State: ExchangeData>(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId, state: State) {
         if !self.active {
             panic!("Persistency services aren't configured");
@@ -308,40 +296,30 @@ impl PersistencyServices for PersistencyService{
 /// Redis handler
 #[derive(Debug, Clone, Default)]
 struct RedisHandler {
-    // Connection will be done with setup method 
-    client: Option<Client>,
-    config: String,
+    conn_pool: Option<Pool<RedisConnectionManager>>,
 }
 
 impl RedisHandler {
     /// Create a new Redis handler from given configuration
     fn new(config: String) -> Self{
+        let manager = RedisConnectionManager::new(config).unwrap();
+        let conn_pool = Pool::builder()
+                .build(manager)
+                .unwrap();
         Self {  
-            // This will be set in the setup method
-            client: None,
-            config
+            conn_pool: Some(conn_pool),
         }
     }
 }
 
 
-impl PersistencyServices for RedisHandler{
-    /// This will check the Redis server and set the client field
-    /// N.B. this will not connect to the Redis server
-    fn setup(&mut self) {
-        let client = redis::Client::open(self.config.clone())
-            .unwrap_or_else(|e|
-                panic!("Fail to connect to Redis client: {e:?}")
-            );
-        self.client = Some(client);
-    }    
-
+impl PersistencyServices for RedisHandler{    
     fn save_state<State: ExchangeData>(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId, state: State) {
         // Prepare connection
-        let mut conn = self.client
+        let mut conn = self.conn_pool
             .as_ref()
             .unwrap()
-            .get_connection()
+            .get()
             .unwrap_or_else(|e|
                 panic!("Fail to connect to Redis: {e:?}")
             );
@@ -393,10 +371,10 @@ impl PersistencyServices for RedisHandler{
 
     fn save_void_state(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId) {
         // Prepare connection
-        let mut conn = self.client
+        let mut conn = self.conn_pool
             .as_ref()
             .unwrap()
-            .get_connection()
+            .get()
             .unwrap_or_else(|e|
                 panic!("Fail to connect to Redis: {e:?}")
             );
@@ -419,10 +397,10 @@ impl PersistencyServices for RedisHandler{
 
     fn get_last_snapshot(&self, op_coord: OperatorCoord) -> Option<SnapshotId> {
         // Prepare connection
-        let mut conn = self.client
+        let mut conn = self.conn_pool
             .as_ref()
             .unwrap()
-            .get_connection()
+            .get()
             .unwrap_or_else(|e|
                 panic!("Fail to connect to Redis: {e:?}")
             );
@@ -450,10 +428,10 @@ impl PersistencyServices for RedisHandler{
 
     fn get_state<State: ExchangeData>(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId) -> Option<State> {
         // Prepare connection
-        let mut conn = self.client
+        let mut conn = self.conn_pool
             .as_ref()
             .unwrap()
-            .get_connection()
+            .get()
             .unwrap_or_else(|e|
                 panic!("Redis connection error: {e:?}")
             );
@@ -490,10 +468,10 @@ impl PersistencyServices for RedisHandler{
 
     fn delete_state(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId) {
         // Prepare connection
-        let mut conn = self.client
+        let mut conn = self.conn_pool
             .as_ref()
             .unwrap()
-            .get_connection()
+            .get()
             .unwrap_or_else(|e|
                 panic!("Redis connection error: {e:?}")
             );
@@ -546,6 +524,8 @@ impl PersistencyServices for RedisHandler{
 
 #[cfg(test)]
 mod tests {
+    use std::panic::AssertUnwindSafe;
+
     use serde::{Serialize, Deserialize};
     use serial_test::serial;
 
@@ -581,7 +561,7 @@ mod tests {
         state1.values.push(2);
         state1.values.push(3);
 
-        let mut pers_handler = PersistencyService::new(Some(
+        let pers_handler = PersistencyService::new(Some(
             PersistencyConfig { 
                 server_addr: String::from(REDIS_TEST_CONFIGURATION),
                 try_restart: false,
@@ -589,8 +569,6 @@ mod tests {
                 restart_from: None,
             }
         ));
-        pers_handler.setup();
-
         pers_handler.save_state(op_coord1, SnapshotId::new(1), state1.clone());
         let retrived_state: FakeState = pers_handler.get_state(op_coord1, SnapshotId::new(1)).unwrap();
         assert_eq!(state1, retrived_state);
@@ -642,7 +620,7 @@ mod tests {
             operator_id: 2,
         };
 
-        let mut pers_handler = PersistencyService::new(Some(
+        let pers_handler = PersistencyService::new(Some(
             PersistencyConfig { 
                 server_addr: String::from(REDIS_TEST_CONFIGURATION),
                 try_restart: false,
@@ -650,8 +628,6 @@ mod tests {
                 restart_from: None,
             }
         ));
-        pers_handler.setup();
-
         pers_handler.save_void_state(op_coord1, SnapshotId::new(1));
         pers_handler.save_void_state(op_coord1, SnapshotId::new(2));
         let retrived_state: Option<FakeState> = pers_handler.get_state(op_coord1, SnapshotId::new(3));
@@ -690,7 +666,7 @@ mod tests {
             operator_id: 3,
         };
 
-        let mut pers_handler = PersistencyService::new(Some(
+        let pers_handler = PersistencyService::new(Some(
             PersistencyConfig { 
                 server_addr: String::from(REDIS_TEST_CONFIGURATION),
                 try_restart: false,
@@ -698,14 +674,12 @@ mod tests {
                 restart_from: None,
             }
         ));
-        pers_handler.setup();
-
         // Snap_id = 0
-        let result = std::panic::catch_unwind(|| pers_handler.save_state(op_coord1, SnapshotId::new(0), 100));
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_handler.save_state(op_coord1, SnapshotId::new(0), 100)));
         assert!(result.is_err());
 
         // Snap_id = 10
-        let result = std::panic::catch_unwind(|| pers_handler.save_void_state(op_coord1, SnapshotId::new(10)));
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_handler.save_void_state(op_coord1, SnapshotId::new(10))));
         assert!(result.is_err());
 
         pers_handler.save_state(op_coord1, SnapshotId::new(1), 101);
@@ -713,15 +687,15 @@ mod tests {
         pers_handler.save_state(op_coord1, SnapshotId::new(3), 103);
 
         // Snap_id = 1
-        let result = std::panic::catch_unwind(|| pers_handler.save_void_state(op_coord1, SnapshotId::new(1)));
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_handler.save_void_state(op_coord1, SnapshotId::new(1))));
         assert!(result.is_err());
 
         // Snap_id = 2
-        let result = std::panic::catch_unwind(|| pers_handler.save_void_state(op_coord1, SnapshotId::new(2)));
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_handler.save_void_state(op_coord1, SnapshotId::new(2))));
         assert!(result.is_err());
 
         // Snap_id = 3
-        let result = std::panic::catch_unwind(|| pers_handler.save_void_state(op_coord1, SnapshotId::new(3)));
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_handler.save_void_state(op_coord1, SnapshotId::new(3))));
         assert!(result.is_err());
 
         // Clean
@@ -744,22 +718,20 @@ mod tests {
             operator_id: 4
         };
 
-        let mut pers_handler = PersistencyService::new(None);
-        pers_handler.setup();
-
-        let result = std::panic::catch_unwind(|| pers_handler.save_state(op_coord1, SnapshotId::new(1), 100));
+        let pers_handler = PersistencyService::new(None);
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_handler.save_state(op_coord1, SnapshotId::new(1), 100)));
         assert!(result.is_err());
 
-        let result = std::panic::catch_unwind(|| pers_handler.save_void_state(op_coord1, SnapshotId::new(1)));
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_handler.save_void_state(op_coord1, SnapshotId::new(1))));
         assert!(result.is_err());
 
-        let result: Result<Option<u32>, Box<dyn std::any::Any + Send>> = std::panic::catch_unwind(|| pers_handler.get_state(op_coord1, SnapshotId::new(1)));
+        let result: Result<Option<u32>, Box<dyn std::any::Any + Send>> = std::panic::catch_unwind(AssertUnwindSafe(|| pers_handler.get_state(op_coord1, SnapshotId::new(1))));
         assert!(result.is_err());
 
-        let result = std::panic::catch_unwind(|| pers_handler.get_last_snapshot(op_coord1));
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_handler.get_last_snapshot(op_coord1)));
         assert!(result.is_err());
 
-        let result = std::panic::catch_unwind(|| pers_handler.delete_state(op_coord1, SnapshotId::new(1)));
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_handler.delete_state(op_coord1, SnapshotId::new(1))));
         assert!(result.is_err());
 
     }
@@ -794,8 +766,6 @@ mod tests {
                 restart_from: None,
             }
         ));
-        pers_handler.setup();
-
         assert_eq!(pers_handler.restart_from_snapshot(op_coord1), None);
         pers_handler.compute_last_complete_snapshot(vec![op_coord1, op_coord2, op_coord3]);
         assert_eq!(pers_handler.restart_from_snapshot(op_coord1), None);

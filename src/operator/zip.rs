@@ -81,7 +81,6 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Operator<(Out1, Out2)> for Zip<Out1
         self.operator_coord.replica_id = metadata.coord.replica_id;
 
         self.persistency_service = metadata.persistency_service.clone();
-        self.persistency_service.setup();
         let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
         if snapshot_id.is_some() {
             // Get and resume the persisted state

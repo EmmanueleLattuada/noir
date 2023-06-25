@@ -100,7 +100,6 @@ struct KeyedFoldState<K: Hash + Eq, O> {
     timestamps: HashMap<K, Timestamp, crate::block::GroupHasherBuilder>,
     ready: Vec<StreamElement<(K, O)>>,
     max_watermark: Option<Timestamp>,
-    received_end: bool,
     received_end_iter: bool,
 }
 
@@ -118,7 +117,6 @@ where
         self.operator_coord.replica_id = metadata.coord.replica_id;
 
         self.persistency_service = metadata.persistency_service.clone();
-        self.persistency_service.setup();
         let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
         if snapshot_id.is_some() {
             // Get and resume the persisted state
@@ -128,7 +126,7 @@ where
                 self.timestamps = state.timestamps;
                 self.ready = state.ready;
                 self.max_watermark = state.max_watermark;
-                self.received_end = state.received_end;
+                //self.received_end = state.received_end;
                 self.received_end_iter = state.received_end_iter;
             } else {
                 panic!("No persisted state founded for op: {0}", self.operator_coord);
@@ -167,7 +165,6 @@ where
                         timestamps: self.timestamps.clone(),
                         ready: self.ready.clone(),
                         max_watermark: self.max_watermark,
-                        received_end: self.received_end,
                         received_end_iter: self.received_end_iter,
                     }; 
                     self.persistency_service.save_state(self.operator_coord, snap_id, state);
@@ -213,7 +210,6 @@ where
                 timestamps: self.timestamps.clone(),
                 ready: self.ready.clone(),
                 max_watermark: self.max_watermark,
-                received_end: self.received_end,
                 received_end_iter: self.received_end_iter,
             }; 
             self.persistency_service.save_terminated_state(self.operator_coord, state);

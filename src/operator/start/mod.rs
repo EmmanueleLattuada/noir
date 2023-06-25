@@ -246,8 +246,6 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
     }
 
     fn process_terminate(&mut self, sender: Coord) -> Option<SnapshotId> {
-        // Add Terminate to on going snapshots as a regular item
-        self.add_item_to_snapshot(StreamElement::Terminate, sender);
         // Sender terminated: it did implicitely a terminate snapshot, continue that snapshot
         let mut snapshot_id = self.last_snapshots.get(&sender)
             .unwrap_or(&SnapshotId::new(0))
@@ -356,7 +354,6 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Operator<
         self.operator_coord.replica_id = metadata.coord.replica_id;
 
         self.persistency_service = metadata.persistency_service.clone();
-        self.persistency_service.setup();
         let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
         if let Some(snap_id) = snapshot_id {
             // Get and resume the persisted state
@@ -431,14 +428,8 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Operator<
                         self.missing_flush_and_restart -= 1;
                         continue;
                     }
-                    StreamElement::Terminate => {
-                        self.missing_terminate -= 1;
-                        log::debug!(
-                            "{} received a Terminate, {} more to come",
-                            coord,
-                            self.missing_terminate
-                        );
-                        continue;
+                    StreamElement::Terminate => {                       
+                        panic!("Terminated must not be persisted!");
                     }
                     _ => {
                         item

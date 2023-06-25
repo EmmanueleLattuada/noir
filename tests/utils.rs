@@ -238,10 +238,8 @@ impl TestHelper {
     where
         F: Fn(StreamEnvironment) + Send + Sync + 'static,
     {
-        // TODO: FIX THIS
-        /*
         let body = Arc::new(body);
-        
+            
         let local_cores =
             Self::parse_list_from_env("RSTREAM_TEST_LOCAL_CORES").unwrap_or_else(|| vec![4]);
         for num_cores in local_cores {
@@ -260,7 +258,7 @@ impl TestHelper {
                     Self::remote_env(body.clone(), num_hosts, num_cores, Some(pers_conf));
                 }
             }
-        }*/
+        }
     }
 
     pub fn persistency_config_test(try_restart: bool, clean_on_exit: bool, restart_from: Option<u64>) -> PersistencyConfig {
