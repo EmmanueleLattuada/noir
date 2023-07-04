@@ -530,7 +530,7 @@ mod tests {
                 let mut env = StreamEnvironment::new(EnvironmentConfig::local(4));
                 let source = CsvSource::<(i32, i32)>::new(file.path()).has_headers(false);
                 let res = env.stream(source).shuffle().collect_vec();
-                env.execute();
+                env.execute_blocking();
 
                 let mut res = res.get().unwrap();
                 res.sort_unstable();
@@ -558,7 +558,7 @@ mod tests {
                 let mut env = StreamEnvironment::new(EnvironmentConfig::local(4));
                 let source = CsvSource::<T>::new(file.path());
                 let res = env.stream(source).shuffle().collect_vec();
-                env.execute();
+                env.execute_blocking();
 
                 let res = res
                     .get()

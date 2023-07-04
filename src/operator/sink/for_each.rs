@@ -141,7 +141,7 @@ mod tests {
         env.stream(source).for_each(move |x| {
             sum.fetch_add(x, Ordering::Release);
         });
-        env.execute();
+        env.execute_blocking();
         assert_eq!(sum2.load(Ordering::Acquire), (0..10).sum::<u8>());
     }
 
@@ -156,7 +156,7 @@ mod tests {
             .for_each(move |(p, x)| {
                 sum.fetch_add(x * (p + 1), Ordering::Release);
             });
-        env.execute();
+        env.execute_blocking();
         assert_eq!(
             sum2.load(Ordering::Acquire),
             (0..10).map(|x| x * (x % 2 + 1)).sum::<u8>()

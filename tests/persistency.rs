@@ -32,7 +32,7 @@ fn word_count_persistency() {
             .group_by(|word| word.clone())
             .fold(0, |count, _word| *count += 1)
             .collect_vec();
-        env.execute();
+        env.execute_blocking();
         if let Some(mut res) = result.get() {            
             res.sort_unstable(); // the output order is nondeterministic
             assert_eq!(res, vec![

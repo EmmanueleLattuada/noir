@@ -18,7 +18,7 @@ fn test_first_window_keyed() {
             .window(CountWindow::sliding(3, 2))
             .first()
             .collect_vec();
-        env.execute();
+        env.execute_blocking();
         if let Some(mut res) = res.get() {
             res.sort_unstable();
             assert_eq!(
@@ -47,7 +47,7 @@ fn test_fold_window_keyed() {
             .window(CountWindow::sliding(3, 2))
             .fold(0, |acc, x| *acc += x)
             .collect_vec();
-        env.execute();
+        env.execute_blocking();
         if let Some(mut res) = res.get() {
             res.sort_unstable();
             assert_eq!(
@@ -79,7 +79,7 @@ fn test_sum_window_keyed() {
             .window(CountWindow::sliding(3, 2))
             .sum()
             .collect_vec();
-        env.execute();
+        env.execute_blocking();
         if let Some(mut res) = res.get() {
             res.sort_unstable();
             assert_eq!(
@@ -110,7 +110,7 @@ fn test_min_window_keyed() {
             .window(CountWindow::sliding(3, 2))
             .min()
             .collect_vec();
-        env.execute();
+        env.execute_blocking();
         if let Some(mut res) = res.get() {
             res.sort_unstable();
             assert_eq!(
@@ -138,7 +138,7 @@ fn test_max_window_keyed() {
             .window(CountWindow::sliding(3, 2))
             .max()
             .collect_vec();
-        env.execute();
+        env.execute_blocking();
         if let Some(mut res) = res.get() {
             res.sort_unstable();
             assert_eq!(
@@ -172,7 +172,7 @@ fn test_map_window_keyed() {
                 res
             })
             .collect_vec();
-        env.execute();
+        env.execute_blocking();
         if let Some(mut res) = res.get() {
             res.sort_unstable();
             assert_eq!(
@@ -206,7 +206,7 @@ fn test_first_window_keyed_persistency() {
             .window(CountWindow::sliding(3, 2))
             .first()
             .collect_vec();
-        env.execute();
+        env.execute_blocking();
         if let Some(mut res) = res.get() {
             res.sort_unstable();
             assert_eq!(

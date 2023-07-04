@@ -194,20 +194,7 @@ impl Scheduler {
         self.prev_blocks.entry(to).or_default().push((from, typ));
     }
 
-    #[cfg(feature = "async-tokio")]
-    /// Start the computation returning the list of handles used to join the workers.
-    pub(crate) async fn start(mut self, num_blocks: CoordUInt) {
-        debug!("start scheduler: {:?}", self.config);
-        self.log_topology();
-
-        assert_eq!(
-            self.block_info.len(),
-            num_blocks as usize,
-            "Some streams do not have a sink attached: {} streams created, but only {} registered",
-            num_blocks as usize,
-            self.block_info.len(),
-        );
-
+    fn build_all(&mut self) -> (Vec<JoinHandle<()>>, Vec<(Coord, BlockStructure)>) {
         self.build_execution_graph();
         self.network.build();
         self.network.log();
@@ -216,75 +203,7 @@ impl Scheduler {
         let mut block_structures = vec![];
         let mut job_graph_generator = JobGraphGenerator::new();
 
-        for (coord, init_fn) in self.block_init {
-            let block_info = &self.block_info[&coord.block_id];
-            let replicas = block_info.replicas.values().flatten().cloned().collect();
-            let global_id = block_info.global_ids[&coord];
-            let mut metadata = ExecutionMetadata {
-                coord,
-                replicas,
-                global_id,
-                prev: self.network.prev(coord),
-                network: &mut self.network,
-                batch_mode: block_info.batch_mode,
-            };
-            let (handle, structure) = init_fn(&mut metadata);
-            join.push(handle);
-            block_structures.push((coord, structure.clone()));
-            job_graph_generator.add_block(coord.block_id, structure);
-        }
-
-        let job_graph = job_graph_generator.finalize();
-        log::debug!("job graph:\n{}", job_graph);
-
-        self.network.finalize();
-
-        let (_, join_result) = tokio::join!(
-            self.network.stop_and_wait(),
-            tokio::task::spawn_blocking(move || {
-                for handle in join {
-                    handle.join().unwrap();
-                }
-            })
-        );
-
-        join_result.expect("Could not join worker threads");
-
-        let profiler_results = wait_profiler();
-
-        Self::log_tracing_data(block_structures, profiler_results);
-    }
-
-    #[cfg(not(feature = "async-tokio"))]
-    /// Start the computation returning the list of handles used to join the workers.
-    pub(crate) fn start(mut self, num_blocks: CoordUInt) {
-        debug!("start scheduler: {:?}", self.config);
-        self.log_topology();
-
-        assert_eq!(
-            self.block_info.len(),
-            num_blocks as usize,
-            "Some streams do not have a sink attached: {} streams created, but only {} registered",
-            num_blocks as usize,
-            self.block_info.len(),
-        );
-
-        // If set, try to restart from a snapshot
-        if let Some(persistency_conf) = self.config.persistency_configuration.clone(){
-            if persistency_conf.try_restart {
-                self.persistency_service.find_snapshot(self.operators_coordinates.clone(), persistency_conf.restart_from);
-            }
-        }
-
-        self.build_execution_graph();
-        self.network.build();
-        self.network.log();
-
-        let mut join = vec![];
-        let mut block_structures = vec![];
-        let mut job_graph_generator = JobGraphGenerator::new();
-
-        for (coord, init_fn) in self.block_init {
+        for (coord, init_fn) in self.block_init.drain(..) {
             let block_info = &self.block_info[&coord.block_id];
             let replicas = block_info.replicas.values().flatten().cloned().collect();
             let global_id = block_info.global_ids[&coord];
@@ -308,29 +227,112 @@ impl Scheduler {
 
         self.network.finalize();
 
-        for handle in join {
-            handle.join().unwrap();
+        (join, block_structures)
+    }
+
+    #[cfg(feature = "async-tokio")]
+    /// Start the computation returning the list of handles used to join the workers.
+    pub(crate) async fn start(mut self, block_count: CoordUInt) {
+        debug!("start scheduler: {:?}", self.config);
+        self.log_topology();
+
+        assert_eq!(
+            self.block_info.len(),
+            block_count as usize,
+            "Some streams do not have a sink attached: {} streams created, but only {} registered",
+            block_count as usize,
+            self.block_info.len(),
+        );
+
+        let (join, block_structures) = self.build_all();
+
+        let (_, join_result) = tokio::join!(
+            self.network.stop_and_wait(),
+            tokio::task::spawn_blocking(move || {
+                for handle in join {
+                    handle.join().unwrap();
+                }
+            })
+        );
+
+        join_result.expect("Could not join worker threads");
+
+        Self::log_tracing_data(block_structures, wait_profiler());
+    }
+
+    /// Start the computation returning the list of handles used to join the workers.
+    ///
+    /// NOTE: If running with the `async-tokio` feature enable, this will create a new
+    /// tokio runtime.
+    pub(crate) fn start_blocking(mut self, num_blocks: CoordUInt) {
+        debug!("start scheduler: {:?}", self.config);
+        self.log_topology();
+
+        assert_eq!(
+            self.block_info.len(),
+            num_blocks as usize,
+            "Some streams do not have a sink attached: {} streams created, but only {} registered",
+            num_blocks as usize,
+            self.block_info.len(),
+        );
+
+        // If set, try to restart from a snapshot
+        if let Some(persistency_conf) = self.config.persistency_configuration.clone(){
+            if persistency_conf.try_restart {
+                self.persistency_service.find_snapshot(self.operators_coordinates.clone(), persistency_conf.restart_from);
+            }
         }
 
-        self.network.stop_and_wait();
+        #[cfg(feature = "async-tokio")]
+        {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_io()
+                .enable_time()
+                .build()
+                .unwrap()
+                .block_on(async move {
+                    let (join, block_structures) = self.build_all();
 
-        // If set, clean all persisted snapshots (each host clean its own operators)
-        let this_host = self.config.host_id.unwrap();
-        if let Some(persistency_conf) = self.config.persistency_configuration{
-                if persistency_conf.clean_on_exit {
-                    self.persistency_service.clean_persisted_state(
-                        self.operators_coordinates
-                            .into_iter()
-                            .filter(|op_coord| op_coord.host_id == this_host)
-                            .collect_vec()
+                    let (_, join_result) = tokio::join!(
+                        self.network.stop_and_wait(),
+                        tokio::task::spawn_blocking(move || {
+                            for handle in join {
+                                handle.join().unwrap();
+                            }
+                        })
                     );
-                }
+                    join_result.expect("Could not join worker threads");
+                    Self::log_tracing_data(block_structures, wait_profiler());
+                });
+        }
+        #[cfg(not(feature = "async-tokio"))]
+        {
+            let (join, block_structures) = self.build_all();
+
+            for handle in join {
+                handle.join().unwrap();
             }
 
-        let profiler_results = wait_profiler();
+            self.network.stop_and_wait();
 
-        Self::log_tracing_data(block_structures, profiler_results);
+            // If set, clean all persisted snapshots (each host clean its own operators)
+            let this_host = self.config.host_id.unwrap();
+            if let Some(persistency_conf) = self.config.persistency_configuration{
+                    if persistency_conf.clean_on_exit {
+                        self.persistency_service.clean_persisted_state(
+                            self.operators_coordinates
+                                .into_iter()
+                                .filter(|op_coord| op_coord.host_id == this_host)
+                                .collect_vec()
+                        );
+                    }
+                }
+
+            let profiler_results = wait_profiler();
+            Self::log_tracing_data(block_structures, profiler_results);
+        }
     }
+
 
     /// Get the ids of the previous blocks of a given block in the job graph
     pub(crate) fn prev_blocks(&self, block_id: BlockId) -> Option<Vec<(BlockId, TypeId)>> {
@@ -534,7 +536,7 @@ mod tests {
         let mut env = StreamEnvironment::new(EnvironmentConfig::local(4));
         let source = IteratorSource::new(vec![1, 2, 3].into_iter());
         let _stream = env.stream(source);
-        env.execute();
+        env.execute_blocking();
     }
 
     #[test]
@@ -543,6 +545,6 @@ mod tests {
         let mut env = StreamEnvironment::new(EnvironmentConfig::local(4));
         let source = IteratorSource::new(vec![1, 2, 3].into_iter());
         let _stream = env.stream(source).shuffle();
-        env.execute();
+        env.execute_blocking();
     }
 }

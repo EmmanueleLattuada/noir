@@ -54,7 +54,7 @@ fn persistency_bench(c: &mut Criterion) {
                 b.iter(move || {
                     let mut env = StreamEnvironment::default();
                     wc_fold(&mut env, path, None);
-                    env.execute();
+                    env.execute_blocking();
                 })
             },
         );
@@ -75,7 +75,7 @@ fn persistency_bench(c: &mut Criterion) {
                     });
                     let mut env = StreamEnvironment::new(config);
                     wc_fold(&mut env, path, None);
-                    env.execute();
+                    env.execute_blocking();
                 })
             },
         );
@@ -96,7 +96,7 @@ fn persistency_bench(c: &mut Criterion) {
                     });
                     let mut env = StreamEnvironment::new(config);
                     wc_fold(&mut env, path, Some(100));
-                    env.execute();
+                    env.execute_blocking();
                 })
             },
         );

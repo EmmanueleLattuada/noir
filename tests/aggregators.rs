@@ -12,7 +12,7 @@ fn group_by_min_element() {
             .stream(source)
             .group_by_min_element(|&x| x % 2, |&x| x)
             .collect_vec();
-        env.execute();
+        env.execute_blocking();
         if let Some(mut res) = res.get() {
             res.sort_unstable();
             assert_eq!(res, &[(0, 0), (1, 1)]);
@@ -28,7 +28,7 @@ fn group_by_max_element() {
             .stream(source)
             .group_by_max_element(|&x| x % 2, |&x| x)
             .collect_vec();
-        env.execute();
+        env.execute_blocking();
         if let Some(mut res) = res.get() {
             res.sort_unstable();
             assert_eq!(res, &[(0, 8), (1, 9)]);
@@ -45,7 +45,7 @@ fn group_by_sum() {
             .stream(source)
             .group_by_sum(|&x| x % 2, |x| x)
             .collect_vec();
-        env.execute();
+        env.execute_blocking();
         if let Some(mut res) = res.get() {
             res.sort_unstable();
             assert_eq!(res, &[(0, 0 + 2 + 4 + 6 + 8), (1, 1 + 3 + 5 + 7 + 9)]);
@@ -62,7 +62,7 @@ fn group_by_avg() {
             .stream(source)
             .group_by_avg(|&x| x % 2, |&x| x as f64)
             .collect_vec();
-        env.execute();
+        env.execute_blocking();
         if let Some(mut res) = res.get() {
             res.sort_by_key(|(m, _)| *m);
             assert_eq!(
@@ -81,7 +81,7 @@ fn group_by_count() {
     TestHelper::local_remote_env(|mut env| {
         let source = IteratorSource::new(0..10u8);
         let res = env.stream(source).group_by_count(|&x| x % 2).collect_vec();
-        env.execute();
+        env.execute_blocking();
         if let Some(mut res) = res.get() {
             res.sort_by_key(|(m, _)| *m);
             assert_eq!(res, &[(0, 5), (1, 5)]);
@@ -97,7 +97,7 @@ fn group_by_count_persistency() {
         let mut source = IteratorSource::new(0..10u8);
         source.set_snapshot_frequency_by_item(3);
         let res = env.stream(source).group_by_count(|&x| x % 2).collect_vec();
-        env.execute();
+        env.execute_blocking();
         if let Some(mut res) = res.get() {
             res.sort_by_key(|(m, _)| *m);
             assert_eq!(res, &[(0, 5), (1, 5)]);

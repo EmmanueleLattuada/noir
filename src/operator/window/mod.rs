@@ -413,7 +413,7 @@ where
     ///     .sum()
     ///     .collect_vec();
     ///
-    /// env.execute();
+    /// env.execute_blocking();
     ///
     /// let mut res = res.get().unwrap();
     /// res.sort_unstable();
@@ -456,7 +456,7 @@ where
     ///     .drop_key()
     ///     .collect_vec();
     ///
-    /// env.execute();
+    /// env.execute_blocking();
     ///
     /// let mut res = res.get().unwrap();
     /// assert_eq!(res, vec![0 + 1, 2 + 3]);

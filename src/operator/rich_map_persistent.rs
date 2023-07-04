@@ -212,7 +212,7 @@ where
     ///    }
     /// }).collect_vec();
     ///
-    /// env.execute();
+    /// env.execute_blocking();
     ///
     /// assert_eq!(res.get().unwrap(), vec![1, 1 + 2, 1 + 2 + 3, 1 + 2 + 3 + 4, 1 + 2 + 3 + 4 + 5]);
     /// ```    
@@ -233,7 +233,7 @@ where
     ///     }
     /// }).collect_vec();
     ///
-    /// env.execute();
+    /// env.execute_blocking();
     ///
     /// assert_eq!(res.get().unwrap(), vec![(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)]);
     /// ```
