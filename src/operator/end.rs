@@ -4,7 +4,7 @@ use std::fmt::Display;
 use crate::block::{
     BatchMode, Batcher, BlockStructure, Connection, NextStrategy, OperatorStructure,
 };
-use crate::network::{Coord, ReceiverEndpoint, OperatorCoord};
+use crate::network::{ReceiverEndpoint, OperatorCoord};
 use crate::operator::{ExchangeData, KeyerFn, Operator, StreamElement};
 use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{BlockId, ExecutionMetadata, OperatorId};
@@ -31,7 +31,6 @@ where
 {
     prev: OperatorChain,
     operator_coord: OperatorCoord,
-    coord: Option<Coord>,
     next_strategy: NextStrategy<Out, IndexFn>,
     batch_mode: BatchMode,
     block_senders: Vec<BlockSenders>,
@@ -39,7 +38,7 @@ where
     senders: Vec<(ReceiverEndpoint, Batcher<Out>)>,
     feedback_id: Option<BlockId>,
     ignore_block_ids: Vec<BlockId>,
-    persistency_service: PersistencyService,
+    persistency_service: Option<PersistencyService>,
     terminated: bool,
 }
 
@@ -72,14 +71,13 @@ where
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0,0,0,op_id),
-            coord: None,
             next_strategy,
             batch_mode,
             block_senders: Default::default(),
             senders: Default::default(),
             feedback_id: None,
             ignore_block_ids: Default::default(),
-            persistency_service: PersistencyService::default(),
+            persistency_service: None,
             terminated: false,
         }
     }
@@ -124,6 +122,19 @@ where
     pub(crate) fn ignore_destination(&mut self, block_id: BlockId) {
         self.ignore_block_ids.push(block_id);
     }
+
+    /// Save state accordingly to the given message
+    fn snapshot_procedures(&mut self, message: &StreamElement<Out>) {
+        match message {
+            StreamElement::Snapshot(snap_id) => {
+                self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, *snap_id);
+            }
+            StreamElement::Terminate => {                        
+                self.persistency_service.as_mut().unwrap().save_terminated_void_state(self.operator_coord);
+            }
+            _ => {}
+        }
+    }
 }
 
 impl<Out: ExchangeData, OperatorChain, IndexFn> Operator<()> for End<Out, OperatorChain, IndexFn>
@@ -145,17 +156,14 @@ where
 
         self.setup_senders();
 
-        self.coord = Some(metadata.coord);
-
-        self.operator_coord.block_id = metadata.coord.block_id;
-        self.operator_coord.host_id = metadata.coord.host_id;
-        self.operator_coord.replica_id = metadata.coord.replica_id;
-
-        self.persistency_service = metadata.persistency_service.clone();
-        let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
-        if let Some(snap_id) = snapshot_id {
-            if snap_id.terminate() {
-                self.terminated = true;
+        self.operator_coord.from_coord(metadata.coord);
+        if metadata.persistency_service.is_some(){
+            self.persistency_service = metadata.persistency_service.clone();
+            let snapshot_id = self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+            if let Some(snap_id) = snapshot_id {
+                if snap_id.terminate() {
+                    self.terminated = true;
+                }
             }
         }
     }
@@ -163,25 +171,15 @@ where
     fn next(&mut self) -> StreamElement<()> {
         let message = self.prev.next();
         let to_return = message.take();
+        if self.persistency_service.is_some(){
+            self.snapshot_procedures(&message);
+        }
         match &message {
             // Broadcast messages
             StreamElement::Watermark(_)
             | StreamElement::Snapshot(_)
             | StreamElement::Terminate
             | StreamElement::FlushAndRestart => {
-                match &message {
-                    // Save void state
-                    StreamElement::Snapshot(snap_id) => {
-                        self.persistency_service.save_void_state(self.operator_coord, *snap_id);
-                    }
-                    StreamElement::Terminate => {
-                        if self.persistency_service.is_active() {
-                            // Save void terminated state                            
-                            self.persistency_service.save_terminated_void_state(self.operator_coord);
-                        }
-                    }
-                    _ => {}
-                }
                 for block in self.block_senders.iter() {
                     for &sender_idx in block.indexes.iter() {
                         let sender = &mut self.senders[sender_idx];
@@ -220,7 +218,7 @@ where
             StreamElement::Terminate => {
                 log::debug!(
                     "{} received terminate, closing {} channels",
-                    self.coord.unwrap(),
+                    self.operator_coord.get_coord(),
                     self.senders.len()
                 );
                 for (_, batcher) in self.senders.drain(..) {

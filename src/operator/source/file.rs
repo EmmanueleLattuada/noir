@@ -11,7 +11,6 @@ use serde::Serialize;
 
 use crate::block::Replication;
 use crate::block::{BlockStructure, OperatorKind, OperatorStructure};
-use crate::network::Coord;
 use crate::network::OperatorCoord;
 use crate::operator::source::Source;
 use crate::operator::{Operator, StreamElement};
@@ -34,10 +33,9 @@ pub struct FileSource {
     current: usize,
     end: usize,
     terminated: bool,
-    coord: Option<Coord>,
     operator_coord: OperatorCoord,
     snapshot_generator: SnapshotGenerator,
-    persistency_service: PersistencyService,
+    persistency_service: Option<PersistencyService>,
 }
 
 impl Display for FileSource {
@@ -75,12 +73,11 @@ impl FileSource {
             current: 0,
             end: 0,
             terminated: false,
-            coord: None,
             // This is the first operator in the chain so operator_id = 0
             // Other fields will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, 0),
             snapshot_generator: SnapshotGenerator::new(),
-            persistency_service: PersistencyService::default(),
+            persistency_service: None,
         }
     }
 }
@@ -109,23 +106,22 @@ impl Operator<String> for FileSource {
         let global_id = metadata.global_id;
         let instances = metadata.replicas.len();
 
-        self.operator_coord.block_id = metadata.coord.block_id;
-        self.operator_coord.host_id = metadata.coord.host_id;
-        self.operator_coord.replica_id = metadata.coord.replica_id;
-
-        self.persistency_service = metadata.persistency_service.clone();
-        let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
+        self.operator_coord.from_coord(metadata.coord);
         let mut last_position = None;
-        if let Some(snap_id) = snapshot_id {
-            // Get the persisted state
-            let opt_state: Option<FileSourceState> = self.persistency_service.get_state(self.operator_coord, snap_id);
-            if let Some(state) = opt_state {
-                self.terminated = snap_id.terminate();
-                last_position = Some(state.current);
-            } else {
-                panic!("No persisted state founded for op: {0}", self.operator_coord);
-            } 
-            self.snapshot_generator.restart_from(snap_id);
+        if metadata.persistency_service.is_some() {
+            self.persistency_service = metadata.persistency_service.clone();
+            let snapshot_id = self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+            if let Some(snap_id) = snapshot_id {
+                // Get the persisted state
+                let opt_state: Option<FileSourceState> = self.persistency_service.as_mut().unwrap().get_state(self.operator_coord, snap_id);
+                if let Some(state) = opt_state {
+                    self.terminated = snap_id.terminate();
+                    last_position = Some(state.current);
+                } else {
+                    panic!("No persisted state founded for op: {0}", self.operator_coord);
+                } 
+                self.snapshot_generator.restart_from(snap_id);
+            }
         }
 
         let file = File::open(&self.path).unwrap_or_else(|err| {
@@ -164,33 +160,34 @@ impl Operator<String> for FileSource {
                 .read_until(b'\n', &mut v)
                 .expect("Cannot read line from file");
         }
-        self.coord = Some(metadata.coord);
         self.reader = Some(reader);
 
     }
 
     fn next(&mut self) -> StreamElement<String> {
         if self.terminated {
-            if self.persistency_service.is_active() {
+            if self.persistency_service.is_some() {
                 // Save terminated state
                 let state = FileSourceState{
                     current: self.current as u64,
                 }; 
-                self.persistency_service.save_terminated_state(self.operator_coord, state);            
+                self.persistency_service.as_mut().unwrap().save_terminated_state(self.operator_coord, state);            
             }
-            log::trace!("terminate {}", self.coord.unwrap());
+            log::trace!("terminate {}", self.operator_coord.get_coord());
             return StreamElement::Terminate;
         }
-        // Check snapshot generator
-        let snapshot = self.snapshot_generator.get_snapshot_marker();
-        if snapshot.is_some() {
-            let snapshot_id = snapshot.unwrap();
-            // Save state and forward snapshot marker
-            let state = FileSourceState{
-                current: self.current as u64,
-            }; 
-            self.persistency_service.save_state(self.operator_coord, snapshot_id, state);
-            return StreamElement::Snapshot(snapshot_id);
+        if self.persistency_service.is_some(){
+            // Check snapshot generator
+            let snapshot = self.snapshot_generator.get_snapshot_marker();
+            if snapshot.is_some() {
+                let snapshot_id = snapshot.unwrap();
+                // Save state and forward snapshot marker
+                let state = FileSourceState{
+                    current: self.current as u64,
+                }; 
+                self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id, state);
+                return StreamElement::Snapshot(snapshot_id);
+            }
         }
         let element = if self.current <= self.end {
             let mut line = String::new();
@@ -243,7 +240,6 @@ impl Clone for FileSource {
             current: 0,
             end: 0,
             terminated: false,
-            coord: None,
             operator_coord: OperatorCoord::new(0, 0, 0, 0),
             snapshot_generator: self.snapshot_generator.clone(),
             persistency_service: self.persistency_service.clone(),

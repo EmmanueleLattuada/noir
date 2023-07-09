@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 
 use crate::block::{BatchMode, Batcher, BlockStructure, Connection, OperatorStructure};
-use crate::network::{Coord, ReceiverEndpoint, OperatorCoord};
+use crate::network::{ReceiverEndpoint, OperatorCoord};
 use crate::operator::{KeyerFn, StreamElement};
 use crate::scheduler::{BlockId, ExecutionMetadata, OperatorId};
 
@@ -105,8 +105,7 @@ where
     prev: OperatorChain,
 
     operator_coord: OperatorCoord,
-    persistency_service: PersistencyService,
-    coord: Option<Coord>,
+    persistency_service: Option<PersistencyService>,
     next_strategy: NextStrategy<Out, IndexFn>,
     batch_mode: BatchMode,
     #[derivative(Debug = "ignore", Clone(clone_with = "clone_default"))]
@@ -148,8 +147,7 @@ where
             
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
-            persistency_service: PersistencyService::default(),
-            coord: None,
+            persistency_service: None,
             next_strategy,
             batch_mode,
             endpoints: Default::default(),
@@ -222,15 +220,11 @@ where
 
         self.setup_endpoints();
 
-        self.coord = Some(metadata.coord);
-
-        self.operator_coord.block_id = metadata.coord.block_id;
-        self.operator_coord.host_id = metadata.coord.host_id;
-        self.operator_coord.replica_id = metadata.coord.replica_id;
-
-        self.persistency_service = metadata.persistency_service.clone();
-        self.persistency_service.restart_from_snapshot(self.operator_coord);
-        // Set terminated
+        self.operator_coord.from_coord(metadata.coord);
+        if metadata.persistency_service.is_some(){
+            self.persistency_service = metadata.persistency_service.clone();
+            self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+        }
     }
 
     fn next(&mut self) -> StreamElement<()> {
@@ -256,9 +250,9 @@ where
                     // Just return Terminate to exit
                     return StreamElement::Terminate
                 }
-                if self.persistency_service.is_active() {
+                if self.persistency_service.is_some() {
                     // Save void terminated state
-                    self.persistency_service.save_terminated_void_state(self.operator_coord);
+                    self.persistency_service.as_mut().unwrap().save_terminated_void_state(self.operator_coord);
                 }
                 // Broadcast message
                 for e in self.endpoints.iter() {
@@ -289,7 +283,7 @@ where
             StreamElement::FlushBatch => {}
             StreamElement::Snapshot(snap_id) => {
                 // Save void state and broaadcast marker
-                self.persistency_service.save_void_state(self.operator_coord, *snap_id);
+                self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, *snap_id);
                 for e in self.endpoints.iter() {
                     for &sender_idx in e.block_senders.indexes.iter() {
                         let sender = &mut self.senders[sender_idx];
@@ -309,7 +303,7 @@ where
             StreamElement::Terminate => {
                 log::trace!(
                     "routing_end terminate {}, closing {} channels",
-                    self.coord.unwrap(),
+                    self.operator_coord.get_coord(),
                     self.senders.len()
                 );
                 for (_, batcher) in self.senders.drain(..) {

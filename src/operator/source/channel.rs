@@ -27,7 +27,7 @@ pub struct ChannelSource<Out: Data> {
     retry_count: u8,
     operator_coord: OperatorCoord,
     snapshot_generator: SnapshotGenerator,
-    persistency_service: PersistencyService,
+    persistency_service: Option<PersistencyService>,
 }
 
 impl<Out: Data> Display for ChannelSource<Out> {
@@ -65,7 +65,7 @@ impl<Out: Data> ChannelSource<Out> {
             // Other fields will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, 0),
             snapshot_generator: SnapshotGenerator::new(),
-            persistency_service: PersistencyService::default(),
+            persistency_service: None,
         };
 
         (tx, s)
@@ -88,34 +88,35 @@ impl<Out: Data + core::fmt::Debug> Source<Out> for ChannelSource<Out> {
 
 impl<Out: Data + core::fmt::Debug> Operator<Out> for ChannelSource<Out> {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
-        self.operator_coord.block_id = metadata.coord.block_id;
-        self.operator_coord.host_id = metadata.coord.host_id;
-        self.operator_coord.replica_id = metadata.coord.replica_id;
-
-        self.persistency_service = metadata.persistency_service.clone();
-        let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
-        if let Some(snap_id) = snapshot_id {
-            self.terminated = snap_id.terminate();
-            self.snapshot_generator.restart_from(snap_id);
+        self.operator_coord.from_coord(metadata.coord);
+        if metadata.persistency_service.is_some() {
+            self.persistency_service = metadata.persistency_service.clone();
+            let snapshot_id = self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+            if let Some(snap_id) = snapshot_id {
+                self.terminated = snap_id.terminate();
+                self.snapshot_generator.restart_from(snap_id);
+            }
         }
     }
 
     fn next(&mut self) -> StreamElement<Out> {
         loop {
             if self.terminated {
-                if self.persistency_service.is_active(){
+                if self.persistency_service.is_some(){
                     // Save terminated state
-                    self.persistency_service.save_terminated_void_state(self.operator_coord);
+                    self.persistency_service.as_mut().unwrap().save_terminated_void_state(self.operator_coord);
                 } 
                 return StreamElement::Terminate;
             }
-            // Check snapshot generator
-            let snapshot = self.snapshot_generator.get_snapshot_marker();
-            if snapshot.is_some() {
-                let snapshot_id = snapshot.unwrap();
-                // Save void state (this operator is stateless) and forward snapshot marker
-                self.persistency_service.save_void_state(self.operator_coord, snapshot_id);
-                return StreamElement::Snapshot(snapshot_id);
+            if self.persistency_service.is_some() {
+                // Check snapshot generator
+                let snapshot = self.snapshot_generator.get_snapshot_marker();
+                if snapshot.is_some() {
+                    let snapshot_id = snapshot.unwrap();
+                    // Save void state (this operator is stateless) and forward snapshot marker
+                    self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snapshot_id);
+                    return StreamElement::Snapshot(snapshot_id);
+                }
             }
 
             let result = self.rx.try_recv();

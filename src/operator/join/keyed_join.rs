@@ -8,10 +8,10 @@ use serde::{Serialize, Deserialize};
 
 use crate::{
     block::{NextStrategy, OperatorStructure},
-    network::{Coord, OperatorCoord},
+    network::OperatorCoord,
     operator::{
         BinaryElement, BinaryStartOperator, Data, DataKey, ExchangeData, Operator, Start,
-        StreamElement,
+        StreamElement, SnapshotId,
     },
     KeyedStream, scheduler::OperatorId, persistency::{PersistencyService, PersistencyServices},
 };
@@ -52,12 +52,11 @@ impl<Key: DataKey, Out> Default for SideHashMap<Key, Out> {
 struct JoinKeyedOuter<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> {
     prev: BinaryStartOperator<(K, V1), (K, V2)>,
     operator_coord: OperatorCoord,
-    persistency_service: PersistencyService,
+    persistency_service: Option<PersistencyService>,
     variant: JoinVariant,
     _k: PhantomData<K>,
     _v1: PhantomData<V1>,
     _v2: PhantomData<V2>,
-    coord: Option<Coord>,
 
     /// The content of the left side.
     left: SideHashMap<K, V1>,
@@ -74,12 +73,11 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> JoinKeyedOut
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
-            persistency_service: PersistencyService::default(),
+            persistency_service: None,
             variant,
             _k: PhantomData,
             _v1: PhantomData,
             _v2: PhantomData,
-            coord: Default::default(),
             left: Default::default(),
             right: Default::default(),
             buffer: Default::default(),
@@ -186,6 +184,25 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> JoinKeyedOut
             }
         }
     }
+
+    /// Save state for snapshot
+    fn save_snap(&mut self, snapshot_id: SnapshotId) {
+        let state = JoinKeyedOuterState{
+            left: self.left.clone(),
+            right: self.right.clone(),
+            buffer: self.buffer.clone(),
+        };
+        self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id, state);        
+    }
+    /// Save terminated state
+    fn save_terminate(&mut self) {
+        let state = JoinKeyedOuterState{
+            left: self.left.clone(),
+            right: self.right.clone(),
+            buffer: self.buffer.clone(),
+        };
+        self.persistency_service.as_mut().unwrap().save_terminated_state(self.operator_coord, state);
+    }
 }
 
 impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> Display
@@ -215,24 +232,23 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
 {
     fn setup(&mut self, metadata: &mut crate::ExecutionMetadata) {
         self.prev.setup(metadata);
-        self.coord = Some(metadata.coord);
-
-        self.operator_coord.block_id = metadata.coord.block_id;
-        self.operator_coord.host_id = metadata.coord.host_id;
-        self.operator_coord.replica_id = metadata.coord.replica_id;
-
-        self.persistency_service = metadata.persistency_service.clone();
-        let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
-        if snapshot_id.is_some() {
-            // Get and resume the persisted state
-            let opt_state: Option<JoinKeyedOuterState<K, V1, V2>> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
-            if let Some(state) = opt_state {
-                self.left = state.left;
-                self.right = state.right;
-                self.buffer = state.buffer;
-            } else {
-                panic!("No persisted state founded for op: {0}", self.operator_coord);
-            } 
+        
+        self.operator_coord.from_coord(metadata.coord);
+        if metadata.persistency_service.is_some() {
+            self.persistency_service = metadata.persistency_service.clone();
+        
+            let snapshot_id = self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+            if snapshot_id.is_some() {
+                // Get and resume the persisted state
+                let opt_state: Option<JoinKeyedOuterState<K, V1, V2>> = self.persistency_service.as_mut().unwrap().get_state(self.operator_coord, snapshot_id.unwrap());
+                if let Some(state) = opt_state {
+                    self.left = state.left;
+                    self.right = state.right;
+                    self.buffer = state.buffer;
+                } else {
+                    panic!("No persisted state founded for op: {0}", self.operator_coord);
+                } 
+            }
         }
     }
 
@@ -253,30 +269,19 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
                     self.right.count = 0;
                     log::debug!(
                         "JoinLocalHash at {} emitted FlushAndRestart",
-                        self.coord.unwrap()
+                        self.operator_coord.get_coord(),
                     );
                     return StreamElement::FlushAndRestart;
                 }
                 StreamElement::Terminate => {
-                    if self.persistency_service.is_active() {
-                        // Save terminated state
-                        let state = JoinKeyedOuterState{
-                            left: self.left.clone(),
-                            right: self.right.clone(),
-                            buffer: self.buffer.clone(),
-                        };
-                        self.persistency_service.save_terminated_state(self.operator_coord, state);
+                    if self.persistency_service.is_some() {
+                        self.save_terminate();
                     }
                     return StreamElement::Terminate;
                 }
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
                 StreamElement::Snapshot(snapshot_id) => {
-                    let state = JoinKeyedOuterState{
-                        left: self.left.clone(),
-                        right: self.right.clone(),
-                        buffer: self.buffer.clone(),
-                    };
-                    self.persistency_service.save_state(self.operator_coord, snapshot_id, state);
+                    self.save_snap(snapshot_id);
                     return StreamElement::Snapshot(snapshot_id);
                 }
                 StreamElement::Watermark(_) | StreamElement::Timestamped(_, _) => {
@@ -305,11 +310,10 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
 struct JoinKeyedInner<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> {
     prev: BinaryStartOperator<(K, V1), (K, V2)>,
     operator_coord: OperatorCoord,
-    persistency_service: PersistencyService,
+    persistency_service: Option<PersistencyService>,
     _k: PhantomData<K>,
     _v1: PhantomData<V1>,
     _v2: PhantomData<V2>,
-    coord: Option<Coord>,
 
     /// The content of the left side.
     left: HashMap<K, Vec<V1>, crate::block::CoordHasherBuilder>,
@@ -346,11 +350,10 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
-            persistency_service: PersistencyService::default(),
+            persistency_service: None,
             _k: PhantomData,
             _v1: PhantomData,
             _v2: PhantomData,
-            coord: Default::default(),
             left: Default::default(),
             right: Default::default(),
             buffer: Default::default(),
@@ -399,6 +402,29 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
             }
         }
     }
+
+    /// Save state for snapshot
+    fn save_snap(&mut self, snapshot_id: SnapshotId){
+        let state = JoinKeyedInnerState{
+            left: self.left.clone(),
+            right: self.right.clone(),
+            left_ended: self.left_ended,
+            right_ended: self.right_ended,
+            buffer: self.buffer.clone(),
+        };
+        self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id, state);
+    }
+    /// Save terminated state
+    fn save_terminate(&mut self){
+        let state = JoinKeyedInnerState{
+            left: self.left.clone(),
+            right: self.right.clone(),
+            left_ended: self.left_ended,
+            right_ended: self.right_ended,
+            buffer: self.buffer.clone(),
+        };
+        self.persistency_service.as_mut().unwrap().save_terminated_state(self.operator_coord, state);
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -414,27 +440,26 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
     Operator<(K, InnerJoinTuple<V1, V2>)> for JoinKeyedInner<K, V1, V2>
 {
     fn setup(&mut self, metadata: &mut crate::ExecutionMetadata) {
-        self.coord = Some(metadata.coord);
         self.prev.setup(metadata);
 
-        self.operator_coord.block_id = metadata.coord.block_id;
-        self.operator_coord.host_id = metadata.coord.host_id;
-        self.operator_coord.replica_id = metadata.coord.replica_id;
+        self.operator_coord.from_coord(metadata.coord);
 
-        self.persistency_service = metadata.persistency_service.clone();
-        let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
-        if snapshot_id.is_some() {
-            // Get and resume the persisted state
-            let opt_state: Option<JoinKeyedInnerState<K, V1, V2>> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
-            if let Some(state) = opt_state {
-                self.left_ended = state.left_ended;
-                self.right_ended = state.right_ended;
-                self.left = state.left;
-                self.right = state.right;
-                self.buffer = state.buffer;
-            } else {
-                panic!("No persisted state founded for op: {0}", self.operator_coord);
-            } 
+        if metadata.persistency_service.is_some() {
+            self.persistency_service = metadata.persistency_service.clone();
+            let snapshot_id = self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+            if snapshot_id.is_some() {
+                // Get and resume the persisted state
+                let opt_state: Option<JoinKeyedInnerState<K, V1, V2>> = self.persistency_service.as_mut().unwrap().get_state(self.operator_coord, snapshot_id.unwrap());
+                if let Some(state) = opt_state {
+                    self.left_ended = state.left_ended;
+                    self.right_ended = state.right_ended;
+                    self.left = state.left;
+                    self.right = state.right;
+                    self.buffer = state.buffer;
+                } else {
+                    panic!("No persisted state founded for op: {0}", self.operator_coord);
+                } 
+            }
         }
     }
 
@@ -447,36 +472,21 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
                     assert!(self.right.is_empty());
                     log::debug!(
                         "JoinLocalHash at {} emitted FlushAndRestart",
-                        self.coord.unwrap()
+                        self.operator_coord.get_coord(),
                     );
                     self.left_ended = false;
                     self.right_ended = false;
                     return StreamElement::FlushAndRestart;
                 }
                 StreamElement::Terminate => {
-                    if self.persistency_service.is_active() {
-                        // Save terminated state
-                        let state = JoinKeyedInnerState{
-                            left: self.left.clone(),
-                            right: self.right.clone(),
-                            left_ended: self.left_ended,
-                            right_ended: self.right_ended,
-                            buffer: self.buffer.clone(),
-                        };
-                        self.persistency_service.save_terminated_state(self.operator_coord, state);
+                    if self.persistency_service.is_some() {
+                        self.save_terminate();
                     }
                     return StreamElement::Terminate;
                 }
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
                 StreamElement::Snapshot(snapshot_id) => {
-                    let state = JoinKeyedInnerState{
-                        left: self.left.clone(),
-                        right: self.right.clone(),
-                        left_ended: self.left_ended,
-                        right_ended: self.right_ended,
-                        buffer: self.buffer.clone(),
-                    };
-                    self.persistency_service.save_state(self.operator_coord, snapshot_id, state);
+                    self.save_snap(snapshot_id);
                     return StreamElement::Snapshot(snapshot_id);
                 }
                 StreamElement::Watermark(_) | StreamElement::Timestamped(_, _) => {

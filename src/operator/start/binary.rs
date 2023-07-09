@@ -461,14 +461,14 @@ mod tests {
         );
        
         let mut metadata = t.metadata();
-        metadata.persistency_service = PersistencyService::new(Some(
+        metadata.persistency_service = Some(PersistencyService::new(Some(
             PersistencyConfig { 
                 server_addr: String::from(REDIS_TEST_CONFIGURATION),
                 try_restart: false,
                 clean_on_exit: false,
                 restart_from: None,
             }
-        ));
+        )));
         start_block.setup(&mut metadata);
 
         start_block.operator_coord.operator_id = 110;
@@ -569,7 +569,7 @@ mod tests {
             ]),
         };
 
-        let retrived_state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = start_block.persistency_service.get_state(start_block.operator_coord, SnapshotId::new(1)).unwrap();
+        let retrived_state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = start_block.persistency_service.as_mut().unwrap().get_state(start_block.operator_coord, SnapshotId::new(1)).unwrap();
 
         assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
         assert_eq!(state.wait_for_state, retrived_state.wait_for_state);
@@ -593,7 +593,7 @@ mod tests {
 
         
         // Clean redis
-        start_block.persistency_service.delete_state(start_block.operator_coord, SnapshotId::new(1));
+        start_block.persistency_service.as_mut().unwrap().delete_state(start_block.operator_coord, SnapshotId::new(1));
 
     }
 
@@ -613,14 +613,14 @@ mod tests {
         );
        
         let mut metadata = t.metadata();
-        metadata.persistency_service = PersistencyService::new(Some(
+        metadata.persistency_service = Some(PersistencyService::new(Some(
             PersistencyConfig { 
                 server_addr: String::from(REDIS_TEST_CONFIGURATION),
                 try_restart: false,
                 clean_on_exit: false,
                 restart_from: None,
             }
-        ));
+        )));
         start_block.setup(&mut metadata);
 
         start_block.operator_coord.operator_id = 111;
@@ -752,7 +752,7 @@ mod tests {
             ]),
         };
 
-        let retrived_state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = start_block.persistency_service.get_state(start_block.operator_coord, SnapshotId::new(1)).unwrap();
+        let retrived_state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = start_block.persistency_service.as_mut().unwrap().get_state(start_block.operator_coord, SnapshotId::new(1)).unwrap();
 
         assert_eq!(state.message_queue, retrived_state.message_queue);
         // Check receiver state
@@ -810,7 +810,7 @@ mod tests {
             ]),
         };
 
-        let retrived_state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = start_block.persistency_service.get_state(start_block.operator_coord, SnapshotId::new(2)).unwrap();
+        let retrived_state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = start_block.persistency_service.as_mut().unwrap().get_state(start_block.operator_coord, SnapshotId::new(2)).unwrap();
 
         assert_eq!(state.message_queue, retrived_state.message_queue);
         // Check receiver state
@@ -824,8 +824,8 @@ mod tests {
 
         
         // Clean redis
-        start_block.persistency_service.delete_state(start_block.operator_coord, SnapshotId::new(1));
-        start_block.persistency_service.delete_state(start_block.operator_coord, SnapshotId::new(2));
+        start_block.persistency_service.as_mut().unwrap().delete_state(start_block.operator_coord, SnapshotId::new(1));
+        start_block.persistency_service.as_mut().unwrap().delete_state(start_block.operator_coord, SnapshotId::new(2));
 
     }
 
@@ -845,14 +845,14 @@ mod tests {
         );
        
         let mut metadata = t.metadata();
-        metadata.persistency_service = PersistencyService::new(Some(
+        metadata.persistency_service = Some(PersistencyService::new(Some(
             PersistencyConfig { 
                 server_addr: String::from(REDIS_TEST_CONFIGURATION),
                 try_restart: false,
                 clean_on_exit: false,
                 restart_from: None,
             }
-        ));
+        )));
         start_block.setup(&mut metadata);
 
         start_block.operator_coord.operator_id = 112;
@@ -941,7 +941,7 @@ mod tests {
             ]),
         };
 
-        let retrived_state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = start_block.persistency_service.get_state(start_block.operator_coord, SnapshotId::new(2)).unwrap();
+        let retrived_state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = start_block.persistency_service.as_mut().unwrap().get_state(start_block.operator_coord, SnapshotId::new(2)).unwrap();
 
         assert_eq!(state.message_queue, retrived_state.message_queue);
         // Check receiver state
@@ -1033,8 +1033,8 @@ mod tests {
         assert_eq!(receiver.right.cache, retrived_receiver.right.cache);
 
         // Clean redis
-        start_block.persistency_service.delete_state(start_block.operator_coord, SnapshotId::new(1));
-        start_block.persistency_service.delete_state(start_block.operator_coord, SnapshotId::new(2));
+        start_block.persistency_service.as_mut().unwrap().delete_state(start_block.operator_coord, SnapshotId::new(1));
+        start_block.persistency_service.as_mut().unwrap().delete_state(start_block.operator_coord, SnapshotId::new(2));
 
     }
 }

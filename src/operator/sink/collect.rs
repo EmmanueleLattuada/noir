@@ -15,7 +15,7 @@ where
 {
     prev: PreviousOperators,
     operator_coord: OperatorCoord,
-    persistency_service: PersistencyService,
+    persistency_service: Option<PersistencyService>,
     output: StreamOutputRef<C>,
     _out: PhantomData<Out>,
 }
@@ -30,7 +30,7 @@ where
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
-            persistency_service: PersistencyService::default(),
+            persistency_service: None,
             output,
             _out: PhantomData,
         }
@@ -60,12 +60,11 @@ where
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
 
-        self.operator_coord.block_id = metadata.coord.block_id;
-        self.operator_coord.host_id = metadata.coord.host_id;
-        self.operator_coord.replica_id = metadata.coord.replica_id;
-
-        self.persistency_service = metadata.persistency_service.clone();
-        self.persistency_service.restart_from_snapshot(self.operator_coord);
+        self.operator_coord.from_coord(metadata.coord);
+        if metadata.persistency_service.is_some(){
+            self.persistency_service = metadata.persistency_service.clone();
+            self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+        }
     }
 
     fn next(&mut self) -> StreamElement<()> {
@@ -73,15 +72,15 @@ where
             match self.prev.next() {
                 StreamElement::Item(t) | StreamElement::Timestamped(t, _) => return Some(t),
                 StreamElement::Terminate => {
-                    if self.persistency_service.is_active() {
+                    if self.persistency_service.is_some() {
                         // Save void terminated state
-                        self.persistency_service.save_terminated_void_state(self.operator_coord);
+                        self.persistency_service.as_mut().unwrap().save_terminated_void_state(self.operator_coord);
                     }
                     return None;
                 }
                 StreamElement::Snapshot(snapshot_id) => {
                     // State is not persisted 
-                    self.persistency_service.save_void_state(self.operator_coord, snapshot_id);
+                    self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snapshot_id);
                     continue
                 }
                 _ => continue,

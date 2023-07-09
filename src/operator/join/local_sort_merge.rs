@@ -11,7 +11,7 @@ use crate::network::OperatorCoord;
 use crate::operator::join::ship::{ShipBroadcastRight, ShipHash, ShipStrategy};
 use crate::operator::join::{InnerJoinTuple, JoinVariant, LeftJoinTuple, OuterJoinTuple};
 use crate::operator::start::{BinaryElement, BinaryStartOperator};
-use crate::operator::{Data, ExchangeData, KeyerFn, Operator, StreamElement, DataKey, ExchangeDataKey};
+use crate::operator::{Data, ExchangeData, KeyerFn, Operator, StreamElement, DataKey, ExchangeDataKey, SnapshotId};
 use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::stream::{KeyedStream, Stream};
@@ -33,7 +33,7 @@ struct JoinLocalSortMerge<
     prev: OperatorChain,
 
     operator_coord: OperatorCoord,
-    persistency_service: PersistencyService,
+    persistency_service: Option<PersistencyService>,
 
     keyer1: Keyer1,
     keyer2: Keyer2,
@@ -75,7 +75,7 @@ impl<
     }
 }
 impl<
-        Key: Data + Ord,
+        Key: ExchangeDataKey + Ord,
         Out1: ExchangeData,
         Out2: ExchangeData,
         Keyer1: KeyerFn<Key, Out1>,
@@ -89,7 +89,7 @@ impl<
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
-            persistency_service: PersistencyService::default(),
+            persistency_service: None,
             keyer1,
             keyer2,
             left_ended: false,
@@ -161,6 +161,31 @@ impl<
             }
         }
     }
+
+    /// Save state for snapshot
+    fn save_snap(&mut self, snapshot_id: SnapshotId){
+        let state = JoinLocalSortMergeState{
+            left_ended: self.left_ended,
+            right_ended: self.right_ended,
+            left: self.left.clone(),
+            right: self.right.clone(),
+            buffer: self.buffer.clone(),
+            last_left_key: self.last_left_key.clone(),
+        };
+        self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id, state);
+    }
+    /// Save terminated state
+    fn save_terminate(&mut self){
+        let state = JoinLocalSortMergeState{
+            left_ended: self.left_ended,
+            right_ended: self.right_ended,
+            left: self.left.clone(),
+            right: self.right.clone(),
+            buffer: self.buffer.clone(),
+            last_left_key: self.last_left_key.clone(),
+        };
+        self.persistency_service.as_mut().unwrap().save_terminated_state(self.operator_coord, state);
+    }
 }
 
 
@@ -188,25 +213,25 @@ impl<
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
 
-        self.operator_coord.block_id = metadata.coord.block_id;
-        self.operator_coord.host_id = metadata.coord.host_id;
-        self.operator_coord.replica_id = metadata.coord.replica_id;
+        self.operator_coord.from_coord(metadata.coord);
 
-        self.persistency_service = metadata.persistency_service.clone();
-        let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
-        if snapshot_id.is_some() {
-            // Get and resume the persisted state
-            let opt_state: Option<JoinLocalSortMergeState<Key, Out1, Out2>> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
-            if let Some(state) = opt_state {
-                self.left_ended = state.left_ended;
-                self.right_ended = state.right_ended;
-                self.left = state.left;
-                self.right = state.right;
-                self.buffer = state.buffer;
-                self.last_left_key = state.last_left_key;
-            } else {
-                panic!("No persisted state founded for op: {0}", self.operator_coord);
-            } 
+        if metadata.persistency_service.is_some(){
+            self.persistency_service = metadata.persistency_service.clone();
+            let snapshot_id = self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+            if snapshot_id.is_some() {
+                // Get and resume the persisted state
+                let opt_state: Option<JoinLocalSortMergeState<Key, Out1, Out2>> = self.persistency_service.as_mut().unwrap().get_state(self.operator_coord, snapshot_id.unwrap());
+                if let Some(state) = opt_state {
+                    self.left_ended = state.left_ended;
+                    self.right_ended = state.right_ended;
+                    self.left = state.left;
+                    self.right = state.right;
+                    self.buffer = state.buffer;
+                    self.last_left_key = state.last_left_key;
+                } else {
+                    panic!("No persisted state founded for op: {0}", self.operator_coord);
+                } 
+            }
         }
     }
 
@@ -240,15 +265,7 @@ impl<
                     panic!("Cannot join timestamp streams")
                 }
                 StreamElement::Snapshot(snapshot_id) => {
-                    let state = JoinLocalSortMergeState{
-                        left_ended: self.left_ended,
-                        right_ended: self.right_ended,
-                        left: self.left.clone(),
-                        right: self.right.clone(),
-                        buffer: self.buffer.clone(),
-                        last_left_key: self.last_left_key.clone(),
-                    };
-                    self.persistency_service.save_state(self.operator_coord, snapshot_id, state);
+                    self.save_snap(snapshot_id);
                     return StreamElement::Snapshot(snapshot_id);
                 }
                 StreamElement::FlushAndRestart => {
@@ -270,17 +287,8 @@ impl<
                 }
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
                 StreamElement::Terminate => {
-                    if self.persistency_service.is_active() {
-                        // Save terminated state
-                        let state = JoinLocalSortMergeState{
-                            left_ended: self.left_ended,
-                            right_ended: self.right_ended,
-                            left: self.left.clone(),
-                            right: self.right.clone(),
-                            buffer: self.buffer.clone(),
-                            last_left_key: self.last_left_key.clone(),
-                        };
-                        self.persistency_service.save_terminated_state(self.operator_coord, state);
+                    if self.persistency_service.is_some() {
+                        self.save_terminate();                        
                     }
                     return StreamElement::Terminate;
                 }

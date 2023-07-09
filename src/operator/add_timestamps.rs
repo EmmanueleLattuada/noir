@@ -9,6 +9,8 @@ use crate::operator::{Data, Operator, StreamElement, Timestamp};
 use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 
+use super::SnapshotId;
+
 #[derive(Clone)]
 pub struct AddTimestamp<Out: Data, TimestampGen, WatermarkGen, OperatorChain>
 where
@@ -18,12 +20,11 @@ where
 {
     prev: OperatorChain,
     operator_coord : OperatorCoord,
+    persistency_service: Option<PersistencyService>,
     timestamp_gen: TimestampGen,
     watermark_gen: WatermarkGen,
     pending_watermark: Option<Timestamp>,
     _out: PhantomData<Out>,
-
-    persistency_service: PersistencyService
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -60,13 +61,23 @@ where
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0,0,0,op_id),
-            persistency_service: Default::default(),
-
+            persistency_service: None,
             timestamp_gen,
             watermark_gen,
             pending_watermark: None,
             _out: Default::default(),
         }
+    }
+    
+    /// Save state for snapshot
+    fn save_snap(&mut self, snapshot_id: SnapshotId){
+        let state = AddTimestampState{pending_watermark: self.pending_watermark};
+        self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id, state);
+    }
+    /// Save terminated state
+    fn save_terminate(&mut self){
+        let state = AddTimestampState{pending_watermark: self.pending_watermark};
+        self.persistency_service.as_mut().unwrap().save_terminated_state(self.operator_coord, state);
     }
 }
 
@@ -80,20 +91,19 @@ where
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
 
-        self.operator_coord.block_id = metadata.coord.block_id;
-        self.operator_coord.host_id = metadata.coord.host_id;
-        self.operator_coord.replica_id = metadata.coord.replica_id;
-
-        self.persistency_service = metadata.persistency_service.clone();
-        let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
-        if snapshot_id.is_some() {
-            // Get and resume the persisted state
-            let opt_state: Option<AddTimestampState> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
-            if let Some(state) = opt_state {
-                self.pending_watermark = state.pending_watermark;
-            } else {
-                panic!("No persisted state founded for op: {0}", self.operator_coord);
-            } 
+        self.operator_coord.from_coord(metadata.coord);
+        if metadata.persistency_service.is_some() {
+            self.persistency_service = metadata.persistency_service.clone();
+            let snapshot_id = self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+            if snapshot_id.is_some() {
+                // Get and resume the persisted state
+                let opt_state: Option<AddTimestampState> = self.persistency_service.as_mut().unwrap().get_state(self.operator_coord, snapshot_id.unwrap());
+                if let Some(state) = opt_state {
+                    self.pending_watermark = state.pending_watermark;
+                } else {
+                    panic!("No persisted state founded for op: {0}", self.operator_coord);
+                } 
+            }
         }
     }
 
@@ -114,17 +124,13 @@ where
             StreamElement::FlushAndRestart
             | StreamElement::FlushBatch => elem,
             StreamElement::Terminate => {
-                if self.persistency_service.is_active(){
-                    // Save terminated state
-                    let state = AddTimestampState{pending_watermark: self.pending_watermark};
-                    self.persistency_service.save_terminated_state(self.operator_coord, state);
+                if self.persistency_service.is_some(){
+                    self.save_terminate();
                 }
                 StreamElement::Terminate
             }
             StreamElement::Snapshot(snap_id) => {
-                // Save state and forward marker
-                let state = AddTimestampState{pending_watermark: self.pending_watermark};
-                self.persistency_service.save_state(self.operator_coord, snap_id, state);
+                self.save_snap(snap_id);
                 return StreamElement::Snapshot(snap_id)
             }
             _ => panic!("AddTimestamp received invalid variant: {}", elem.variant()),
@@ -152,7 +158,7 @@ where
 {
     prev: OperatorChain,
     operator_coord: OperatorCoord,
-    persistency_service: PersistencyService,
+    persistency_service: Option<PersistencyService>,
     _out: PhantomData<Out>,
 }
 
@@ -173,7 +179,7 @@ where
         let op_id = prev.get_op_id() + 1;
         Self {
             prev,
-            persistency_service: PersistencyService::default(),
+            persistency_service: None,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
             _out: Default::default(),
@@ -188,12 +194,11 @@ where
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
 
-        self.operator_coord.block_id = metadata.coord.block_id;
-        self.operator_coord.host_id = metadata.coord.host_id;
-        self.operator_coord.replica_id = metadata.coord.replica_id;
-
-        self.persistency_service = metadata.persistency_service.clone();
-        self.persistency_service.restart_from_snapshot(self.operator_coord);
+        self.operator_coord.from_coord(metadata.coord);
+        if metadata.persistency_service.is_some() {
+            self.persistency_service = metadata.persistency_service.clone();
+            self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+        }
     }
 
     #[inline]
@@ -204,13 +209,13 @@ where
                 StreamElement::Timestamped(item, _) => return StreamElement::Item(item),
                 StreamElement::Snapshot(snapshot_id) => {
                     // Save void state and forward snapshot marker
-                    self.persistency_service.save_void_state(self.operator_coord, snapshot_id);
+                    self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snapshot_id);
                     return StreamElement::Snapshot(snapshot_id)
                 }
                 StreamElement::Terminate => {
-                    if self.persistency_service.is_active(){
+                    if self.persistency_service.is_some(){
                         // Save void terminated state
-                        self.persistency_service.save_terminated_void_state(self.operator_coord);
+                        self.persistency_service.as_mut().unwrap().save_terminated_void_state(self.operator_coord);
                     }
                     return StreamElement::Terminate
                 }

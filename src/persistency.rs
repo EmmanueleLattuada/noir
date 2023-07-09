@@ -109,6 +109,7 @@ impl PersistencyService {
     /// All partial or complete snapshot with an higher index will be deleted in another step.
     /// You must includes all coordinates of each operator in the graph to have a correct result.
     /// To retrive the result use restart_from_snapshot() method
+    #[inline(never)]
     pub (crate) fn find_snapshot(&mut self, operators: Vec<OperatorCoord>, snapshot_index: Option<u64>) {
         self.compute_last_complete_snapshot(operators.clone());
         if let Some(restart) = self.restart_from{
@@ -171,6 +172,7 @@ impl PersistencyService {
     }
     /// Return last complete snapshot. Use find_snapshot() first to compute it.
     /// Remove all partial snapshotd with id > self.restart_from
+    #[inline(never)]
     pub (crate) fn restart_from_snapshot(&self, op_coord: OperatorCoord) -> Option<SnapshotId> {
         if let Some(snap_id) = self.restart_from {
             let mut last_snap = self.get_last_snapshot(op_coord).unwrap();
@@ -191,6 +193,7 @@ impl PersistencyService {
     /// In case there are no saved snapshots the id is set to one.
     /// If the operator has already saved a terminated state this function does nothing.
     /// Call this before forward StreamElement::Terminate.
+    #[inline(never)]
     pub (crate) fn save_terminated_state<State: ExchangeData>(&self, op_coord: OperatorCoord, state: State) {
         if !self.active {
             panic!("Persistency services aren't configured");
@@ -214,6 +217,7 @@ impl PersistencyService {
     /// In case there are no saved snapshots the id is set to one.
     /// If the operator has already saved a terminated state this function does nothing.
     /// Call this before forward StreamElement::Terminate.
+    #[inline(never)]
     pub (crate) fn save_terminated_void_state(&self, op_coord: OperatorCoord) {
         if !self.active {
             panic!("Persistency services aren't configured");
@@ -233,6 +237,7 @@ impl PersistencyService {
 
     /// Method to remove all persisted data.
     /// You must includes all coordinates of each operator in the graph to have a complete cleaning.
+    #[inline(never)]
     pub (crate) fn clean_persisted_state(&mut self, operators: Vec<OperatorCoord>){
         for op_coord in operators {
             let mut last_opt_snap = self.get_last_snapshot(op_coord);
@@ -246,7 +251,7 @@ impl PersistencyService {
 
 // Just wrap methods and check snapshot id constraints
 impl PersistencyServices for PersistencyService{
-    
+    #[inline(never)]
     fn save_state<State: ExchangeData>(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId, state: State) {
         if !self.active {
             panic!("Persistency services aren't configured");
@@ -260,6 +265,7 @@ impl PersistencyServices for PersistencyService{
         }
         self.handler.save_state(op_coord, snapshot_id, state);
     }
+    #[inline(never)]
     fn save_void_state(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId) {
         if !self.active {
             panic!("Persistency services aren't configured");
@@ -273,18 +279,21 @@ impl PersistencyServices for PersistencyService{
         }
         self.handler.save_void_state(op_coord, snapshot_id);
     }
+    #[inline(never)]
     fn get_last_snapshot(&self, op_coord: OperatorCoord) -> Option<SnapshotId> {
         if !self.active {
             panic!("Persistency services aren't configured");
         }
         self.handler.get_last_snapshot(op_coord)
     }
+    #[inline(never)]
     fn get_state<State: ExchangeData>(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId) -> Option<State> {
         if !self.active {
             panic!("Persistency services aren't configured");
         }
         self.handler.get_state(op_coord, snapshot_id)
     }
+    #[inline(never)]
     fn delete_state(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId) {
         if !self.active {
             panic!("Persistency services aren't configured");

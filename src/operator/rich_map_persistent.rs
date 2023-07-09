@@ -97,20 +97,19 @@ where
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
 
-        self.operator_coord.block_id = metadata.coord.block_id;
-        self.operator_coord.host_id = metadata.coord.host_id;
-        self.operator_coord.replica_id = metadata.coord.replica_id;
-
-        self.persistency_service = metadata.persistency_service.clone();
-        let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
-        if snapshot_id.is_some() {
-            // Get and resume the persisted state
-            let opt_state: Option<HashMap<Key, State, crate::block::GroupHasherBuilder>> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
-            if let Some(state) = opt_state {
-                self.states_by_key = state;
-            } else {
-                panic!("No persisted state founded for op: {0}", self.operator_coord);
-            } 
+        self.operator_coord.from_coord(metadata.coord);
+        if metadata.persistency_service.is_some(){
+            self.persistency_service = metadata.persistency_service.clone().unwrap();
+            let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
+            if snapshot_id.is_some() {
+                // Get and resume the persisted state
+                let opt_state: Option<HashMap<Key, State, crate::block::GroupHasherBuilder>> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
+                if let Some(state) = opt_state {
+                    self.states_by_key = state;
+                } else {
+                    panic!("No persisted state founded for op: {0}", self.operator_coord);
+                } 
+            }
         }
     }
 

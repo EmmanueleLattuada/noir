@@ -13,13 +13,14 @@ use crate::operator::{ExchangeData, Operator, StreamElement};
 use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{BlockId, ExecutionMetadata, OperatorId};
 
+use super::SnapshotId;
 use super::source::Source;
 
 #[derive(Clone)]
 pub struct Zip<Out1: ExchangeData, Out2: ExchangeData> {
     prev: BinaryStartOperator<Out1, Out2>,
     operator_coord: OperatorCoord,
-    persistency_service: PersistencyService,
+    persistency_service: Option<PersistencyService>,
     stash1: VecDeque<StreamElement<Out1>>,
     stash2: VecDeque<StreamElement<Out2>>,
     prev_block_id1: BlockId,
@@ -56,12 +57,29 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Zip<Out1, Out2> {
             // Since previous operator is the first in the chain, this will have op_id 1
             // Other fields will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, 1),
-            persistency_service: PersistencyService::default(),
+            persistency_service: None,
             stash1: Default::default(),
             stash2: Default::default(),
             prev_block_id1,
             prev_block_id2,
         }
+    }
+
+    /// Save state for snapshot
+    fn save_snap(&mut self, snapshot_id: SnapshotId){
+        let state = ZipState {
+            stash1: self.stash1.clone(),
+            stash2: self.stash2.clone(),
+        };
+        self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id, state);
+    }
+    /// Save terminated state
+    fn save_terminate(&mut self){
+        let state = ZipState {
+            stash1: self.stash1.clone(),
+            stash2: self.stash2.clone(),
+        };
+        self.persistency_service.as_mut().unwrap().save_terminated_state(self.operator_coord, state);
     }
 }
 
@@ -76,21 +94,20 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Operator<(Out1, Out2)> for Zip<Out1
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
 
-        self.operator_coord.block_id = metadata.coord.block_id;
-        self.operator_coord.host_id = metadata.coord.host_id;
-        self.operator_coord.replica_id = metadata.coord.replica_id;
-
-        self.persistency_service = metadata.persistency_service.clone();
-        let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
-        if snapshot_id.is_some() {
-            // Get and resume the persisted state
-            let opt_state: Option<ZipState<Out1, Out2>> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
-            if let Some(state) = opt_state {
-                self.stash1 = state.stash1;
-                self.stash2 = state.stash2;
-            } else {
-                panic!("No persisted state founded for op: {0}", self.operator_coord);
-            } 
+        self.operator_coord.from_coord(metadata.coord);
+        if metadata.persistency_service.is_some(){
+            self.persistency_service = metadata.persistency_service.clone();
+            let snapshot_id = self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+            if snapshot_id.is_some() {
+                // Get and resume the persisted state
+                let opt_state: Option<ZipState<Out1, Out2>> = self.persistency_service.as_mut().unwrap().get_state(self.operator_coord, snapshot_id.unwrap());
+                if let Some(state) = opt_state {
+                    self.stash1 = state.stash1;
+                    self.stash2 = state.stash2;
+                } else {
+                    panic!("No persisted state founded for op: {0}", self.operator_coord);
+                } 
+            }
         }
     }
 
@@ -133,24 +150,14 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Operator<(Out1, Out2)> for Zip<Out1
                 }
 
                 StreamElement::Terminate => {
-                    if self.persistency_service.is_active(){
-                        // Save terminated state
-                        let state = ZipState {
-                            stash1: self.stash1.clone(),
-                            stash2: self.stash2.clone(),
-                        };
-                        self.persistency_service.save_terminated_state(self.operator_coord, state);
+                    if self.persistency_service.is_some(){
+                        self.save_terminate();
                     }
                     return StreamElement::Terminate
                 }
 
                 StreamElement::Snapshot(snap_id) => {
-                    // Save state adn forward the marker
-                    let state = ZipState {
-                        stash1: self.stash1.clone(),
-                        stash2: self.stash2.clone(),
-                    };
-                    self.persistency_service.save_state(self.operator_coord, snap_id, state);
+                    self.save_snap(snap_id);
                     return StreamElement::Snapshot(snap_id);
                 }
             }

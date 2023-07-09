@@ -9,6 +9,8 @@ use crate::operator::{Data, ExchangeData, Operator, StreamElement, Timestamp};
 use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 
+use super::SnapshotId;
+
 #[derive(Clone, Derivative)]
 #[derivative(Debug)]
 pub struct Fold<Out: Data, NewOut: ExchangeData, F, PreviousOperators>
@@ -18,6 +20,7 @@ where
 {
     prev: PreviousOperators,
     operator_coord: OperatorCoord,
+    persistency_service: Option<PersistencyService>,
     #[derivative(Debug = "ignore")]
     fold: F,
     init: NewOut,
@@ -26,7 +29,6 @@ where
     max_watermark: Option<Timestamp>,
     received_end: bool,
     received_end_iter: bool,
-    persistency_service: PersistencyService,
     _out: PhantomData<Out>,
 }
 
@@ -58,7 +60,7 @@ where
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0,0,0,op_id),
-            
+            persistency_service: None,
             fold,
             init,
             accumulator: None,
@@ -66,9 +68,31 @@ where
             max_watermark: None,
             received_end: false,
             received_end_iter: false,
-            persistency_service: PersistencyService::default(),
             _out: Default::default(),
         }
+    }
+
+    /// Save state for snapshot
+    fn save_snap(&mut self, snapshot_id: SnapshotId){
+        let acc = self.accumulator.clone();
+        let state = FoldState{
+            accumulator: acc,
+            timestamp: self.timestamp,
+            max_watermark: self.max_watermark,
+            received_end_iter: self.received_end_iter,
+        }; 
+        self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id, state);
+    }
+    /// Save terminated state
+    fn save_terminate(&mut self){
+        let acc = self.accumulator.clone();
+        let state = FoldState{
+            accumulator: acc,
+            timestamp: self.timestamp,
+            max_watermark: self.max_watermark,
+            received_end_iter: self.received_end_iter,
+        };                          
+        self.persistency_service.as_mut().unwrap().save_terminated_state(self.operator_coord, state);
     }
 }
 
@@ -89,23 +113,22 @@ where
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
 
-        self.operator_coord.block_id = metadata.coord.block_id;
-        self.operator_coord.host_id = metadata.coord.host_id;
-        self.operator_coord.replica_id = metadata.coord.replica_id;
-
-        self.persistency_service = metadata.persistency_service.clone();
-        let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
-        if snapshot_id.is_some() {
-            // Get and resume the persisted state
-            let opt_state: Option<FoldState<NewOut>> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
-            if let Some(state) = opt_state {
-                self.accumulator = state.accumulator;
-                self.timestamp = state.timestamp;
-                self.max_watermark = state.max_watermark;
-                self.received_end_iter = state.received_end_iter;
-            } else {
-                panic!("No persisted state founded for op: {0}", self.operator_coord);
-            } 
+        self.operator_coord.from_coord(metadata.coord);
+        if metadata.persistency_service.is_some(){
+            self.persistency_service = metadata.persistency_service.clone();
+            let snapshot_id = self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+            if snapshot_id.is_some() {
+                // Get and resume the persisted state
+                let opt_state: Option<FoldState<NewOut>> = self.persistency_service.as_mut().unwrap().get_state(self.operator_coord, snapshot_id.unwrap());
+                if let Some(state) = opt_state {
+                    self.accumulator = state.accumulator;
+                    self.timestamp = state.timestamp;
+                    self.max_watermark = state.max_watermark;
+                    self.received_end_iter = state.received_end_iter;
+                } else {
+                    panic!("No persisted state founded for op: {0}", self.operator_coord);
+                } 
+            }
         }
     }
 
@@ -137,15 +160,7 @@ where
                 // this block wont sent anything until the stream ends
                 StreamElement::FlushBatch => {}
                 StreamElement::Snapshot(snap_id) => {
-                    // Save state and forward marker
-                    let acc = self.accumulator.clone();
-                    let state = FoldState{
-                        accumulator: acc,
-                        timestamp: self.timestamp,
-                        max_watermark: self.max_watermark,
-                        received_end_iter: self.received_end_iter,
-                    }; 
-                    self.persistency_service.save_state(self.operator_coord, snap_id, state);
+                    self.save_snap(snap_id);
                     return StreamElement::Snapshot(snap_id);
                 }
             }
@@ -173,15 +188,8 @@ where
         }
 
         // Save terminated state before end 
-        if self.persistency_service.is_active() { 
-            let acc = self.accumulator.clone();
-            let state = FoldState{
-                accumulator: acc,
-                timestamp: self.timestamp,
-                max_watermark: self.max_watermark,
-                received_end_iter: self.received_end_iter,
-            };                          
-            self.persistency_service.save_terminated_state(self.operator_coord, state);
+        if self.persistency_service.is_some() { 
+            self.save_terminate();
         }
         StreamElement::Terminate
     }
@@ -278,26 +286,26 @@ mod tests {
             replica_id: 1,
             operator_id: 1,
         };
-        fold.persistency_service = PersistencyService::new(Some(
+        fold.persistency_service = Some(PersistencyService::new(Some(
             PersistencyConfig { 
                 server_addr: String::from(REDIS_TEST_CONFIGURATION),
                 try_restart: false,
                 clean_on_exit: false,
                 restart_from: None,
             }
-        ));
+        )));
 
         assert_eq!(fold.next(), StreamElement::Snapshot(SnapshotId::new(1)));
-        let state: Option<FoldState<i32>> = fold.persistency_service.get_state(fold.operator_coord, SnapshotId::new(1));
+        let state: Option<FoldState<i32>> = fold.persistency_service.as_mut().unwrap().get_state(fold.operator_coord, SnapshotId::new(1));
         assert_eq!(state.unwrap().accumulator.unwrap(), 3);
 
         assert_eq!(fold.next(), StreamElement::Snapshot(SnapshotId::new(2)));
-        let state: Option<FoldState<i32>> = fold.persistency_service.get_state(fold.operator_coord, SnapshotId::new(2));
+        let state: Option<FoldState<i32>> = fold.persistency_service.as_mut().unwrap().get_state(fold.operator_coord, SnapshotId::new(2));
         assert_eq!(state.unwrap().accumulator.unwrap(), 10);
 
         // Clean redis
-        fold.persistency_service.delete_state(fold.operator_coord, SnapshotId::new(1));
-        fold.persistency_service.delete_state(fold.operator_coord, SnapshotId::new(2));
+        fold.persistency_service.as_mut().unwrap().delete_state(fold.operator_coord, SnapshotId::new(1));
+        fold.persistency_service.as_mut().unwrap().delete_state(fold.operator_coord, SnapshotId::new(2));
 
     }
 }

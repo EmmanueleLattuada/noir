@@ -3,7 +3,7 @@ use std::fmt::Display;
 use crate::block::{BlockStructure, OperatorKind, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::sink::{Sink, StreamOutputRef};
-use crate::operator::{ExchangeData, Operator, StreamElement};
+use crate::operator::{ExchangeData, Operator, StreamElement, SnapshotId};
 use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 
@@ -14,7 +14,7 @@ where
 {
     prev: PreviousOperators,
     operator_coord: OperatorCoord,
-    persistency_service: PersistencyService,
+    persistency_service: Option<PersistencyService>,
     result: Option<Vec<Out>>,
     output: StreamOutputRef<Vec<Out>>,
 }
@@ -29,11 +29,22 @@ where
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
-            persistency_service: PersistencyService::default(),
+            persistency_service: None,
             result: Some(Vec::new()),
             output,
         }
     }
+
+    /// Save state for snapshot
+    fn save_snap(&mut self, snapshot_id: SnapshotId){
+        let state = self.result.clone();
+        self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id, state);
+    }
+    /// Save terminated state
+    fn save_terminate(&mut self){
+        let state = self.result.clone();
+        self.persistency_service.as_mut().unwrap().save_terminated_state(self.operator_coord, state);
+    } 
 }
 
 impl<Out: ExchangeData, PreviousOperators> Display for CollectVecSink<Out, PreviousOperators>
@@ -52,20 +63,20 @@ where
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
 
-        self.operator_coord.block_id = metadata.coord.block_id;
-        self.operator_coord.host_id = metadata.coord.host_id;
-        self.operator_coord.replica_id = metadata.coord.replica_id;
+        self.operator_coord.from_coord(metadata.coord);
 
-        self.persistency_service = metadata.persistency_service.clone();
-        let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
-        if snapshot_id.is_some() {
-            // Get and resume the persisted state
-            let opt_state: Option<Option<Vec<Out>>> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
-            if let Some(state) = opt_state {
-                self.result = state;
-            } else {
-                panic!("No persisted state founded for op: {0}", self.operator_coord);
-            } 
+        if metadata.persistency_service.is_some(){
+            self.persistency_service = metadata.persistency_service.clone();
+            let snapshot_id = self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+            if snapshot_id.is_some() {
+                // Get and resume the persisted state
+                let opt_state: Option<Option<Vec<Out>>> = self.persistency_service.as_mut().unwrap().get_state(self.operator_coord, snapshot_id.unwrap());
+                if let Some(state) = opt_state {
+                    self.result = state;
+                } else {
+                    panic!("No persisted state founded for op: {0}", self.operator_coord);
+                } 
+            }
         }
     }
 
@@ -80,10 +91,8 @@ where
             }
             StreamElement::Watermark(w) => StreamElement::Watermark(w),
             StreamElement::Terminate => {
-                if self.persistency_service.is_active() {
-                    // Save terminated state
-                    let state = self.result.clone();
-                    self.persistency_service.save_terminated_state(self.operator_coord, state);
+                if self.persistency_service.is_some() {
+                    self.save_terminate();
                 }
                 if let Some(result) = self.result.take() {
                     *self.output.lock().unwrap() = Some(result);
@@ -93,9 +102,7 @@ where
             StreamElement::FlushBatch => StreamElement::FlushBatch,
             StreamElement::FlushAndRestart => StreamElement::FlushAndRestart,
             StreamElement::Snapshot(snap_id) => {
-                // save state
-                let state = self.result.clone();
-                self.persistency_service.save_state(self.operator_coord, snap_id, state);
+                self.save_snap(snap_id);
                 StreamElement::Snapshot(snap_id)
             }
         }
@@ -172,29 +179,29 @@ mod tests {
             replica_id: 2,
             operator_id: 2,
         };
-        collect.persistency_service = PersistencyService::new(Some(
+        collect.persistency_service = Some(PersistencyService::new(Some(
             PersistencyConfig { 
                 server_addr: String::from(REDIS_TEST_CONFIGURATION),
                 try_restart: false,
                 clean_on_exit: false,
                 restart_from: None,
             }
-        ));
+        )));
 
         collect.next();
         collect.next();
         assert_eq!(collect.next(), StreamElement::Snapshot(SnapshotId::new(1)));
-        let state: Option<Option<Vec<i32>>> = collect.persistency_service.get_state(collect.operator_coord, SnapshotId::new(1));
+        let state: Option<Option<Vec<i32>>> = collect.persistency_service.as_mut().unwrap().get_state(collect.operator_coord, SnapshotId::new(1));
         assert_eq!(state.unwrap().unwrap(), [1, 2]);
         collect.next();
         collect.next();
         assert_eq!(collect.next(), StreamElement::Snapshot(SnapshotId::new(2)));
-        let state: Option<Option<Vec<i32>>> = collect.persistency_service.get_state(collect.operator_coord, SnapshotId::new(2));
+        let state: Option<Option<Vec<i32>>> = collect.persistency_service.as_mut().unwrap().get_state(collect.operator_coord, SnapshotId::new(2));
         assert_eq!(state.unwrap().unwrap(), [1, 2, 3, 4]);
 
         // Clean redis
-        collect.persistency_service.delete_state(collect.operator_coord, SnapshotId::new(1));
-        collect.persistency_service.delete_state(collect.operator_coord, SnapshotId::new(2));
+        collect.persistency_service.as_mut().unwrap().delete_state(collect.operator_coord, SnapshotId::new(1));
+        collect.persistency_service.as_mut().unwrap().delete_state(collect.operator_coord, SnapshotId::new(2));
 
     }
 }

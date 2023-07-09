@@ -77,9 +77,8 @@ pub(crate) struct Start<Out: ExchangeData, Receiver: StartReceiver<Out> + Send> 
     /// Execution metadata of this block.
     max_delay: Option<Duration>,
 
-    coord: Option<Coord>,
     operator_coord: OperatorCoord,
-    persistency_service: PersistencyService,
+    persistency_service: Option<PersistencyService>,
     // Used to keep the on-going snapshots
     on_going_snapshots: HashMap<SnapshotId, (StartState<Out, Receiver>, HashSet<Coord>)>,
     persisted_message_queue: VecDeque<(Coord, StreamElement<Out>)>,
@@ -158,13 +157,12 @@ impl<OutL: ExchangeData, OutR: ExchangeData>
 impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out, Receiver> {
     fn new(receiver: Receiver, state_lock: Option<Arc<IterationStateLock>>) -> Self {
         Self {
-            coord: Default::default(),
             max_delay: Default::default(),
 
             // This is the first operator in the chain so operator_id is 0
             // Other fields will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, 0),
-            persistency_service: PersistencyService::default(),
+            persistency_service: None,
             on_going_snapshots: HashMap::new(),
             persisted_message_queue: VecDeque::new(),
             terminated_replicas: Vec::new(),
@@ -191,6 +189,7 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
         &self.receiver
     }
 
+    #[inline(never)]
     fn process_snapshot(&mut self, snap_id: SnapshotId, sender: Coord) -> Option<SnapshotId> {
         // Update last snapshots map
         self.last_snapshots.insert(sender, snap_id);
@@ -202,7 +201,7 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
             if self.on_going_snapshots.get(&snap_id).unwrap().1.len() == 0 {
                 // This snapshot is complete: now i can save it 
                 let state = self.on_going_snapshots.remove(&snap_id).unwrap().0;
-                self.persistency_service.save_state(self.operator_coord, snap_id, state);
+                self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snap_id, state);
             }
             // I've already forwarded the snapshot marker
             None
@@ -226,7 +225,7 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
             // Check if the snapshot is already complete
             if prev_replicas.len() == 0 {
                 // This snapshot is complete: i can save it immediately 
-                self.persistency_service.save_state(self.operator_coord, snap_id, state);
+                self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snap_id, state);
             } else {
                 // Add a new entry in the map with this snapshot id
                 self.on_going_snapshots.insert(snap_id, (state, prev_replicas));
@@ -235,7 +234,7 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
             Some(snap_id)
         }
     }
-
+    #[inline(never)]
     fn add_item_to_snapshot(&mut self, item: StreamElement<Out>, sender: Coord) {
         // Add item to message queue state 
         for entry in self.on_going_snapshots.iter_mut() {
@@ -244,7 +243,7 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
             }
         }
     }
-
+    #[inline(never)]
     fn process_terminate(&mut self, sender: Coord) -> Option<SnapshotId> {
         // Sender terminated: it did implicitely a terminate snapshot, continue that snapshot
         let mut snapshot_id = self.last_snapshots.get(&sender)
@@ -276,7 +275,7 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
                 if self.on_going_snapshots.get(&partial_snapshot).unwrap().1.len() == 0 {
                     // This snapshot is complete: now i can save it 
                     let state = self.on_going_snapshots.remove(&partial_snapshot).unwrap().0;
-                    self.persistency_service.save_state(self.operator_coord, partial_snapshot, state);
+                    self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, partial_snapshot, state);
                 }
             }
         } else {
@@ -299,7 +298,7 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
             // Check if the snapshot is already complete
             if prev_replicas.len() == 0 {
                 // This snapshot is complete: i can save it immediately 
-                self.persistency_service.save_state(self.operator_coord, snapshot_id, state);
+                self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id, state);
             } else {
                 // Add a new entry in the map with this snapshot id
                 self.on_going_snapshots.insert(snapshot_id, (state, prev_replicas));
@@ -346,44 +345,40 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Operator<
             metadata.coord,
             std::any::type_name::<Out>()
         );
-        self.coord = Some(metadata.coord);
         self.max_delay = metadata.batch_mode.max_delay();
 
-        self.operator_coord.block_id = metadata.coord.block_id;
-        self.operator_coord.host_id = metadata.coord.host_id;
-        self.operator_coord.replica_id = metadata.coord.replica_id;
-
-        self.persistency_service = metadata.persistency_service.clone();
-        let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
-        if let Some(snap_id) = snapshot_id {
-            // Get and resume the persisted state
-            let opt_state: Option<StartState<Out, Receiver>> = self.persistency_service.get_state(self.operator_coord, snap_id);
-            if let Some(state) = opt_state {
-                self.missing_flush_and_restart = state.missing_flush_and_restart as usize;
-                self.wait_for_state = state.wait_for_state;
-                self.state_generation = state.state_generation as usize;
-                self.watermark_frontier = state.watermark_forntier;
-                self.receiver.set_state(state.receiver_state);
-                self.persisted_message_queue = state.message_queue;  
-                // Set last snapshots off all previous replicas to this snapshot_id
-                for prev_rep in self.receiver.prev_replicas() {
-                    self.last_snapshots.insert(prev_rep, snap_id);
-                }             
-                
-            } else {
-                panic!("No persisted state founded for op: {0}", self.operator_coord);
-            } 
+        self.operator_coord.from_coord(metadata.coord);
+        if metadata.persistency_service.is_some(){
+            self.persistency_service = metadata.persistency_service.clone();
+            let snapshot_id = self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+            if let Some(snap_id) = snapshot_id {
+                // Get and resume the persisted state
+                let opt_state: Option<StartState<Out, Receiver>> = self.persistency_service.as_mut().unwrap().get_state(self.operator_coord, snap_id);
+                if let Some(state) = opt_state {
+                    self.missing_flush_and_restart = state.missing_flush_and_restart as usize;
+                    self.wait_for_state = state.wait_for_state;
+                    self.state_generation = state.state_generation as usize;
+                    self.watermark_frontier = state.watermark_forntier;
+                    self.receiver.set_state(state.receiver_state);
+                    self.persisted_message_queue = state.message_queue;  
+                    // Set last snapshots off all previous replicas to this snapshot_id
+                    for prev_rep in self.receiver.prev_replicas() {
+                        self.last_snapshots.insert(prev_rep, snap_id);
+                    }             
+                    
+                } else {
+                    panic!("No persisted state founded for op: {0}", self.operator_coord);
+                } 
+            }
         }
     }
 
     fn next(&mut self) -> StreamElement<Out> {
-        let coord = self.coord.unwrap();
-
         loop {
             // all the previous blocks sent an end: we're done
             if self.missing_terminate == 0 {
                 // If persistency is on, save terminate state
-                if self.persistency_service.is_active() {
+                if self.persistency_service.is_some() {
                     let state: StartState<Out, Receiver>= StartState{
                         missing_flush_and_restart: self.missing_flush_and_restart as u64,
                         wait_for_state: self.wait_for_state,
@@ -393,13 +388,13 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Operator<
                         // This is empty since all previous replicas terminated, so no more messages will arrive
                         message_queue: VecDeque::default(),
                     };
-                    self.persistency_service.save_terminated_state(self.operator_coord, state)
+                    self.persistency_service.as_mut().unwrap().save_terminated_state(self.operator_coord, state)
                 }
-                log::trace!("{} ended", coord);
+                log::trace!("{} ended", self.operator_coord.get_coord());
                 return StreamElement::Terminate;
             }
             if self.missing_flush_and_restart == 0 {
-                log::trace!("{} flush_restart", coord);
+                log::trace!("{} flush_restart", self.operator_coord.get_coord());
 
                 self.missing_flush_and_restart = self.num_previous_replicas;
                 self.watermark_frontier.reset();
@@ -408,34 +403,35 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Operator<
                 self.state_generation += 2;
                 return StreamElement::FlushAndRestart;
             }
-
-            // Process persisted message queue, if any
-            if let Some((sender, item)) = self.persisted_message_queue.pop_front() {
-                let to_return = match item {
-                    StreamElement::Watermark(ts) => {
-                        // update the frontier and return a watermark if necessary
-                        match self.watermark_frontier.update(sender, ts) {
-                            Some(ts) => StreamElement::Watermark(ts), // ts is safe
-                            None => continue,
+            if self.persistency_service.is_some() {
+                // Process persisted message queue, if any
+                if let Some((sender, item)) = self.persisted_message_queue.pop_front() {
+                    let to_return = match item {
+                        StreamElement::Watermark(ts) => {
+                            // update the frontier and return a watermark if necessary
+                            match self.watermark_frontier.update(sender, ts) {
+                                Some(ts) => StreamElement::Watermark(ts), // ts is safe
+                                None => continue,
+                            }
                         }
-                    }
-                    StreamElement::FlushAndRestart => {
-                        // mark this replica as ended and let the frontier ignore it from now on
-                        #[cfg(feature = "timestamp")]
-                        {
-                            self.watermark_frontier.update(sender, Timestamp::MAX);
+                        StreamElement::FlushAndRestart => {
+                            // mark this replica as ended and let the frontier ignore it from now on
+                            #[cfg(feature = "timestamp")]
+                            {
+                                self.watermark_frontier.update(sender, Timestamp::MAX);
+                            }
+                            self.missing_flush_and_restart -= 1;
+                            continue;
                         }
-                        self.missing_flush_and_restart -= 1;
-                        continue;
-                    }
-                    StreamElement::Terminate => {                       
-                        panic!("Terminated must not be persisted!");
-                    }
-                    _ => {
-                        item
-                    },
-                };
-                return to_return;
+                        StreamElement::Terminate => {                       
+                            panic!("Terminated must not be persisted!");
+                        }
+                        _ => {
+                            item
+                        },
+                    };
+                    return to_return;
+                }
             }
 
 
@@ -449,7 +445,9 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Operator<
                     Some(item) => {
                         match item {
                             StreamElement::Watermark(ts) => {
-                                self.add_item_to_snapshot(item, sender);
+                                if self.persistency_service.is_some(){
+                                    self.add_item_to_snapshot(item, sender);
+                                }
                                 // update the frontier and return a watermark if necessary
                                 match self.watermark_frontier.update(sender, ts) {
                                     Some(ts) => StreamElement::Watermark(ts), // ts is safe
@@ -457,7 +455,9 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Operator<
                                 }
                             }
                             StreamElement::FlushAndRestart => {
-                                self.add_item_to_snapshot(item, sender);
+                                if self.persistency_service.is_some(){
+                                    self.add_item_to_snapshot(item, sender);
+                                }
                                 // mark this replica as ended and let the frontier ignore it from now on
                                 #[cfg(feature = "timestamp")]
                                 {
@@ -470,11 +470,11 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Operator<
                                 self.missing_terminate -= 1;
                                 log::trace!(
                                     "{} received terminate, {} left",
-                                    coord,
+                                    self.operator_coord.get_coord(),
                                     self.missing_terminate
                                 );
                                 // If persistency is on, process_terminate. This may return a Snapshot marker 
-                                if self.persistency_service.is_active() {
+                                if self.persistency_service.is_some() {
                                     let to_forward = self.process_terminate(sender);
                                     if to_forward.is_none() {
                                         continue;
@@ -493,7 +493,9 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Operator<
                                 item
                             }
                             _ => {
-                                self.add_item_to_snapshot(item.clone(), sender);
+                                if self.persistency_service.is_some(){
+                                    self.add_item_to_snapshot(item.clone(), sender);
+                                }
                                 item
                             },
                         }
@@ -894,14 +896,14 @@ mod tests {
             Start::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None);
 
         let mut metadata = t.metadata();
-        metadata.persistency_service = PersistencyService::new(Some(
+        metadata.persistency_service = Some(PersistencyService::new(Some(
             PersistencyConfig { 
                 server_addr: String::from(REDIS_TEST_CONFIGURATION),
                 try_restart: false,
                 clean_on_exit: false,
                 restart_from: None,
             }
-        ));
+        )));
         start_block.setup(&mut metadata);
 
         start_block.operator_coord.operator_id = 100;
@@ -950,7 +952,7 @@ mod tests {
             ]),
         };
 
-        let retrived_state: StartState<i32, SimpleStartReceiver<i32>> = start_block.persistency_service.get_state(start_block.operator_coord, SnapshotId::new(1)).unwrap();
+        let retrived_state: StartState<i32, SimpleStartReceiver<i32>> = start_block.persistency_service.as_mut().unwrap().get_state(start_block.operator_coord, SnapshotId::new(1)).unwrap();
 
         assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
         assert_eq!(state.wait_for_state, retrived_state.wait_for_state);
@@ -960,7 +962,7 @@ mod tests {
         assert_eq!(state.message_queue, retrived_state.message_queue);
         
         // Clean redis
-        start_block.persistency_service.delete_state(start_block.operator_coord, SnapshotId::new(1));
+        start_block.persistency_service.as_mut().unwrap().delete_state(start_block.operator_coord, SnapshotId::new(1));
 
     }
 
@@ -976,14 +978,14 @@ mod tests {
             Start::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None);
 
         let mut metadata = t.metadata();
-        metadata.persistency_service = PersistencyService::new(Some(
+        metadata.persistency_service = Some(PersistencyService::new(Some(
             PersistencyConfig { 
                 server_addr: String::from(REDIS_TEST_CONFIGURATION),
                 try_restart: false,
                 clean_on_exit: false,
                 restart_from: None,
             }
-        ));
+        )));
         start_block.setup(&mut metadata);
 
         start_block.operator_coord.operator_id = 101;
@@ -1038,7 +1040,7 @@ mod tests {
             ]),
         };
 
-        let retrived_state: StartState<i32, SimpleStartReceiver<i32>> = start_block.persistency_service.get_state(start_block.operator_coord, SnapshotId::new(1)).unwrap();
+        let retrived_state: StartState<i32, SimpleStartReceiver<i32>> = start_block.persistency_service.as_mut().unwrap().get_state(start_block.operator_coord, SnapshotId::new(1)).unwrap();
 
         assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
         assert_eq!(state.wait_for_state, retrived_state.wait_for_state);
@@ -1062,7 +1064,7 @@ mod tests {
             ]),
         };
 
-        let retrived_state: StartState<i32, SimpleStartReceiver<i32>> = start_block.persistency_service.get_state(start_block.operator_coord, SnapshotId::new(2)).unwrap();
+        let retrived_state: StartState<i32, SimpleStartReceiver<i32>> = start_block.persistency_service.as_mut().unwrap().get_state(start_block.operator_coord, SnapshotId::new(2)).unwrap();
 
         assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
         assert_eq!(state.wait_for_state, retrived_state.wait_for_state);
@@ -1072,8 +1074,8 @@ mod tests {
         assert_eq!(state.message_queue, retrived_state.message_queue);
         
         // Clean redis
-        start_block.persistency_service.delete_state(start_block.operator_coord, SnapshotId::new(1));
-        start_block.persistency_service.delete_state(start_block.operator_coord, SnapshotId::new(2));
+        start_block.persistency_service.as_mut().unwrap().delete_state(start_block.operator_coord, SnapshotId::new(1));
+        start_block.persistency_service.as_mut().unwrap().delete_state(start_block.operator_coord, SnapshotId::new(2));
 
     }
 
@@ -1088,14 +1090,14 @@ mod tests {
             Start::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None);
 
         let mut metadata = t.metadata();
-        metadata.persistency_service = PersistencyService::new(Some(
+        metadata.persistency_service = Some(PersistencyService::new(Some(
             PersistencyConfig { 
                 server_addr: String::from(REDIS_TEST_CONFIGURATION),
                 try_restart: false,
                 clean_on_exit: false,
                 restart_from: None,
             }
-        ));
+        )));
         start_block.setup(&mut metadata);
 
         start_block.operator_coord.operator_id = 102;
@@ -1155,7 +1157,7 @@ mod tests {
             ]),
         };
 
-        let retrived_state: StartState<i32, SimpleStartReceiver<i32>> = start_block.persistency_service.get_state(start_block.operator_coord, SnapshotId::new(1)).unwrap();
+        let retrived_state: StartState<i32, SimpleStartReceiver<i32>> = start_block.persistency_service.as_mut().unwrap().get_state(start_block.operator_coord, SnapshotId::new(1)).unwrap();
 
         assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
         assert_eq!(state.wait_for_state, retrived_state.wait_for_state);
@@ -1188,7 +1190,7 @@ mod tests {
             message_queue: VecDeque::from([]),
         };
 
-        let retrived_state: StartState<i32, SimpleStartReceiver<i32>> = start_block.persistency_service.get_state(start_block.operator_coord, SnapshotId::new(4)).unwrap();
+        let retrived_state: StartState<i32, SimpleStartReceiver<i32>> = start_block.persistency_service.as_mut().unwrap().get_state(start_block.operator_coord, SnapshotId::new(4)).unwrap();
 
         assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
         assert_eq!(state.wait_for_state, retrived_state.wait_for_state);
@@ -1199,10 +1201,10 @@ mod tests {
         
         
         // Clean redis
-        start_block.persistency_service.delete_state(start_block.operator_coord, SnapshotId::new(1));
-        start_block.persistency_service.delete_state(start_block.operator_coord, SnapshotId::new(2));
-        start_block.persistency_service.delete_state(start_block.operator_coord, SnapshotId::new(3));
-        start_block.persistency_service.delete_state(start_block.operator_coord, SnapshotId::new(4));
+        start_block.persistency_service.as_mut().unwrap().delete_state(start_block.operator_coord, SnapshotId::new(1));
+        start_block.persistency_service.as_mut().unwrap().delete_state(start_block.operator_coord, SnapshotId::new(2));
+        start_block.persistency_service.as_mut().unwrap().delete_state(start_block.operator_coord, SnapshotId::new(3));
+        start_block.persistency_service.as_mut().unwrap().delete_state(start_block.operator_coord, SnapshotId::new(4));
 
     }
 

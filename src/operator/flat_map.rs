@@ -21,6 +21,7 @@ where
 {
     prev: PreviousOperators,
     operator_coord: OperatorCoord,
+    persistency_service: Option<PersistencyService>,
     f: F,
     // used to store elements that have not been returned by next() yet
     // buffer: VecDeque<StreamElement<NewOut>>,
@@ -31,7 +32,6 @@ where
     frontiter: Option<<Iter as IntoIterator>::IntoIter>,
     #[cfg(feature = "timestamp")]
     timestamp: Option<Timestamp>,
-    persistency_service: PersistencyService,
     _out: PhantomData<In>,
     _iter_out: PhantomData<Out>,
 }
@@ -50,11 +50,11 @@ where
         Self {
             prev: self.prev.clone(),
             operator_coord: self.operator_coord,
+            persistency_service: self.persistency_service.clone(),
             f: self.f.clone(),
             frontiter: None,
             #[cfg(feature = "timestamp")]
             timestamp: self.timestamp,
-            persistency_service: self.persistency_service.clone(),
             _out: self._out,
             _iter_out: self._iter_out,
         }
@@ -96,12 +96,11 @@ where
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0,0,0,op_id),
-
+            persistency_service: None,
             f,
             frontiter: None,
             #[cfg(feature = "timestamp")]
             timestamp: None,
-            persistency_service: PersistencyService::default(),
             _out: Default::default(),
             _iter_out: Default::default(),
         }
@@ -121,12 +120,11 @@ where
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
 
-        self.operator_coord.block_id = metadata.coord.block_id;
-        self.operator_coord.host_id = metadata.coord.host_id;
-        self.operator_coord.replica_id = metadata.coord.replica_id;
-
-        self.persistency_service = metadata.persistency_service.clone();
-        self.persistency_service.restart_from_snapshot(self.operator_coord);
+        self.operator_coord.from_coord(metadata.coord);
+        if metadata.persistency_service.is_some(){
+            self.persistency_service = metadata.persistency_service.clone();
+            self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+        }
     }
 
     fn next(&mut self) -> StreamElement<Out> {
@@ -162,9 +160,9 @@ where
                 StreamElement::Watermark(ts) => return StreamElement::Watermark(ts),
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
                 StreamElement::Terminate => {
-                    if self.persistency_service.is_active() {
+                    if self.persistency_service.is_some() {
                         // Save void terminated state                            
-                        self.persistency_service.save_terminated_void_state(self.operator_coord);
+                        self.persistency_service.as_mut().unwrap().save_terminated_void_state(self.operator_coord);
                     }
                     return StreamElement::Terminate
                 }
@@ -172,7 +170,7 @@ where
                 StreamElement::Snapshot(snap_id) => {
                     // Save void state and forward snapshot marker
                     // No state because when a snapshot marker arrives frontiter and timestamp are None 
-                    self.persistency_service.save_void_state(self.operator_coord, snap_id);
+                    self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snap_id);
                     return StreamElement::Snapshot(snap_id);
                 }
             }
@@ -207,6 +205,7 @@ where
 {
     prev: PreviousOperators,
     operator_coord: OperatorCoord,
+    persistency_service: Option<PersistencyService>,
     f: F,
     // used to store elements that have not been returned by next() yet
     // buffer: VecDeque<StreamElement<NewOut>>,
@@ -216,7 +215,6 @@ where
     #[derivative(Debug = "ignore")]
     frontiter: Option<(Key, Iter::IntoIter)>,
     timestamp: Option<Timestamp>,
-    persistency_service: PersistencyService,
     _key: PhantomData<Key>,
     _in: PhantomData<In>,
     _iter_out: PhantomData<Out>,
@@ -237,10 +235,10 @@ where
         Self {
             prev: self.prev.clone(),
             operator_coord: self.operator_coord,
+            persistency_service: self.persistency_service.clone(),
             f: self.f.clone(),
             frontiter: None,
             timestamp: self.timestamp,
-            persistency_service: self.persistency_service.clone(),
             _key: self._key,
             _in: self._in,
             _iter_out: self._iter_out,
@@ -287,11 +285,10 @@ where
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0,0,0,op_id),
-
+            persistency_service: None,
             f,
             frontiter: None,
             timestamp: None,
-            persistency_service: PersistencyService::default(),
             _key: Default::default(),
             _in: Default::default(),
             _iter_out: Default::default(),
@@ -313,12 +310,11 @@ where
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
 
-        self.operator_coord.block_id = metadata.coord.block_id;
-        self.operator_coord.host_id = metadata.coord.host_id;
-        self.operator_coord.replica_id = metadata.coord.replica_id;
-
-        self.persistency_service = metadata.persistency_service.clone();
-        self.persistency_service.restart_from_snapshot(self.operator_coord);
+        self.operator_coord.from_coord(metadata.coord);
+        if metadata.persistency_service.is_some(){
+            self.persistency_service = metadata.persistency_service.clone();
+            self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+        }
     }
 
     #[inline]
@@ -357,9 +353,9 @@ where
                 StreamElement::Watermark(ts) => return StreamElement::Watermark(ts),
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
                 StreamElement::Terminate => {
-                    if self.persistency_service.is_active() {
+                    if self.persistency_service.is_some() {
                         // Save void terminated state                            
-                        self.persistency_service.save_terminated_void_state(self.operator_coord);
+                        self.persistency_service.as_mut().unwrap().save_terminated_void_state(self.operator_coord);
                     }
                     return StreamElement::Terminate
                 }
@@ -367,7 +363,7 @@ where
                 StreamElement::Snapshot(snap_id) => {
                     // Save void state and forward snapshot marker
                     // No state because when a snapshot marker arrives frontiter and timestamp are None 
-                    self.persistency_service.save_void_state(self.operator_coord, snap_id);
+                    self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snap_id);
                     return StreamElement::Snapshot(snap_id);
                 }
             }

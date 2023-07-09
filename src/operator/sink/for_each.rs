@@ -18,7 +18,7 @@ where
 {
     prev: PreviousOperators,
     operator_coord: OperatorCoord,
-    persistency_service: PersistencyService,
+    persistency_service: Option<PersistencyService>,
     #[derivative(Debug = "ignore")]
     f: F,
     _out: PhantomData<Out>,
@@ -35,7 +35,7 @@ where
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
-            persistency_service: PersistencyService::default(),
+            persistency_service: None,
             f,
             _out: PhantomData,
         }
@@ -60,12 +60,11 @@ where
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
 
-        self.operator_coord.block_id = metadata.coord.block_id;
-        self.operator_coord.host_id = metadata.coord.host_id;
-        self.operator_coord.replica_id = metadata.coord.replica_id;
-
-        self.persistency_service =metadata.persistency_service.clone();
-        self.persistency_service.restart_from_snapshot(self.operator_coord);
+        self.operator_coord.from_coord(metadata.coord);
+        if metadata.persistency_service.is_some(){
+            self.persistency_service = metadata.persistency_service.clone();
+            self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+        }
     }
 
     fn next(&mut self) -> StreamElement<()> {
@@ -76,9 +75,9 @@ where
                 }
                 StreamElement::Watermark(w) => return StreamElement::Watermark(w),
                 StreamElement::Terminate => {
-                    if self.persistency_service.is_active() {
+                    if self.persistency_service.is_some() {
                         // Save void terminated state
-                        self.persistency_service.save_terminated_void_state(self.operator_coord);
+                        self.persistency_service.as_mut().unwrap().save_terminated_void_state(self.operator_coord);
                     }
                     return StreamElement::Terminate; 
                 }
@@ -86,7 +85,7 @@ where
                 StreamElement::FlushAndRestart => return StreamElement::FlushAndRestart,
                 StreamElement::Snapshot(snap_id) => {
                     // No state is keeped: this can only provide at-least-one semantic
-                    self.persistency_service.save_void_state(self.operator_coord, snap_id);
+                    self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snap_id);
                     return StreamElement::Snapshot(snap_id);
                 }
             }

@@ -16,7 +16,7 @@ where
 {
     prev: OperatorChain,
     operator_coord: OperatorCoord,
-    persistency_service: PersistencyService,
+    persistency_service: Option<PersistencyService>,
     maps_fn: HashMap<Key, F, crate::block::GroupHasherBuilder>,
     init_map: F,
     _out: PhantomData<Out>,
@@ -72,12 +72,25 @@ where
             
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
-            persistency_service: PersistencyService::default(),
+            persistency_service: None,
 
             maps_fn: Default::default(),
             init_map: f,
             _out: Default::default(),
             _new_out: Default::default(),
+        }
+    }
+
+    /// Save state accordingly to the given message
+    fn snapshot_procedures(&mut self, message: &StreamElement<(Key, Out)>) {
+        match message {
+            StreamElement::Snapshot(snap_id) => {
+                self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, *snap_id);
+            }
+            StreamElement::Terminate => {                
+                self.persistency_service.as_mut().unwrap().save_terminated_void_state(self.operator_coord);
+            }
+            _ => {}
         }
     }
 }
@@ -91,31 +104,21 @@ where
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
 
-        self.operator_coord.block_id = metadata.coord.block_id;
-        self.operator_coord.host_id = metadata.coord.host_id;
-        self.operator_coord.replica_id = metadata.coord.replica_id;
-
-        self.persistency_service = metadata.persistency_service.clone();
-        self.persistency_service.restart_from_snapshot(self.operator_coord);
+        self.operator_coord.from_coord(metadata.coord);
+        if metadata.persistency_service.is_some(){
+            self.persistency_service = metadata.persistency_service.clone();
+            self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+        }
     }
 
     #[inline]
     fn next(&mut self) -> StreamElement<(Key, NewOut)> {
         let element = self.prev.next();
-        match element {
-            StreamElement::Snapshot(snap_id) => {
-                self.persistency_service.save_void_state(self.operator_coord, snap_id);
-            }
-            StreamElement::FlushAndRestart => {
-                // self.maps_fn.clear();
-            }
-            StreamElement::Terminate => {
-                if self.persistency_service.is_active() {
-                    // Save void terminated state
-                    self.persistency_service.save_terminated_void_state(self.operator_coord);
-                }
-            }
-            _ => {}
+        if self.persistency_service.is_some(){
+            self.snapshot_procedures(&element);
+        }
+        if matches!(element, StreamElement::FlushAndRestart) {
+            // self.maps_fn.clear();
         }
         element.map(|(key, value)| {
             let map_fn = if let Some(map_fn) = self.maps_fn.get_mut(&key) {

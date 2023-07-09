@@ -43,7 +43,7 @@ pub struct ExecutionMetadata<'a> {
     /// The batching mode to use inside this block.
     pub batch_mode: BatchMode,
     /// Persistency service handler for saving the state
-    pub(crate) persistency_service: PersistencyService,
+    pub(crate) persistency_service: Option<PersistencyService>,
 }
 
 /// Information about a block in the job graph.
@@ -79,7 +79,7 @@ pub(crate) struct Scheduler {
     /// The network topology that keeps track of all the connections inside the execution graph.
     network: NetworkTopology,
     /// Persistency service handler for saving the state
-    persistency_service: PersistencyService,
+    persistency_service: Option<PersistencyService>,
     /// List with coordinates of all operators in the network
     operators_coordinates: Vec<OperatorCoord>,
 }
@@ -87,6 +87,10 @@ pub(crate) struct Scheduler {
 impl Scheduler {
     pub fn new(config: EnvironmentConfig) -> Self {
         let pers_conf = config.persistency_configuration.clone();
+        let mut pers_service = None;
+        if pers_conf.is_some(){
+            pers_service = Some(PersistencyService::new(pers_conf));
+        }
         Self {
             next_blocks: Default::default(),
             prev_blocks: Default::default(),
@@ -94,7 +98,7 @@ impl Scheduler {
             block_init: Default::default(),
             network: NetworkTopology::new(config.clone()),
             config,
-            persistency_service: PersistencyService::new(pers_conf),
+            persistency_service: pers_service,
             operators_coordinates: Default::default()
         }
     }
@@ -120,30 +124,29 @@ impl Scheduler {
         );
 
         // add operators coordinates of this block to operators_coordinates
-        let num_of_op = info.last_operator_id + 1;
-        let num_of_hosts = match &self.config.runtime {
-            ExecutionRuntime::Remote(conf) => {
-                conf.hosts.len() as u64
-            }
-            ExecutionRuntime::Local(_) => {
-                1
-            }
-        };
-        for host in 0..num_of_hosts{
-            let host_replicas = info.replicas(host);
-            for coord in host_replicas {
-                for op_id in 0..num_of_op {
-                    let op_coord = OperatorCoord { 
-                        block_id, 
-                        host_id: host, 
-                        replica_id: coord.replica_id, 
-                        operator_id: op_id, 
-                    };
-                    // This check could be removed
-                    if self.operators_coordinates.contains(&op_coord) {
-                        panic!("Something wrong in the computation of all coordinates");
+        // If persistency is not configured, this is skipped
+        if self.persistency_service.is_some() {
+            let num_of_op = info.last_operator_id + 1;
+            let num_of_hosts = match &self.config.runtime {
+                ExecutionRuntime::Remote(conf) => {
+                    conf.hosts.len() as u64
+                }
+                ExecutionRuntime::Local(_) => {
+                    1
+                }
+            };
+            for host in 0..num_of_hosts{
+                let host_replicas = info.replicas(host);
+                for coord in host_replicas {
+                    for op_id in 0..num_of_op {
+                        let op_coord = OperatorCoord { 
+                            block_id, 
+                            host_id: host, 
+                            replica_id: coord.replica_id, 
+                            operator_id: op_id, 
+                        };
+                        self.operators_coordinates.push(op_coord)
                     }
-                    self.operators_coordinates.push(op_coord)
                 }
             }
         }
@@ -279,7 +282,7 @@ impl Scheduler {
         // If set, try to restart from a snapshot
         if let Some(persistency_conf) = self.config.persistency_configuration.clone(){
             if persistency_conf.try_restart {
-                self.persistency_service.find_snapshot(self.operators_coordinates.clone(), persistency_conf.restart_from);
+                self.persistency_service.as_mut().unwrap().find_snapshot(self.operators_coordinates.clone(), persistency_conf.restart_from);
             }
         }
 
@@ -319,7 +322,7 @@ impl Scheduler {
             let this_host = self.config.host_id.unwrap();
             if let Some(persistency_conf) = self.config.persistency_configuration{
                     if persistency_conf.clean_on_exit {
-                        self.persistency_service.clean_persisted_state(
+                        self.persistency_service.as_mut().unwrap().clean_persisted_state(
                             self.operators_coordinates
                                 .into_iter()
                                 .filter(|op_coord| op_coord.host_id == this_host)

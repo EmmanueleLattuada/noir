@@ -16,7 +16,7 @@ use crate::persistency::{PersistencyService, PersistencyServices};
 use crate::scheduler::OperatorId;
 use crate::stream::{KeyedStream, Stream, WindowedStream};
 
-use super::ExchangeDataKey;
+use super::{ExchangeDataKey, SnapshotId};
 
 mod aggr;
 mod descr;
@@ -146,7 +146,7 @@ where
     /// Operator coordinate
     operator_coord: OperatorCoord,
     /// Persistency service
-    persistency_service: PersistencyService,
+    persistency_service: Option<PersistencyService>,
     /// The name of the actual operator that this one abstracts.
     ///
     /// It is used only for tracing purposes.
@@ -198,58 +198,40 @@ where
     fn setup(&mut self, metadata: &mut crate::ExecutionMetadata) {
         self.prev.setup(metadata);
 
-        self.operator_coord.block_id = metadata.coord.block_id;
-        self.operator_coord.host_id = metadata.coord.host_id;
-        self.operator_coord.replica_id = metadata.coord.replica_id;
+        self.operator_coord.from_coord(metadata.coord);
+        if metadata.persistency_service.is_some(){
+            self.persistency_service = metadata.persistency_service.clone();
+            let snapshot_id = self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+            if snapshot_id.is_some() {
+                // Get and resume the persisted state
+                let opt_state: Option<WindowOperatorState<Key, Out, W::ManagerState>> = self.persistency_service.as_mut().unwrap().get_state(self.operator_coord, snapshot_id.unwrap());
+                if let Some(state) = opt_state {
+                    self.output_buffer = state.output_buffer;                
+                    state.manager.windows
+                        .iter()
+                        .for_each(|(key, manager_state)| {
+                            let mut new_man = self.manager.init.clone();
+                            new_man.set_state(manager_state.clone());
+                            self
+                                .manager
+                                .windows
+                                .insert(key.clone(), new_man);
 
-        self.persistency_service = metadata.persistency_service.clone();
-        let snapshot_id = self.persistency_service.restart_from_snapshot(self.operator_coord);
-        if snapshot_id.is_some() {
-            // Get and resume the persisted state
-            let opt_state: Option<WindowOperatorState<Key, Out, W::ManagerState>> = self.persistency_service.get_state(self.operator_coord, snapshot_id.unwrap());
-            if let Some(state) = opt_state {
-                self.output_buffer = state.output_buffer;                
-                state.manager.windows
-                    .iter()
-                    .for_each(|(key, manager_state)| {
-                        let mut new_man = self.manager.init.clone();
-                        new_man.set_state(manager_state.clone());
-                        self
-                            .manager
-                            .windows
-                            .insert(key.clone(), new_man);
-
-                    });
-            } else {
-                panic!("No persisted state founded for op: {0}", self.operator_coord);
-            } 
+                        });
+                } else {
+                    panic!("No persisted state founded for op: {0}", self.operator_coord);
+                } 
+            }
         }
     }
 
     fn next(&mut self) -> StreamElement<(Key, Out)> {
         loop {
             if let Some(item) = self.output_buffer.pop_front() {
-                match item {
-                    StreamElement::Terminate => {
-                        if self.persistency_service.is_active() {
-                            // Save terminated state
-                            let windows = HashMap::from_iter(
-                                self.manager.windows
-                                    .clone()
-                                    .iter()
-                                    .map(|(key, manager)| (key.clone(), manager.get_state()))
-                            );
-                            let manager_state = KeyedWindowManagerState {
-                                windows,
-                            };
-                            let state = WindowOperatorState {
-                                manager: manager_state,
-                                output_buffer: self.output_buffer.clone(),
-                            };
-                            self.persistency_service.save_terminated_state(self.operator_coord, state);
-                        }
+                if matches!(item, StreamElement::Terminate){
+                    if self.persistency_service.is_some() {
+                        self.save_terminate();
                     }
-                    _ => {}
                 }
                 return item;
             }
@@ -274,20 +256,7 @@ where
                 }
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
                 StreamElement::Snapshot(snap_id) => {
-                    let windows = HashMap::from_iter(
-                        self.manager.windows
-                            .clone()
-                            .iter()
-                            .map(|(key, manager)| (key.clone(), manager.get_state()))
-                    );
-                    let manager_state = KeyedWindowManagerState {
-                        windows,
-                    };
-                    let state = WindowOperatorState {
-                        manager: manager_state,
-                        output_buffer: self.output_buffer.clone(),
-                    };
-                    self.persistency_service.save_state(self.operator_coord, snap_id, state);
+                    self.save_snap(snap_id);
                     self.output_buffer.push_back(StreamElement::Snapshot(snap_id));
 
                 }
@@ -333,9 +302,9 @@ where
 impl<Key, In, Out, Prev, W> WindowOperator<Key, In, Out, Prev, W>
 where
     Prev: Operator<(Key, In)>,
-    Key: DataKey,
+    Key: ExchangeDataKey,
     In: Data,
-    Out: Data,
+    Out: ExchangeData,
     W: WindowManager,
 {
     pub(crate) fn new(
@@ -348,11 +317,46 @@ where
             prev,  
             // This will be set in setup method          
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
-            persistency_service: PersistencyService::default(),
+            persistency_service: None,
             name,
             manager,
             output_buffer: Default::default(),
         }
+    }
+
+    /// Save state for snapshot
+    fn save_snap(&mut self, snapshot_id: SnapshotId){
+        let windows = HashMap::from_iter(
+            self.manager.windows
+                .clone()
+                .iter()
+                .map(|(key, manager)| (key.clone(), manager.get_state()))
+        );
+        let manager_state = KeyedWindowManagerState {
+            windows,
+        };
+        let state = WindowOperatorState {
+            manager: manager_state,
+            output_buffer: self.output_buffer.clone(),
+        };
+        self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id, state);
+    }
+    /// Save terminated state
+    fn save_terminate(&mut self){
+        let windows = HashMap::from_iter(
+            self.manager.windows
+                .clone()
+                .iter()
+                .map(|(key, manager)| (key.clone(), manager.get_state()))
+        );
+        let manager_state = KeyedWindowManagerState {
+            windows,
+        };
+        let state = WindowOperatorState {
+            manager: manager_state,
+            output_buffer: self.output_buffer.clone(),
+        };
+        self.persistency_service.as_mut().unwrap().save_terminated_state(self.operator_coord, state);
     }
 }
 
