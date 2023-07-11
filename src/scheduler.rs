@@ -123,32 +123,8 @@ impl Scheduler {
             // info
         );
 
-        // add operators coordinates of this block to operators_coordinates
-        // If persistency is not configured, this is skipped
         if self.persistency_service.is_some() {
-            let num_of_op = info.last_operator_id + 1;
-            let num_of_hosts = match &self.config.runtime {
-                ExecutionRuntime::Remote(conf) => {
-                    conf.hosts.len() as u64
-                }
-                ExecutionRuntime::Local(_) => {
-                    1
-                }
-            };
-            for host in 0..num_of_hosts{
-                let host_replicas = info.replicas(host);
-                for coord in host_replicas {
-                    for op_id in 0..num_of_op {
-                        let op_coord = OperatorCoord { 
-                            block_id, 
-                            host_id: host, 
-                            replica_id: coord.replica_id, 
-                            operator_id: op_id, 
-                        };
-                        self.operators_coordinates.push(op_coord)
-                    }
-                }
-            }
+            self.compute_coordinates(self.block_info(&block), block_id);
         }
 
         // duplicate the block in the execution graph
@@ -175,6 +151,34 @@ impl Scheduler {
                 Box::new(move |metadata| spawn_worker(block, metadata)),
             ));
         }
+    }
+
+    // Compute and add operators coordinates of given block to operators_coordinates
+    // If persistency is not configured, this is skipped
+    fn compute_coordinates(&mut self, info: SchedulerBlockInfo, block_id: BlockId){
+        let num_of_op = info.last_operator_id + 1;
+            let num_of_hosts = match &self.config.runtime {
+                ExecutionRuntime::Remote(conf) => {
+                    conf.hosts.len() as u64
+                }
+                ExecutionRuntime::Local(_) => {
+                    1
+                }
+            };
+            for host in 0..num_of_hosts{
+                let host_replicas = info.replicas(host);
+                for coord in host_replicas {
+                    for op_id in 0..num_of_op {
+                        let op_coord = OperatorCoord { 
+                            block_id, 
+                            host_id: host, 
+                            replica_id: coord.replica_id, 
+                            operator_id: op_id, 
+                        };
+                        self.operators_coordinates.push(op_coord)
+                    }
+                }
+            }
     }
 
     /// Connect a pair of blocks inside the job graph.
@@ -319,9 +323,9 @@ impl Scheduler {
             self.network.stop_and_wait();
 
             // If set, clean all persisted snapshots (each host clean its own operators)
-            let this_host = self.config.host_id.unwrap();
             if let Some(persistency_conf) = self.config.persistency_configuration{
                     if persistency_conf.clean_on_exit {
+                        let this_host = self.config.host_id.unwrap();
                         self.persistency_service.as_mut().unwrap().clean_persisted_state(
                             self.operators_coordinates
                                 .into_iter()
