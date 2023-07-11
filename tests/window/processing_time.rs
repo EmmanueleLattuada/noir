@@ -1,3 +1,6 @@
+use noir::StreamEnvironment;
+use noir::prelude::Source;
+use serial_test::serial;
 use std::time::Duration;
 
 use noir::operator::source::IteratorSource;
@@ -30,9 +33,6 @@ fn tumbling_processing_time() {
     });
 }
 
-// TODO: FIX THIS
-// processing time windows does not support persistency
-/*
 #[test]
 #[serial]
 fn tumbling_processing_time_persistency() {
@@ -74,4 +74,4 @@ fn tumbling_processing_time_persistency() {
     TestHelper::local_remote_env_with_persistency(body, execution_list);
 
 }
-*/
+

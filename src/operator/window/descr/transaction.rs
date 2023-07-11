@@ -121,7 +121,7 @@ where
             Some(slot) => {
                 let mut saved_slot = Slot {
                     acc: self.init.clone(),
-                    close: slot.close.clone(),   // FIX THIS
+                    close: slot.close.clone(),
                 };
                 saved_slot.acc.set_state(slot.acc);
                 Some(saved_slot)

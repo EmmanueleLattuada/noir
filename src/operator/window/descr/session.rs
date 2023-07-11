@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use super::super::*;
 use crate::operator::{Data, StreamElement};
@@ -35,7 +35,8 @@ pub struct SessionWindowManagerState<AS>{
 #[derive(Clone, Serialize, Deserialize)]
 struct SlotState<AS> {
     acc: AS,
-    //last: Instant,
+    last: Duration,
+    abs_time: SystemTime,
 }
 
 impl<A: WindowAccumulator> WindowManager for SessionWindowManager<A>
@@ -81,7 +82,8 @@ where
             Some(slot) => {
                 Some(SlotState {
                     acc: slot.acc.get_state(),
-                    //last: slot.last.clone(),
+                    last: slot.last.elapsed(),
+                    abs_time: SystemTime::now(),
                 })
             }
             None => None
@@ -92,13 +94,18 @@ where
         }
     }
 
+    /// For last of the window it will try to restore the original value by 
+    /// calculating the elapsed time to the snapshot and the elapsed time from
+    /// the snapshot and now
     fn set_state(&mut self, state: Self::ManagerState) {
         self.gap = state.gap.clone();
         self.w = match state.w.clone() {
             Some(slot) => {
+                // Unwrap should always succeed, maybe remove default and panic
+                let elapsed_abs_time = slot.abs_time.elapsed().unwrap_or(Duration::new(0, 0));
                 let mut saved_slot = Slot {
                     acc: self.init.clone(),
-                    last: Instant::now(),   // FIX THIS
+                    last: Instant::now() - slot.last - elapsed_abs_time,
                 };
                 saved_slot.acc.set_state(slot.acc);
                 Some(saved_slot)

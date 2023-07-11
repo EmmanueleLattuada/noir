@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use super::super::*;
 use crate::operator::{Data, StreamElement};
@@ -43,8 +43,9 @@ pub struct ProcessingTimeWindowManagerState<AS>{
 #[derive(Clone, Serialize, Deserialize)]
 struct SlotState<AS> {
     acc: AS,
-    //start: Instant, 
-    //end: Instant,
+    start: Duration, 
+    end: Duration,
+    abs_time: SystemTime,
     active: bool,
 }
 
@@ -107,8 +108,9 @@ where
                 .clone()
                 .iter()
                 .map(|slot| SlotState {
-                    //start: slot.start.clone(),
-                    //end: slot.end.clone(),
+                    start: slot.start.elapsed(),
+                    end: slot.end.duration_since(Instant::now()),
+                    abs_time: SystemTime::now(),
                     acc: slot.acc.get_state(),
                     active: slot.active,
                 })
@@ -118,15 +120,20 @@ where
         }
     }
 
+    /// For start and end of the window it will try to restore the original values 
+    /// by calculating the elapsed time to the snapshot and the elapsed time from
+    /// the snapshot and now
     fn set_state(&mut self, state: Self::ManagerState) {
         let win = VecDeque::from_iter(
             state.ws
                 .clone()
                 .iter()
                 .map(|slot| {
+                    // Unwrap should always succeed, maybe remove default and panic
+                    let elapsed_abs_time = slot.abs_time.elapsed().unwrap_or(Duration::new(0, 0));                     
                     let mut saved_slot = Slot {
-                        start: Instant::now(),  // FIX THIS
-                        end: Instant::now(),    // FIX THIS
+                        start: Instant::now() - slot.start - elapsed_abs_time,
+                        end: Instant::now() + slot.end - elapsed_abs_time,
                         acc: self.init.clone(),
                         active: slot.active,
                     };
