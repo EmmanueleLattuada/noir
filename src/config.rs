@@ -6,6 +6,7 @@ use std::fmt::{Display, Formatter};
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::time::Duration;
 
 use anyhow::{bail, Result};
 #[cfg(feature = "clap")]
@@ -92,6 +93,8 @@ pub struct PersistencyConfig {
     pub try_restart: bool,
     pub clean_on_exit: bool,
     pub restart_from: Option<u64>,
+    pub snapshot_frequency_by_item: Option<u64>,
+    pub snapshot_frequency_by_time: Option<Duration>
 }
 
 /// Which kind of environment to use for the execution.

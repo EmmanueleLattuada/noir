@@ -4,6 +4,7 @@ use std::fmt::Display;
 use std::time::Duration;
 
 use crate::block::{BlockStructure, OperatorStructure, Replication};
+use crate::config::PersistencyConfig;
 use crate::network::{Coord, NetworkSender, NetworkTopology, ReceiverEndpoint};
 use crate::operator::source::Source;
 use crate::operator::{Data, ExchangeData, Operator, StreamElement};
@@ -12,6 +13,17 @@ use crate::CoordUInt;
 use crate::{BatchMode, EnvironmentConfig};
 
 pub(crate) const REDIS_TEST_CONFIGURATION: &str ="redis://127.0.0.1";
+
+pub(crate) fn persistency_config_unit_tests() -> PersistencyConfig{
+    PersistencyConfig { 
+        server_addr: String::from(REDIS_TEST_CONFIGURATION),
+        try_restart: false,
+        clean_on_exit: false,
+        restart_from: None,
+        snapshot_frequency_by_item: None,
+        snapshot_frequency_by_time: None,
+    }
+}
 
 /// A fake operator that can be used to unit-test the operators.
 #[derive(Debug, Clone)]
@@ -70,14 +82,6 @@ impl<Out: Data> Operator<Out> for FakeOperator<Out> {
 impl<Out: Data> Source<Out> for FakeOperator<Out> {
     fn replication(&self) -> Replication {
         Replication::Unlimited
-    }
-
-    fn set_snapshot_frequency_by_item(&mut self, _item_interval: u64) {
-        todo!();
-    }
-
-    fn set_snapshot_frequency_by_time(&mut self, _time_interval: Duration) {
-        todo!();
     }
 }
 

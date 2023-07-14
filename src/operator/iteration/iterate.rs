@@ -3,7 +3,6 @@ use std::collections::VecDeque;
 use std::fmt::Display;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
 use crate::block::{
     Block, BlockStructure, Connection, NextStrategy, OperatorReceiver, OperatorStructure,
@@ -576,15 +575,5 @@ where
 impl<Out: ExchangeData, State: ExchangeData + Sync> Source<Out> for Iterate<Out, State> {
     fn replication(&self) -> Replication {
         Replication::Unlimited
-    }
-
-    fn set_snapshot_frequency_by_item(&mut self, _item_interval: u64) {
-        // Think how to use this method
-        todo!();
-    }
-
-    fn set_snapshot_frequency_by_time(&mut self, _time_interval: Duration) {
-        // Think how to use this method
-        todo!();
     }
 }

@@ -443,7 +443,7 @@ mod tests {
 
     use serial_test::serial;
 
-    use crate::{network::NetworkMessage, test::{FakeNetworkTopology, REDIS_TEST_CONFIGURATION}, operator::{Start, BinaryElement, StreamElement, Operator, SideReceiverState, MultipleReceiverState, start::{StartState, watermark_frontier::WatermarkFrontier}, BinaryStartReceiver, SnapshotId}, persistency::{PersistencyService, PersistencyServices}, config::PersistencyConfig};
+    use crate::{network::NetworkMessage, test::{FakeNetworkTopology, persistency_config_unit_tests}, operator::{Start, BinaryElement, StreamElement, Operator, SideReceiverState, MultipleReceiverState, start::{StartState, watermark_frontier::WatermarkFrontier}, BinaryStartReceiver, SnapshotId}, persistency::{PersistencyService, PersistencyServices}};
 
     #[test]
     #[serial]
@@ -462,12 +462,7 @@ mod tests {
        
         let mut metadata = t.metadata();
         metadata.persistency_service = Some(PersistencyService::new(Some(
-            PersistencyConfig { 
-                server_addr: String::from(REDIS_TEST_CONFIGURATION),
-                try_restart: false,
-                clean_on_exit: false,
-                restart_from: None,
-            }
+            persistency_config_unit_tests()
         )));
         start_block.setup(&mut metadata);
 
@@ -614,12 +609,7 @@ mod tests {
        
         let mut metadata = t.metadata();
         metadata.persistency_service = Some(PersistencyService::new(Some(
-            PersistencyConfig { 
-                server_addr: String::from(REDIS_TEST_CONFIGURATION),
-                try_restart: false,
-                clean_on_exit: false,
-                restart_from: None,
-            }
+            persistency_config_unit_tests()
         )));
         start_block.setup(&mut metadata);
 
@@ -846,12 +836,7 @@ mod tests {
        
         let mut metadata = t.metadata();
         metadata.persistency_service = Some(PersistencyService::new(Some(
-            PersistencyConfig { 
-                server_addr: String::from(REDIS_TEST_CONFIGURATION),
-                try_restart: false,
-                clean_on_exit: false,
-                restart_from: None,
-            }
+            persistency_config_unit_tests()
         )));
         start_block.setup(&mut metadata);
 

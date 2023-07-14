@@ -261,12 +261,14 @@ impl TestHelper {
         }
     }
 
-    pub fn persistency_config_test(try_restart: bool, clean_on_exit: bool, restart_from: Option<u64>) -> PersistencyConfig {
+    pub fn persistency_config_test(try_restart: bool, clean_on_exit: bool, restart_from: Option<u64>, snapshot_frequency_by_item: Option<u64>) -> PersistencyConfig {
         PersistencyConfig { 
             server_addr: String::from(REDIS_TEST_CONFIGURATION), 
             try_restart, 
             clean_on_exit, 
-            restart_from 
+            restart_from,
+            snapshot_frequency_by_item,
+            snapshot_frequency_by_time: None,
         }
     }
 

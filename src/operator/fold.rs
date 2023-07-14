@@ -212,12 +212,11 @@ where
 mod tests {
     use serial_test::serial;
 
-    use crate::config::PersistencyConfig;
     use crate::network::OperatorCoord;
     use crate::operator::fold::{Fold, FoldState};
     use crate::operator::{Operator, StreamElement, SnapshotId};
     use crate::persistency::{PersistencyService, PersistencyServices};
-    use crate::test::{FakeOperator, REDIS_TEST_CONFIGURATION};
+    use crate::test::{FakeOperator, persistency_config_unit_tests};
 
     #[test]
     fn test_fold_without_timestamps() {
@@ -287,12 +286,7 @@ mod tests {
             operator_id: 1,
         };
         fold.persistency_service = Some(PersistencyService::new(Some(
-            PersistencyConfig { 
-                server_addr: String::from(REDIS_TEST_CONFIGURATION),
-                try_restart: false,
-                clean_on_exit: false,
-                restart_from: None,
-            }
+            persistency_config_unit_tests()
         )));
 
         assert_eq!(fold.next(), StreamElement::Snapshot(SnapshotId::new(1)));

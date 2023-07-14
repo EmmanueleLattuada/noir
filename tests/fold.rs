@@ -1,7 +1,7 @@
 use itertools::Itertools;
 use serial_test::serial;
 
-use noir::{operator::source::IteratorSource, prelude::Source, StreamEnvironment};
+use noir::{operator::source::IteratorSource, StreamEnvironment};
 use utils::TestHelper;
 
 mod utils;
@@ -86,8 +86,7 @@ fn fold_assoc_shuffled_stream() {
 #[serial]
 fn fold_stream_persistency() {
     let body = |mut env: StreamEnvironment| {
-        let mut source = IteratorSource::new(0..10u8);
-        source.set_snapshot_frequency_by_item(3);
+        let source = IteratorSource::new(0..10u8);
         let res = env
             .stream(source)
             .fold("".to_string(), |s, n| *s += &n.to_string())
@@ -99,17 +98,19 @@ fn fold_stream_persistency() {
         }
     };
 
+    let snap_freq = Some(3);
+
     let execution_list = vec![
         // Complete execution
-        TestHelper::persistency_config_test(false, false, None),
+        TestHelper::persistency_config_test(false, false, None, snap_freq),
         // Restart from snapshot 1
-        TestHelper::persistency_config_test(true, false, Some(1)),
+        TestHelper::persistency_config_test(true, false, Some(1), snap_freq),
         // Restart from snapshot 2
-        TestHelper::persistency_config_test(true, false, Some(2)),
+        TestHelper::persistency_config_test(true, false, Some(2), snap_freq),
         // Restart from snapshot 4, the first block has already terminated
-        TestHelper::persistency_config_test(true, false, Some(4)),
+        TestHelper::persistency_config_test(true, false, Some(4), snap_freq),
         // Restart from last snapshot, all operators have terminated
-        TestHelper::persistency_config_test(true, true, None),
+        TestHelper::persistency_config_test(true, true, None, snap_freq),
     ];
 
     TestHelper::local_remote_env_with_persistency(body, execution_list);   
@@ -120,8 +121,7 @@ fn fold_stream_persistency() {
 #[serial]
 fn fold_assoc_shuffled_stream_persistency() {
     let body = |mut env: StreamEnvironment| {
-        let mut source = IteratorSource::new(0..10u8);
-        source.set_snapshot_frequency_by_item(3);
+        let source = IteratorSource::new(0..10u8);
         let res = env
             .stream(source)
             .shuffle()
@@ -138,18 +138,20 @@ fn fold_assoc_shuffled_stream_persistency() {
             assert_eq!(res[0], (0..10u8).collect_vec());
         }
     };
+    
+    let snap_freq = Some(3);
 
     let execution_list = vec![
         // Complete execution
-        TestHelper::persistency_config_test(false, false, None),
+        TestHelper::persistency_config_test(false, false, None, snap_freq),
         // Restart from snapshot 1
-        TestHelper::persistency_config_test(true, false, Some(1)),
+        TestHelper::persistency_config_test(true, false, Some(1), snap_freq),
         // Restart from snapshot 2
-        TestHelper::persistency_config_test(true, false, Some(2)),
+        TestHelper::persistency_config_test(true, false, Some(2), snap_freq),
         // Restart from snapshot 4, the first block has already terminated
-        TestHelper::persistency_config_test(true, false, Some(4)),
+        TestHelper::persistency_config_test(true, false, Some(4), snap_freq),
         // Restart from last snapshot, all operators have terminated
-        TestHelper::persistency_config_test(true, true, None),
+        TestHelper::persistency_config_test(true, true, None, snap_freq),
     ];
 
     TestHelper::local_remote_env_with_persistency(body, execution_list);

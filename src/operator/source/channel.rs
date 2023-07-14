@@ -1,5 +1,4 @@
 use std::fmt::Display;
-use std::time::Duration;
 
 use crate::channel::{bounded, Receiver, RecvError, Sender, TryRecvError};
 
@@ -76,14 +75,6 @@ impl<Out: Data + core::fmt::Debug> Source<Out> for ChannelSource<Out> {
     fn replication(&self) -> Replication {
         Replication::One
     }
-
-    fn set_snapshot_frequency_by_item(&mut self, item_interval: u64) {
-        self.snapshot_generator.set_item_interval(item_interval);
-    }
-
-    fn set_snapshot_frequency_by_time(&mut self, time_interval: Duration) {
-        self.snapshot_generator.set_time_interval(time_interval);
-    }
 }
 
 impl<Out: Data + core::fmt::Debug> Operator<Out> for ChannelSource<Out> {
@@ -91,10 +82,17 @@ impl<Out: Data + core::fmt::Debug> Operator<Out> for ChannelSource<Out> {
         self.operator_coord.from_coord(metadata.coord);
         if metadata.persistency_service.is_some() {
             self.persistency_service = metadata.persistency_service.clone();
-            let snapshot_id = self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+            let persist_s = self.persistency_service.as_mut().unwrap();
+            let snapshot_id = persist_s.restart_from_snapshot(self.operator_coord);
             if let Some(snap_id) = snapshot_id {
                 self.terminated = snap_id.terminate();
                 self.snapshot_generator.restart_from(snap_id);
+            }
+            if let Some(snap_freq) = persist_s.snapshot_frequency_by_item {
+                self.snapshot_generator.set_item_interval(snap_freq);
+            }
+            if let Some(snap_freq) = persist_s.snapshot_frequency_by_time {
+                self.snapshot_generator.set_time_interval(snap_freq);
             }
         }
     }

@@ -4,7 +4,6 @@ use std::io;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::marker::PhantomData;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use csv::{Reader, ReaderBuilder, Terminator, Trim};
 use serde::{Deserialize, Serialize};
@@ -279,14 +278,6 @@ impl<Out: Data + for<'a> Deserialize<'a>> Source<Out> for CsvSource<Out> {
     fn replication(&self) -> Replication {
         Replication::Unlimited
     }
-
-    fn set_snapshot_frequency_by_item(&mut self, item_interval: u64) {
-        self.snapshot_generator.set_item_interval(item_interval);
-    }
-
-    fn set_snapshot_frequency_by_time(&mut self, time_interval: Duration) {
-        self.snapshot_generator.set_time_interval(time_interval);
-    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -303,10 +294,11 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
         let mut last_position = None;
         if metadata.persistency_service.is_some(){
             self.persistency_service = metadata.persistency_service.clone();
-            let snapshot_id = self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+            let persist_s = self.persistency_service.as_mut().unwrap();
+            let snapshot_id = persist_s.restart_from_snapshot(self.operator_coord);
             if let Some(snap_id) = snapshot_id {
                 // Get the persisted state
-                let opt_state: Option<CsvSourceState> = self.persistency_service.as_mut().unwrap().get_state(self.operator_coord, snap_id);
+                let opt_state: Option<CsvSourceState> = persist_s.get_state(self.operator_coord, snap_id);
                 if let Some(state) = opt_state {
                     self.terminated = snap_id.terminate();
                     last_position = Some(state.current);
@@ -314,6 +306,12 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
                     panic!("No persisted state founded for op: {0}", self.operator_coord);
                 } 
                 self.snapshot_generator.restart_from(snap_id);
+            }
+            if let Some(snap_freq) = persist_s.snapshot_frequency_by_item {
+                self.snapshot_generator.set_item_interval(snap_freq);
+            }
+            if let Some(snap_freq) = persist_s.snapshot_frequency_by_time {
+                self.snapshot_generator.set_time_interval(snap_freq);
             }
         }
 

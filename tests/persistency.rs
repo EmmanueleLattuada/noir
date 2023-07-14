@@ -1,4 +1,4 @@
-use noir::{StreamEnvironment, prelude::{FileSource, Source}, BatchMode};
+use noir::{StreamEnvironment, prelude::FileSource, BatchMode};
 use serial_test::serial;
 use tempfile::NamedTempFile;
 use std::io::Write;
@@ -23,8 +23,7 @@ fn word_count_persistency() {
     let body = |mut env: StreamEnvironment| {
         let file = NamedTempFile::new().unwrap();
         write_file(&file);
-        let mut source = FileSource::new(file.path());
-        source.set_snapshot_frequency_by_item(1);   // One every line
+        let source = FileSource::new(file.path());
         let result = env
             .stream(source)
             .batch_mode(BatchMode::fixed(1024))
@@ -44,17 +43,19 @@ fn word_count_persistency() {
         }
     };
 
+    let snap_freq = Some(1); // One every line
+
     let execution_list = vec![
         // Complete execution
-        TestHelper::persistency_config_test(false, false, None),
+        TestHelper::persistency_config_test(false, false, None, snap_freq),
         // Restart from snapshot 1
-        TestHelper::persistency_config_test(true, false, Some(1)),
+        TestHelper::persistency_config_test(true, false, Some(1), snap_freq),
         // Restart from snapshot 2
-        TestHelper::persistency_config_test(true, false, Some(2)),
+        TestHelper::persistency_config_test(true, false, Some(2), snap_freq),
         // Restart from snapshot 4, the first block has already terminated
-        TestHelper::persistency_config_test(true, false, Some(4)),
+        TestHelper::persistency_config_test(true, false, Some(4), snap_freq),
         // Restart from last snapshot, all operators have terminated
-        TestHelper::persistency_config_test(true, true, None),
+        TestHelper::persistency_config_test(true, true, None, snap_freq),
     ];
 
     TestHelper::local_remote_env_with_persistency(body, execution_list);    

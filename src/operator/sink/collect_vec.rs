@@ -140,14 +140,14 @@ mod tests {
     use itertools::Itertools;
     use serial_test::serial;
 
-    use crate::config::{EnvironmentConfig, PersistencyConfig};
+    use crate::config::EnvironmentConfig;
     use crate::environment::StreamEnvironment;
     use crate::network::OperatorCoord;
     use crate::operator::sink::StreamOutputRef;
     use crate::operator::sink::collect_vec::CollectVecSink;
     use crate::operator::{source, StreamElement, SnapshotId};
     use crate::persistency::PersistencyService;
-    use crate::test::{FakeOperator, REDIS_TEST_CONFIGURATION};
+    use crate::test::{FakeOperator, persistency_config_unit_tests};
     use crate::operator::Operator;
     use crate::persistency::PersistencyServices;
 
@@ -180,12 +180,7 @@ mod tests {
             operator_id: 2,
         };
         collect.persistency_service = Some(PersistencyService::new(Some(
-            PersistencyConfig { 
-                server_addr: String::from(REDIS_TEST_CONFIGURATION),
-                try_restart: false,
-                clean_on_exit: false,
-                restart_from: None,
-            }
+            persistency_config_unit_tests()
         )));
 
         collect.next();

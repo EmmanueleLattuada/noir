@@ -29,11 +29,6 @@ mod parallel_iterator;
 pub trait Source<Out: Data>: Operator<Out> {
     /// The maximum parallelism offered by this operator.
     fn replication(&self) -> Replication;
-    /// Set a function to generate snapshot marker based on readed stream items
-    fn set_snapshot_frequency_by_item(&mut self, item_interval: u64);
-    /// Set a function to generate snapshot marker based on specified time interval
-    /// N.B.: The snapshot marker is created at the first call on source next() metod after the time interval is expired
-    fn set_snapshot_frequency_by_time(&mut self, time_interval: Duration);
 }
 
 #[derive(Derivative)]

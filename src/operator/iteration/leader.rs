@@ -1,7 +1,6 @@
 use std::fmt::Display;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
 
 use crate::block::{BlockStructure, Connection, NextStrategy, OperatorStructure, Replication};
@@ -275,15 +274,5 @@ where
 {
     fn replication(&self) -> Replication {
         Replication::One
-    }
-
-    fn set_snapshot_frequency_by_item(&mut self, _item_interval: u64) {
-        // Forbidden action
-        panic!("It is not possible to set snapshot frequency for leader operator");
-    }
-
-    fn set_snapshot_frequency_by_time(&mut self, _time_interval: Duration) {
-        // Forbidden action
-        panic!("It is not possible to set snapshot frequency for leader operator");
     }
 }

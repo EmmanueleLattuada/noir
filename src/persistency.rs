@@ -1,5 +1,7 @@
 extern crate r2d2_redis;
 
+use std::time::Duration;
+
 use r2d2_redis::{RedisConnectionManager, r2d2::Pool, redis::Commands};
 
 
@@ -80,6 +82,8 @@ pub struct PersistencyService {
     handler: RedisHandler,
     active: bool,
     restart_from: Option<SnapshotId>,
+    pub(crate) snapshot_frequency_by_item: Option<u64>,
+    pub(crate) snapshot_frequency_by_time: Option<Duration>,
 }
 
 impl PersistencyService {
@@ -91,12 +95,16 @@ impl PersistencyService {
                 handler: handler, 
                 active: true,
                 restart_from: None,
+                snapshot_frequency_by_item: config.snapshot_frequency_by_item,
+                snapshot_frequency_by_time: config.snapshot_frequency_by_time,
             }
         } else {
             return Self { 
                 handler: RedisHandler::default(), 
                 active: false,
                 restart_from: None,
+                snapshot_frequency_by_item: None,
+                snapshot_frequency_by_time: None,
             }
         }        
     }
@@ -538,7 +546,7 @@ mod tests {
     use serde::{Serialize, Deserialize};
     use serial_test::serial;
 
-    use crate::{network::OperatorCoord, test::REDIS_TEST_CONFIGURATION, operator::SnapshotId, config::PersistencyConfig};
+    use crate::{network::OperatorCoord, test::persistency_config_unit_tests, operator::SnapshotId};
 
     use super::{PersistencyService, PersistencyServices};
 
@@ -571,12 +579,7 @@ mod tests {
         state1.values.push(3);
 
         let pers_handler = PersistencyService::new(Some(
-            PersistencyConfig { 
-                server_addr: String::from(REDIS_TEST_CONFIGURATION),
-                try_restart: false,
-                clean_on_exit: false,
-                restart_from: None,
-            }
+            persistency_config_unit_tests()
         ));
         pers_handler.save_state(op_coord1, SnapshotId::new(1), state1.clone());
         let retrived_state: FakeState = pers_handler.get_state(op_coord1, SnapshotId::new(1)).unwrap();
@@ -630,12 +633,7 @@ mod tests {
         };
 
         let pers_handler = PersistencyService::new(Some(
-            PersistencyConfig { 
-                server_addr: String::from(REDIS_TEST_CONFIGURATION),
-                try_restart: false,
-                clean_on_exit: false,
-                restart_from: None,
-            }
+            persistency_config_unit_tests()
         ));
         pers_handler.save_void_state(op_coord1, SnapshotId::new(1));
         pers_handler.save_void_state(op_coord1, SnapshotId::new(2));
@@ -676,12 +674,7 @@ mod tests {
         };
 
         let pers_handler = PersistencyService::new(Some(
-            PersistencyConfig { 
-                server_addr: String::from(REDIS_TEST_CONFIGURATION),
-                try_restart: false,
-                clean_on_exit: false,
-                restart_from: None,
-            }
+            persistency_config_unit_tests()
         ));
         // Snap_id = 0
         let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_handler.save_state(op_coord1, SnapshotId::new(0), 100)));
@@ -768,12 +761,7 @@ mod tests {
             operator_id: 7,
         };
         let mut pers_handler = PersistencyService::new(Some(
-            PersistencyConfig { 
-                server_addr: String::from(REDIS_TEST_CONFIGURATION),
-                try_restart: false,
-                clean_on_exit: false,
-                restart_from: None,
-            }
+            persistency_config_unit_tests()
         ));
         assert_eq!(pers_handler.restart_from_snapshot(op_coord1), None);
         pers_handler.compute_last_complete_snapshot(vec![op_coord1, op_coord2, op_coord3]);

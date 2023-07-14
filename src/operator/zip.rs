@@ -1,7 +1,6 @@
 use std::collections::VecDeque;
 use std::fmt::Display;
 use std::sync::Arc;
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -196,16 +195,6 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Operator<(Out1, Out2)> for Zip<Out1
 impl<Out1: ExchangeData, Out2: ExchangeData> Source<(Out1, Out2)> for Zip<Out1, Out2> {
     fn replication(&self) -> Replication {
         Replication::Unlimited
-    }
-
-    fn set_snapshot_frequency_by_item(&mut self, _item_interval: u64) {
-        // Forbidden action
-        panic!("It is not possible to set snapshot frequency for zip operator");
-    }
-
-    fn set_snapshot_frequency_by_time(&mut self, _time_interval: Duration) {
-        // Forbidden action
-        panic!("It is not possible to set snapshot frequency for zip operator");
     }
 }
 

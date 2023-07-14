@@ -556,16 +556,6 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Source<Ou
     fn replication(&self) -> Replication {
         Replication::Unlimited
     }
-
-    fn set_snapshot_frequency_by_item(&mut self, _item_interval: u64) {
-        // Forbidden action
-        panic!("It is not possible to set snapshot frequency for start operator");
-    }
-
-    fn set_snapshot_frequency_by_time(&mut self, _time_interval: Duration) {
-        // Forbidden action
-        panic!("It is not possible to set snapshot frequency for start operator");
-    }
 }
 
 #[cfg(test)]
@@ -574,13 +564,12 @@ mod tests {
 
     use serial_test::serial;
 
-    use crate::config::PersistencyConfig;
     use crate::network::NetworkMessage;
     use crate::operator::start::StartState;
     use crate::operator::start::watermark_frontier::WatermarkFrontier;
     use crate::operator::{BinaryElement, Operator, Start, StreamElement, Timestamp, SimpleStartReceiver, SnapshotId};
     use crate::persistency::{PersistencyService, PersistencyServices};
-    use crate::test::{FakeNetworkTopology, REDIS_TEST_CONFIGURATION};
+    use crate::test::{FakeNetworkTopology, persistency_config_unit_tests};
 
     #[cfg(feature = "timestamp")]
     fn ts(millis: u64) -> Timestamp {
@@ -897,12 +886,7 @@ mod tests {
 
         let mut metadata = t.metadata();
         metadata.persistency_service = Some(PersistencyService::new(Some(
-            PersistencyConfig { 
-                server_addr: String::from(REDIS_TEST_CONFIGURATION),
-                try_restart: false,
-                clean_on_exit: false,
-                restart_from: None,
-            }
+            persistency_config_unit_tests()
         )));
         start_block.setup(&mut metadata);
 
@@ -979,12 +963,7 @@ mod tests {
 
         let mut metadata = t.metadata();
         metadata.persistency_service = Some(PersistencyService::new(Some(
-            PersistencyConfig { 
-                server_addr: String::from(REDIS_TEST_CONFIGURATION),
-                try_restart: false,
-                clean_on_exit: false,
-                restart_from: None,
-            }
+            persistency_config_unit_tests()
         )));
         start_block.setup(&mut metadata);
 
@@ -1091,12 +1070,7 @@ mod tests {
 
         let mut metadata = t.metadata();
         metadata.persistency_service = Some(PersistencyService::new(Some(
-            PersistencyConfig { 
-                server_addr: String::from(REDIS_TEST_CONFIGURATION),
-                try_restart: false,
-                clean_on_exit: false,
-                restart_from: None,
-            }
+            persistency_config_unit_tests()
         )));
         start_block.setup(&mut metadata);
 

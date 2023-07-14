@@ -4,7 +4,6 @@ use std::io::BufRead;
 use std::io::Seek;
 use std::io::{BufReader, SeekFrom};
 use std::path::PathBuf;
-use std::time::Duration;
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -86,14 +85,6 @@ impl Source<String> for FileSource {
     fn replication(&self) -> Replication {
         Replication::Unlimited
     }
-
-    fn set_snapshot_frequency_by_item(&mut self, item_interval: u64) {
-        self.snapshot_generator.set_item_interval(item_interval);
-    }
-
-    fn set_snapshot_frequency_by_time(&mut self, time_interval: Duration) {
-        self.snapshot_generator.set_time_interval(time_interval);
-    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -110,10 +101,11 @@ impl Operator<String> for FileSource {
         let mut last_position = None;
         if metadata.persistency_service.is_some() {
             self.persistency_service = metadata.persistency_service.clone();
-            let snapshot_id = self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+            let persist_s = self.persistency_service.as_mut().unwrap();
+            let snapshot_id = persist_s.restart_from_snapshot(self.operator_coord);
             if let Some(snap_id) = snapshot_id {
                 // Get the persisted state
-                let opt_state: Option<FileSourceState> = self.persistency_service.as_mut().unwrap().get_state(self.operator_coord, snap_id);
+                let opt_state: Option<FileSourceState> = persist_s.get_state(self.operator_coord, snap_id);
                 if let Some(state) = opt_state {
                     self.terminated = snap_id.terminate();
                     last_position = Some(state.current);
@@ -121,6 +113,12 @@ impl Operator<String> for FileSource {
                     panic!("No persisted state founded for op: {0}", self.operator_coord);
                 } 
                 self.snapshot_generator.restart_from(snap_id);
+            }
+            if let Some(snap_freq) = persist_s.snapshot_frequency_by_item {
+                self.snapshot_generator.set_item_interval(snap_freq);
+            }
+            if let Some(snap_freq) = persist_s.snapshot_frequency_by_time {
+                self.snapshot_generator.set_time_interval(snap_freq);
             }
         }
 

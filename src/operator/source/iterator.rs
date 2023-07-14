@@ -1,5 +1,4 @@
 use std::fmt::Display;
-use std::time::Duration;
 
 use serde::{Serialize, Deserialize};
 
@@ -63,7 +62,7 @@ where
     /// ```
     pub fn new(inner: It) -> Self {
         Self {
-            inner: inner,
+            inner,
             terminated: false,
             last_index: None,
             snapshot_generator: SnapshotGenerator::new(),
@@ -82,14 +81,6 @@ where
     fn replication(&self) -> Replication {
         Replication::One
     }
-
-    fn set_snapshot_frequency_by_item(&mut self, item_interval: u64) {
-        self.snapshot_generator.set_item_interval(item_interval);
-    }
-
-    fn set_snapshot_frequency_by_time(&mut self, time_interval: Duration) {
-        self.snapshot_generator.set_time_interval(time_interval);
-    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -105,10 +96,11 @@ where
         self.operator_coord.from_coord(metadata.coord);
         if metadata.persistency_service.is_some(){
             self.persistency_service = metadata.persistency_service.clone();
-            let snapshot_id = self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+            let persist_s = self.persistency_service.as_mut().unwrap();
+            let snapshot_id =persist_s.restart_from_snapshot(self.operator_coord);
             if let Some(snap_id) = snapshot_id {
                 // Get and resume the persisted state
-                let opt_state: Option<IteratorSourceState> = self.persistency_service.as_mut().unwrap().get_state(self.operator_coord, snap_id);
+                let opt_state: Option<IteratorSourceState> =persist_s.get_state(self.operator_coord, snap_id);
                 if let Some(state) = opt_state {
                     self.terminated = snap_id.terminate();
                     if let Some(idx) = state.last_index {
@@ -119,6 +111,12 @@ where
                     panic!("No persisted state founded for op: {0} and snapshot id: {snap_id:?}", self.operator_coord);
                 } 
                 self.snapshot_generator.restart_from(snap_id);
+            }
+            if let Some(snap_freq) = persist_s.snapshot_frequency_by_item {
+                self.snapshot_generator.set_item_interval(snap_freq);
+            }
+            if let Some(snap_freq) = persist_s.snapshot_frequency_by_time {
+                self.snapshot_generator.set_time_interval(snap_freq);
             }
         }
     }

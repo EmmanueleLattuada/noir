@@ -275,7 +275,7 @@ mod tests {
 
     use serial_test::serial;
 
-    use crate::{operator::{rich_map_persistent::RichMapPersistent, StreamElement, Operator, SnapshotId}, test::{FakeOperator, REDIS_TEST_CONFIGURATION}, network::OperatorCoord, persistency::{PersistencyService, PersistencyServices}, config::PersistencyConfig};  
+    use crate::{operator::{rich_map_persistent::RichMapPersistent, StreamElement, Operator, SnapshotId}, test::{FakeOperator, persistency_config_unit_tests}, network::OperatorCoord, persistency::{PersistencyService, PersistencyServices}};  
 
     #[test]
     #[serial]
@@ -304,12 +304,7 @@ mod tests {
             operator_id: 1,
         };
         rich_map_persistent.persistency_service = PersistencyService::new(Some(
-            PersistencyConfig { 
-                server_addr: String::from(REDIS_TEST_CONFIGURATION),
-                try_restart: false,
-                clean_on_exit: false,
-                restart_from: None,
-            }
+            persistency_config_unit_tests()
         ));
 
         assert_eq!(rich_map_persistent.next(), StreamElement::Item((1, 1)));
@@ -357,12 +352,7 @@ mod tests {
             operator_id: 2,
         };
         rich_map_persistent.persistency_service = PersistencyService::new(Some(
-            PersistencyConfig { 
-                server_addr: String::from(REDIS_TEST_CONFIGURATION),
-                try_restart: false,
-                clean_on_exit: false,
-                restart_from: None,
-            }
+            persistency_config_unit_tests()
         ));
 
         assert_eq!(rich_map_persistent.next(), StreamElement::Item((1, 1)));
