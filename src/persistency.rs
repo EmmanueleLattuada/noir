@@ -1,9 +1,8 @@
-extern crate r2d2_redis;
+extern crate redis;
+use redis::{Client, Commands};
+use r2d2::Pool;
 
 use std::time::Duration;
-
-use r2d2_redis::{RedisConnectionManager, r2d2::Pool, redis::Commands};
-
 
 use bincode::{DefaultOptions, Options, config::{WithOtherTrailing, WithOtherIntEncoding, FixintEncoding, RejectTrailing}};
 use once_cell::sync::Lazy;
@@ -92,7 +91,7 @@ impl PersistencyService {
         if let Some(config) = conf{
             let handler = RedisHandler::new(config.server_addr);
             return Self { 
-                handler: handler, 
+                handler, 
                 active: true,
                 restart_from: None,
                 snapshot_frequency_by_item: config.snapshot_frequency_by_item,
@@ -267,9 +266,9 @@ impl PersistencyServices for PersistencyService{
         if snapshot_id.id() == 0 {
             panic!("Passed snap_id: {snapshot_id:?}.\nSnapshot id must start from 1");
         }
-        if !((snapshot_id.id() == 1 && self.get_last_snapshot(op_coord).is_none()) || self.get_last_snapshot(op_coord).unwrap_or(SnapshotId::new(0)) == snapshot_id - 1) {
-            let saved = self.get_last_snapshot(op_coord);
-            panic!("Passed snap_id: {snapshot_id:?}.\n Last saved snap_id: {saved:?}.\n  Op_coord: {op_coord:?}.\n Snapshot id must be a sequence with step 1 starting from 1");
+        let last_snapshot = self.get_last_snapshot(op_coord);
+        if !((snapshot_id.id() == 1 && last_snapshot.is_none()) || last_snapshot.unwrap_or(SnapshotId::new(0)) == snapshot_id - 1) {
+            panic!("Passed snap_id: {snapshot_id:?}.\n Last saved snap_id: {last_snapshot:?}.\n  Op_coord: {op_coord:?}.\n Snapshot id must be a sequence with step 1 starting from 1");
         }
         self.handler.save_state(op_coord, snapshot_id, state);
     }
@@ -281,9 +280,9 @@ impl PersistencyServices for PersistencyService{
         if snapshot_id.id() == 0 {
             panic!("Passed snap_id: {snapshot_id:?}.\nSnapshot id must start from 1");
         }
-        if !((snapshot_id.id() == 1 && self.get_last_snapshot(op_coord).is_none()) || self.get_last_snapshot(op_coord).unwrap_or(SnapshotId::new(0)) == snapshot_id - 1) {
-            let saved = self.get_last_snapshot(op_coord);
-            panic!("Passed snap_id: {snapshot_id:?}.\n Last saved snap_id: {saved:?}.\n  Op_coord: {op_coord:?}.\n Snapshot id must be a sequence with step 1 starting from 1");
+        let last_snapshot = self.get_last_snapshot(op_coord);
+        if !((snapshot_id.id() == 1 && last_snapshot.is_none()) || last_snapshot.unwrap_or(SnapshotId::new(0)) == snapshot_id - 1) {
+            panic!("Passed snap_id: {snapshot_id:?}.\n Last saved snap_id: {last_snapshot:?}.\n  Op_coord: {op_coord:?}.\n Snapshot id must be a sequence with step 1 starting from 1");
         }
         self.handler.save_void_state(op_coord, snapshot_id);
     }
@@ -313,16 +312,14 @@ impl PersistencyServices for PersistencyService{
 /// Redis handler
 #[derive(Debug, Clone, Default)]
 struct RedisHandler {
-    conn_pool: Option<Pool<RedisConnectionManager>>,
+    conn_pool: Option<Pool<Client>>,
 }
 
 impl RedisHandler {
     /// Create a new Redis handler from given configuration
     fn new(config: String) -> Self{
-        let manager = RedisConnectionManager::new(config).unwrap();
-        let conn_pool = Pool::builder()
-                .build(manager)
-                .unwrap();
+        let client: Client = Client::open(config).unwrap();
+        let conn_pool: Pool<Client> = Pool::builder().build(client).unwrap();
         Self {  
             conn_pool: Some(conn_pool),
         }

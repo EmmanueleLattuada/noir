@@ -89,7 +89,8 @@ tracing = { version = "0.1.37", features = ["log"] }
 quick_cache = "0.3.0"
 
 # Persistency
-r2d2_redis = "0.14.0"
+redis = { version = "0.23.0", features = ['r2d2'] }
+r2d2 = "0.8.10"
 
 
 [dev-dependencies]

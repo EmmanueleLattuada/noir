@@ -580,7 +580,7 @@ fn persistency_bench(c: &mut Criterion) {
 
     macro_rules! bench_wc {
         ($q:expr, $n:expr, $p:ident, $s:expr) => {{
-            g.bench_with_input(BenchmarkId::new($q, $n), &$n, |b, _| {
+            g.bench_with_input(BenchmarkId::new(format!("{}-snap-t", $q), $n), &$n, |b, _| {
                 b.iter(|| {
                     let mut config = EnvironmentConfig::local(4);
                     config.add_persistency(PersistencyConfig { 
@@ -596,7 +596,7 @@ fn persistency_bench(c: &mut Criterion) {
                     env.execute_blocking();
                 })
             });
-            g.bench_with_input(BenchmarkId::new($q, $n), &$n, |b, _| {
+            g.bench_with_input(BenchmarkId::new(format!("{}-snap-100", $q), $n), &$n, |b, _| {
                 b.iter(|| {
                     let mut config = EnvironmentConfig::local(4);
                     config.add_persistency(PersistencyConfig { 
