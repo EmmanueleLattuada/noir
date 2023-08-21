@@ -4,7 +4,7 @@ use crate::block::{BlockStructure, OperatorKind, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::sink::{Sink, StreamOutputRef};
 use crate::operator::{ExchangeData, Operator, StreamElement, SnapshotId};
-use crate::persistency::{PersistencyService, PersistencyServices};
+use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 
 #[derive(Debug)]
@@ -14,7 +14,7 @@ where
 {
     prev: PreviousOperators,
     operator_coord: OperatorCoord,
-    persistency_service: Option<PersistencyService>,
+    persistency_service: Option<PersistencyService<Option<Vec<Out>>>>,
     result: Option<Vec<Out>>,
     output: StreamOutputRef<Vec<Out>>,
 }
@@ -65,18 +65,19 @@ where
 
         self.operator_coord.from_coord(metadata.coord);
 
-        if metadata.persistency_service.is_some(){
-            self.persistency_service = metadata.persistency_service.clone();
-            let snapshot_id = self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+        if let Some(pb) = &metadata.persistency_builder{
+            let p_service = pb.generate_persistency_service::<Option<Vec<Out>>>();
+            let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
             if snapshot_id.is_some() {
                 // Get and resume the persisted state
-                let opt_state: Option<Option<Vec<Out>>> = self.persistency_service.as_mut().unwrap().get_state(self.operator_coord, snapshot_id.unwrap());
+                let opt_state: Option<Option<Vec<Out>>> = p_service.get_state(self.operator_coord, snapshot_id.unwrap());
                 if let Some(state) = opt_state {
                     self.result = state;
                 } else {
                     panic!("No persisted state founded for op: {0}", self.operator_coord);
                 } 
             }
+            self.persistency_service = Some(p_service);
         }
     }
 
@@ -146,10 +147,9 @@ mod tests {
     use crate::operator::sink::StreamOutputRef;
     use crate::operator::sink::collect_vec::CollectVecSink;
     use crate::operator::{source, StreamElement, SnapshotId};
-    use crate::persistency::PersistencyService;
+    use crate::persistency::builder::PersistencyBuilder;
     use crate::test::{FakeOperator, persistency_config_unit_tests};
     use crate::operator::Operator;
-    use crate::persistency::PersistencyServices;
 
     #[test]
     fn collect_vec() {
@@ -179,18 +179,19 @@ mod tests {
             replica_id: 2,
             operator_id: 2,
         };
-        collect.persistency_service = Some(PersistencyService::new(Some(
-            persistency_config_unit_tests()
-        )));
+        let pers_builder = PersistencyBuilder::new(Some(persistency_config_unit_tests()));
+        collect.persistency_service = Some(pers_builder.generate_persistency_service());
 
         collect.next();
         collect.next();
         assert_eq!(collect.next(), StreamElement::Snapshot(SnapshotId::new(1)));
+        collect.persistency_service.as_mut().unwrap().flush_state_saver();
         let state: Option<Option<Vec<i32>>> = collect.persistency_service.as_mut().unwrap().get_state(collect.operator_coord, SnapshotId::new(1));
         assert_eq!(state.unwrap().unwrap(), [1, 2]);
         collect.next();
         collect.next();
         assert_eq!(collect.next(), StreamElement::Snapshot(SnapshotId::new(2)));
+        collect.persistency_service.as_mut().unwrap().flush_state_saver();
         let state: Option<Option<Vec<i32>>> = collect.persistency_service.as_mut().unwrap().get_state(collect.operator_coord, SnapshotId::new(2));
         assert_eq!(state.unwrap().unwrap(), [1, 2, 3, 4]);
 

@@ -13,8 +13,7 @@ use crate::block::{BlockStructure, OperatorKind, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::source::Source;
 use crate::operator::{Operator, StreamElement};
-use crate::persistency::PersistencyService;
-use crate::persistency::PersistencyServices;
+use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::ExecutionMetadata;
 use crate::Stream;
 use crate::scheduler::OperatorId;
@@ -34,7 +33,7 @@ pub struct FileSource {
     terminated: bool,
     operator_coord: OperatorCoord,
     snapshot_generator: SnapshotGenerator,
-    persistency_service: Option<PersistencyService>,
+    persistency_service: Option<PersistencyService<FileSourceState>>,
 }
 
 impl Display for FileSource {
@@ -87,7 +86,7 @@ impl Source<String> for FileSource {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 struct FileSourceState {
     current: u64,
 }
@@ -99,13 +98,12 @@ impl Operator<String> for FileSource {
 
         self.operator_coord.from_coord(metadata.coord);
         let mut last_position = None;
-        if metadata.persistency_service.is_some() {
-            self.persistency_service = metadata.persistency_service.clone();
-            let persist_s = self.persistency_service.as_mut().unwrap();
-            let snapshot_id = persist_s.restart_from_snapshot(self.operator_coord);
+        if let Some(pb) = &metadata.persistency_builder {
+            let p_service =pb.generate_persistency_service::<FileSourceState>();
+            let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
             if let Some(snap_id) = snapshot_id {
                 // Get the persisted state
-                let opt_state: Option<FileSourceState> = persist_s.get_state(self.operator_coord, snap_id);
+                let opt_state: Option<FileSourceState> = p_service.get_state(self.operator_coord, snap_id);
                 if let Some(state) = opt_state {
                     self.terminated = snap_id.terminate();
                     last_position = Some(state.current);
@@ -114,12 +112,13 @@ impl Operator<String> for FileSource {
                 } 
                 self.snapshot_generator.restart_from(snap_id);
             }
-            if let Some(snap_freq) = persist_s.snapshot_frequency_by_item {
+            if let Some(snap_freq) = p_service.snapshot_frequency_by_item {
                 self.snapshot_generator.set_item_interval(snap_freq);
             }
-            if let Some(snap_freq) = persist_s.snapshot_frequency_by_time {
+            if let Some(snap_freq) = p_service.snapshot_frequency_by_time {
                 self.snapshot_generator.set_time_interval(snap_freq);
             }
+            self.persistency_service = Some(p_service);
         }
 
         let file = File::open(&self.path).unwrap_or_else(|err| {

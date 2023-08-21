@@ -17,7 +17,7 @@ use crate::operator::iteration::IterationStateLock;
 use crate::operator::source::Source;
 use crate::operator::start::watermark_frontier::WatermarkFrontier;
 use crate::operator::{ExchangeData, Operator, StreamElement};
-use crate::persistency::{PersistencyService, PersistencyServices};
+use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{BlockId, ExecutionMetadata, OperatorId};
 
 mod binary;
@@ -73,12 +73,12 @@ pub(crate) type SimpleStartOperator<Out> = Start<Out, SimpleStartReceiver<Out>>;
 /// is followed. Note that the timestamps of the messages are not sorted, it's only guaranteed that
 /// when a watermark is emitted, all the previous messages are already been emitted (in some order).
 #[derive(Clone, Debug)]
-pub(crate) struct Start<Out: ExchangeData, Receiver: StartReceiver<Out> + Send> {
+pub(crate) struct Start<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> {
     /// Execution metadata of this block.
     max_delay: Option<Duration>,
 
     operator_coord: OperatorCoord,
-    persistency_service: Option<PersistencyService>,
+    persistency_service: Option<PersistencyService<StartState<Out, Receiver>>>,
     // Used to keep the on-going snapshots
     on_going_snapshots: HashMap<SnapshotId, (StartState<Out, Receiver>, HashSet<Coord>)>,
     persisted_message_queue: VecDeque<(Coord, StreamElement<Out>)>,
@@ -348,12 +348,12 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Operator<
         self.max_delay = metadata.batch_mode.max_delay();
 
         self.operator_coord.from_coord(metadata.coord);
-        if metadata.persistency_service.is_some(){
-            self.persistency_service = metadata.persistency_service.clone();
-            let snapshot_id = self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+        if let Some(pb) = &metadata.persistency_builder{
+            let p_service = pb.generate_persistency_service::<StartState<Out, Receiver>>();
+            let snapshot_id =p_service.restart_from_snapshot(self.operator_coord);
             if let Some(snap_id) = snapshot_id {
                 // Get and resume the persisted state
-                let opt_state: Option<StartState<Out, Receiver>> = self.persistency_service.as_mut().unwrap().get_state(self.operator_coord, snap_id);
+                let opt_state: Option<StartState<Out, Receiver>> = p_service.get_state(self.operator_coord, snap_id);
                 if let Some(state) = opt_state {
                     self.missing_flush_and_restart = state.missing_flush_and_restart as usize;
                     self.wait_for_state = state.wait_for_state;
@@ -370,6 +370,7 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Operator<
                     panic!("No persisted state founded for op: {0}", self.operator_coord);
                 } 
             }
+            self.persistency_service = Some(p_service);
         }
     }
 
@@ -568,7 +569,7 @@ mod tests {
     use crate::operator::start::StartState;
     use crate::operator::start::watermark_frontier::WatermarkFrontier;
     use crate::operator::{BinaryElement, Operator, Start, StreamElement, Timestamp, SimpleStartReceiver, SnapshotId};
-    use crate::persistency::{PersistencyService, PersistencyServices};
+    use crate::persistency::builder::PersistencyBuilder;
     use crate::test::{FakeNetworkTopology, persistency_config_unit_tests};
 
     #[cfg(feature = "timestamp")]
@@ -885,7 +886,7 @@ mod tests {
             Start::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None);
 
         let mut metadata = t.metadata();
-        metadata.persistency_service = Some(PersistencyService::new(Some(
+        metadata.persistency_builder = Some(PersistencyBuilder::new(Some(
             persistency_config_unit_tests()
         )));
         start_block.setup(&mut metadata);
@@ -936,6 +937,7 @@ mod tests {
             ]),
         };
 
+        start_block.persistency_service.as_mut().unwrap().flush_state_saver();
         let retrived_state: StartState<i32, SimpleStartReceiver<i32>> = start_block.persistency_service.as_mut().unwrap().get_state(start_block.operator_coord, SnapshotId::new(1)).unwrap();
 
         assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
@@ -962,7 +964,7 @@ mod tests {
             Start::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None);
 
         let mut metadata = t.metadata();
-        metadata.persistency_service = Some(PersistencyService::new(Some(
+        metadata.persistency_builder = Some(PersistencyBuilder::new(Some(
             persistency_config_unit_tests()
         )));
         start_block.setup(&mut metadata);
@@ -1019,6 +1021,7 @@ mod tests {
             ]),
         };
 
+        start_block.persistency_service.as_mut().unwrap().flush_state_saver();
         let retrived_state: StartState<i32, SimpleStartReceiver<i32>> = start_block.persistency_service.as_mut().unwrap().get_state(start_block.operator_coord, SnapshotId::new(1)).unwrap();
 
         assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
@@ -1043,6 +1046,7 @@ mod tests {
             ]),
         };
 
+        start_block.persistency_service.as_mut().unwrap().flush_state_saver();
         let retrived_state: StartState<i32, SimpleStartReceiver<i32>> = start_block.persistency_service.as_mut().unwrap().get_state(start_block.operator_coord, SnapshotId::new(2)).unwrap();
 
         assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
@@ -1069,7 +1073,7 @@ mod tests {
             Start::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None);
 
         let mut metadata = t.metadata();
-        metadata.persistency_service = Some(PersistencyService::new(Some(
+        metadata.persistency_builder = Some(PersistencyBuilder::new(Some(
             persistency_config_unit_tests()
         )));
         start_block.setup(&mut metadata);
@@ -1131,6 +1135,7 @@ mod tests {
             ]),
         };
 
+        start_block.persistency_service.as_mut().unwrap().flush_state_saver();        
         let retrived_state: StartState<i32, SimpleStartReceiver<i32>> = start_block.persistency_service.as_mut().unwrap().get_state(start_block.operator_coord, SnapshotId::new(1)).unwrap();
 
         assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
@@ -1151,7 +1156,7 @@ mod tests {
             ))
             .unwrap();
         
-        assert_eq!(StreamElement::Item(10), start_block.next());
+        assert_eq!(StreamElement::Item(10), start_block.next()); 
         assert_eq!(StreamElement::Snapshot(SnapshotId::new(4)), start_block.next());
         assert_eq!(StreamElement::Item(11), start_block.next());
 
@@ -1164,6 +1169,7 @@ mod tests {
             message_queue: VecDeque::from([]),
         };
 
+        start_block.persistency_service.as_mut().unwrap().flush_state_saver();
         let retrived_state: StartState<i32, SimpleStartReceiver<i32>> = start_block.persistency_service.as_mut().unwrap().get_state(start_block.operator_coord, SnapshotId::new(4)).unwrap();
 
         assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);

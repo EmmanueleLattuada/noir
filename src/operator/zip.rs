@@ -9,7 +9,7 @@ use crate::network::OperatorCoord;
 use crate::operator::iteration::IterationStateLock;
 use crate::operator::start::{BinaryElement, BinaryStartOperator, Start};
 use crate::operator::{ExchangeData, Operator, StreamElement};
-use crate::persistency::{PersistencyService, PersistencyServices};
+use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{BlockId, ExecutionMetadata, OperatorId};
 
 use super::SnapshotId;
@@ -19,7 +19,7 @@ use super::source::Source;
 pub struct Zip<Out1: ExchangeData, Out2: ExchangeData> {
     prev: BinaryStartOperator<Out1, Out2>,
     operator_coord: OperatorCoord,
-    persistency_service: Option<PersistencyService>,
+    persistency_service: Option<PersistencyService<ZipState<Out1, Out2>>>,
     stash1: VecDeque<StreamElement<Out1>>,
     stash2: VecDeque<StreamElement<Out2>>,
     prev_block_id1: BlockId,
@@ -94,12 +94,12 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Operator<(Out1, Out2)> for Zip<Out1
         self.prev.setup(metadata);
 
         self.operator_coord.from_coord(metadata.coord);
-        if metadata.persistency_service.is_some(){
-            self.persistency_service = metadata.persistency_service.clone();
-            let snapshot_id = self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+        if let Some(pb) = &metadata.persistency_builder{
+            let p_service = pb.generate_persistency_service::<ZipState<Out1, Out2>>();
+            let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
             if snapshot_id.is_some() {
                 // Get and resume the persisted state
-                let opt_state: Option<ZipState<Out1, Out2>> = self.persistency_service.as_mut().unwrap().get_state(self.operator_coord, snapshot_id.unwrap());
+                let opt_state: Option<ZipState<Out1, Out2>> = p_service.get_state(self.operator_coord, snapshot_id.unwrap());
                 if let Some(state) = opt_state {
                     self.stash1 = state.stash1;
                     self.stash2 = state.stash2;
@@ -107,6 +107,7 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Operator<(Out1, Out2)> for Zip<Out1
                     panic!("No persisted state founded for op: {0}", self.operator_coord);
                 } 
             }
+            self.persistency_service = Some(p_service);
         }
     }
 

@@ -5,7 +5,7 @@ use crate::block::{BlockStructure, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::{Data, DataKey};
 use crate::operator::{Operator, StreamElement};
-use crate::persistency::{PersistencyService, PersistencyServices};
+use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 
 #[derive(Clone, Derivative)]
@@ -17,7 +17,7 @@ where
 {
     prev: OperatorChain,
     operator_coord: OperatorCoord,
-    persistency_service: Option<PersistencyService>,
+    persistency_service: Option<PersistencyService<()>>,
     #[derivative(Debug = "ignore")]
     keyer: Keyer,
     _key: PhantomData<Key>,
@@ -69,9 +69,10 @@ where
         self.prev.setup(metadata);
 
         self.operator_coord.from_coord(metadata.coord);
-        if metadata.persistency_service.is_some(){
-            self.persistency_service = metadata.persistency_service.clone();
-            self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+        if let Some(pb) = &metadata.persistency_builder{
+            let p_service = pb.generate_persistency_service::<()>();
+            p_service.restart_from_snapshot(self.operator_coord);
+            self.persistency_service = Some(p_service);
         }
     }
 

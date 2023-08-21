@@ -1,6 +1,6 @@
 use crate::block::NextStrategy;
 use crate::operator::{ExchangeData, Operator};
-use crate::persistency::{PersistencyService, PersistencyServices};
+use crate::persistency::persistency_service::PersistencyService;
 use crate::stream::Stream;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
@@ -105,7 +105,7 @@ where
     prev: OperatorChain,
 
     operator_coord: OperatorCoord,
-    persistency_service: Option<PersistencyService>,
+    persistency_service: Option<PersistencyService<()>>,
     next_strategy: NextStrategy<Out, IndexFn>,
     batch_mode: BatchMode,
     #[derivative(Debug = "ignore", Clone(clone_with = "clone_default"))]
@@ -221,9 +221,10 @@ where
         self.setup_endpoints();
 
         self.operator_coord.from_coord(metadata.coord);
-        if metadata.persistency_service.is_some(){
-            self.persistency_service = metadata.persistency_service.clone();
-            self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+        if let Some(pb) = &metadata.persistency_builder{
+            let p_service = pb.generate_persistency_service::<()>();
+            p_service.restart_from_snapshot(self.operator_coord);
+            self.persistency_service = Some(p_service);
         }
     }
 

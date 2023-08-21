@@ -443,7 +443,7 @@ mod tests {
 
     use serial_test::serial;
 
-    use crate::{network::NetworkMessage, test::{FakeNetworkTopology, persistency_config_unit_tests}, operator::{Start, BinaryElement, StreamElement, Operator, SideReceiverState, MultipleReceiverState, start::{StartState, watermark_frontier::WatermarkFrontier}, BinaryStartReceiver, SnapshotId}, persistency::{PersistencyService, PersistencyServices}};
+    use crate::{network::NetworkMessage, test::{FakeNetworkTopology, persistency_config_unit_tests}, operator::{Start, BinaryElement, StreamElement, Operator, SideReceiverState, MultipleReceiverState, start::{StartState, watermark_frontier::WatermarkFrontier}, BinaryStartReceiver, SnapshotId}, persistency::builder::PersistencyBuilder};
 
     #[test]
     #[serial]
@@ -461,7 +461,7 @@ mod tests {
         );
        
         let mut metadata = t.metadata();
-        metadata.persistency_service = Some(PersistencyService::new(Some(
+        metadata.persistency_builder = Some(PersistencyBuilder::new(Some(
             persistency_config_unit_tests()
         )));
         start_block.setup(&mut metadata);
@@ -564,6 +564,7 @@ mod tests {
             ]),
         };
 
+        start_block.persistency_service.as_mut().unwrap().flush_state_saver();
         let retrived_state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = start_block.persistency_service.as_mut().unwrap().get_state(start_block.operator_coord, SnapshotId::new(1)).unwrap();
 
         assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
@@ -608,7 +609,7 @@ mod tests {
         );
        
         let mut metadata = t.metadata();
-        metadata.persistency_service = Some(PersistencyService::new(Some(
+        metadata.persistency_builder = Some(PersistencyBuilder::new(Some(
             persistency_config_unit_tests()
         )));
         start_block.setup(&mut metadata);
@@ -742,6 +743,7 @@ mod tests {
             ]),
         };
 
+        start_block.persistency_service.as_mut().unwrap().flush_state_saver();
         let retrived_state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = start_block.persistency_service.as_mut().unwrap().get_state(start_block.operator_coord, SnapshotId::new(1)).unwrap();
 
         assert_eq!(state.message_queue, retrived_state.message_queue);
@@ -800,6 +802,7 @@ mod tests {
             ]),
         };
 
+        start_block.persistency_service.as_mut().unwrap().flush_state_saver();
         let retrived_state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = start_block.persistency_service.as_mut().unwrap().get_state(start_block.operator_coord, SnapshotId::new(2)).unwrap();
 
         assert_eq!(state.message_queue, retrived_state.message_queue);
@@ -835,7 +838,7 @@ mod tests {
         );
        
         let mut metadata = t.metadata();
-        metadata.persistency_service = Some(PersistencyService::new(Some(
+        metadata.persistency_builder = Some(PersistencyBuilder::new(Some(
             persistency_config_unit_tests()
         )));
         start_block.setup(&mut metadata);
@@ -926,6 +929,7 @@ mod tests {
             ]),
         };
 
+        start_block.persistency_service.as_mut().unwrap().flush_state_saver();
         let retrived_state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = start_block.persistency_service.as_mut().unwrap().get_state(start_block.operator_coord, SnapshotId::new(2)).unwrap();
 
         assert_eq!(state.message_queue, retrived_state.message_queue);

@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 use crate::block::{BlockStructure, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::{Data, Operator};
-use crate::persistency::{PersistencyService, PersistencyServices};
+use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::OperatorId;
 use crate::ExecutionMetadata;
 
@@ -19,7 +19,7 @@ where
     prev: PreviousOperator,
     operator_coord : OperatorCoord,
     predicate: Predicate,
-    persistency_service: Option<PersistencyService>,
+    persistency_service: Option<PersistencyService<()>>,
     _in: PhantomData<In>,
     _out: PhantomData<Out>,
 }
@@ -70,9 +70,10 @@ where
         self.prev.setup(metadata);
 
         self.operator_coord.from_coord(metadata.coord);
-        if metadata.persistency_service.is_some(){
-            self.persistency_service = metadata.persistency_service.clone();
-            self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+        if let Some(pb) = &metadata.persistency_builder{
+            let p_service = pb.generate_persistency_service::<()>();
+            p_service.restart_from_snapshot(self.operator_coord);
+            self.persistency_service = Some(p_service);
         }
     }
 

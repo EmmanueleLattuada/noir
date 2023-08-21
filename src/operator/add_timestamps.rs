@@ -6,7 +6,7 @@ use serde::{Serialize, Deserialize};
 use crate::block::{BlockStructure, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::{Data, Operator, StreamElement, Timestamp};
-use crate::persistency::{PersistencyService, PersistencyServices};
+use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 
 use super::SnapshotId;
@@ -20,7 +20,7 @@ where
 {
     prev: OperatorChain,
     operator_coord : OperatorCoord,
-    persistency_service: Option<PersistencyService>,
+    persistency_service: Option<PersistencyService<AddTimestampState>>,
     timestamp_gen: TimestampGen,
     watermark_gen: WatermarkGen,
     pending_watermark: Option<Timestamp>,
@@ -92,18 +92,19 @@ where
         self.prev.setup(metadata);
 
         self.operator_coord.from_coord(metadata.coord);
-        if metadata.persistency_service.is_some() {
-            self.persistency_service = metadata.persistency_service.clone();
-            let snapshot_id = self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+        if let Some(pb) = &metadata.persistency_builder {
+            let p_service = pb.generate_persistency_service::<AddTimestampState>();
+            let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
             if snapshot_id.is_some() {
                 // Get and resume the persisted state
-                let opt_state: Option<AddTimestampState> = self.persistency_service.as_mut().unwrap().get_state(self.operator_coord, snapshot_id.unwrap());
+                let opt_state: Option<AddTimestampState> = p_service.get_state(self.operator_coord, snapshot_id.unwrap());
                 if let Some(state) = opt_state {
                     self.pending_watermark = state.pending_watermark;
                 } else {
                     panic!("No persisted state founded for op: {0}", self.operator_coord);
                 } 
             }
+            self.persistency_service = Some(p_service);
         }
     }
 
@@ -158,7 +159,7 @@ where
 {
     prev: OperatorChain,
     operator_coord: OperatorCoord,
-    persistency_service: Option<PersistencyService>,
+    persistency_service: Option<PersistencyService<()>>,
     _out: PhantomData<Out>,
 }
 
@@ -195,9 +196,10 @@ where
         self.prev.setup(metadata);
 
         self.operator_coord.from_coord(metadata.coord);
-        if metadata.persistency_service.is_some() {
-            self.persistency_service = metadata.persistency_service.clone();
-            self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+        if let Some(pb) = &metadata.persistency_builder {
+            let p_service = pb.generate_persistency_service::<()>();
+            p_service.restart_from_snapshot(self.operator_coord);
+            self.persistency_service = Some(p_service);
         }
     }
 

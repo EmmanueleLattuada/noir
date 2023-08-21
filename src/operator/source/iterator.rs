@@ -6,7 +6,7 @@ use crate::block::{BlockStructure, OperatorKind, OperatorStructure, Replication}
 use crate::network::OperatorCoord;
 use crate::operator::source::Source;
 use crate::operator::{Data, Operator, StreamElement};
-use crate::persistency::{PersistencyService, PersistencyServices};
+use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::Stream;
 
@@ -26,7 +26,7 @@ where
     terminated: bool,
     last_index: Option<u64>,
     snapshot_generator: SnapshotGenerator,
-    persistency_service: Option<PersistencyService>,
+    persistency_service: Option<PersistencyService<IteratorSourceState>>,
 
     operator_coord: OperatorCoord,
 }
@@ -83,7 +83,7 @@ where
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 struct IteratorSourceState{
     last_index: Option<u64>,
 }
@@ -94,13 +94,12 @@ where
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.operator_coord.from_coord(metadata.coord);
-        if metadata.persistency_service.is_some(){
-            self.persistency_service = metadata.persistency_service.clone();
-            let persist_s = self.persistency_service.as_mut().unwrap();
-            let snapshot_id =persist_s.restart_from_snapshot(self.operator_coord);
+        if let Some(pb) = &metadata.persistency_builder{
+            let p_service = pb.generate_persistency_service::<IteratorSourceState>();
+            let snapshot_id =p_service.restart_from_snapshot(self.operator_coord);
             if let Some(snap_id) = snapshot_id {
                 // Get and resume the persisted state
-                let opt_state: Option<IteratorSourceState> =persist_s.get_state(self.operator_coord, snap_id);
+                let opt_state: Option<IteratorSourceState> =p_service.get_state(self.operator_coord, snap_id);
                 if let Some(state) = opt_state {
                     self.terminated = snap_id.terminate();
                     if let Some(idx) = state.last_index {
@@ -112,12 +111,13 @@ where
                 } 
                 self.snapshot_generator.restart_from(snap_id);
             }
-            if let Some(snap_freq) = persist_s.snapshot_frequency_by_item {
+            if let Some(snap_freq) = p_service.snapshot_frequency_by_item {
                 self.snapshot_generator.set_item_interval(snap_freq);
             }
-            if let Some(snap_freq) = persist_s.snapshot_frequency_by_time {
+            if let Some(snap_freq) = p_service.snapshot_frequency_by_time {
                 self.snapshot_generator.set_time_interval(snap_freq);
             }
+            self.persistency_service = Some(p_service);
         }
     }
 

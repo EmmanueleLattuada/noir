@@ -579,7 +579,7 @@ fn persistency_bench(c: &mut Criterion) {
     }
 
     macro_rules! bench_wc {
-        ($q:expr, $n:expr, $p:ident, $s:expr) => {{
+        ($q:expr, $n:expr, $p:ident) => {{
             g.bench_with_input(BenchmarkId::new(format!("{}-snap-t", $q), $n), &$n, |b, _| {
                 b.iter(|| {
                     let mut config = EnvironmentConfig::local(4);
@@ -604,7 +604,7 @@ fn persistency_bench(c: &mut Criterion) {
                         try_restart: false, 
                         clean_on_exit: true, 
                         restart_from: None, 
-                        snapshot_frequency_by_item: Some(($s/(4*100)) as u64),
+                        snapshot_frequency_by_item: Some(($n/(4*100)) as u64),
                         snapshot_frequency_by_time: None,
                     });
                     let mut env = StreamEnvironment::new(config);
@@ -621,7 +621,7 @@ fn persistency_bench(c: &mut Criterion) {
         g.throughput(Throughput::Elements(size as u64));
         //bench_query!("0", size);
         //bench_query!("1", size);
-        bench_query!("2", size);
+        //bench_query!("2", size);
         //bench_query!("3", size);
         bench_query!("4", size);
         //bench_query!("5", size);
@@ -636,13 +636,13 @@ fn persistency_bench(c: &mut Criterion) {
         let file_path = file.path();
         g.throughput(Throughput::Bytes(file_size));
 
-        bench_wc!("wc-fold", lines, file_path, file_size);
-        bench_wc!("wc-fold-assoc", lines, file_path, file_size);
-        //bench_wc!("wc-count-assoc", lines, file_path, file_size);
-        //bench_wc!("wc-reduce", lines, file_path, file_size);
-        //bench_wc!("wc-reduce-assoc", lines, file_path, file_size);
-        bench_wc!("wc-fast", lines, file_path, file_size);
-        //bench_wc!("wc-fast-kstring", lines, file_path, file_size);
+        bench_wc!("wc-fold", lines, file_path);
+        bench_wc!("wc-fold-assoc", lines, file_path);
+        //bench_wc!("wc-count-assoc", lines, file_path):
+        //bench_wc!("wc-reduce", lines, file_path);
+        //bench_wc!("wc-reduce-assoc", lines, file_path);
+        bench_wc!("wc-fast", lines, file_path);
+        //bench_wc!("wc-fast-kstring", lines, file_path);
     }
     g.finish();
 

@@ -12,7 +12,7 @@ use crate::block::{BlockStructure, OperatorKind, OperatorStructure, Replication}
 use crate::network::OperatorCoord;
 use crate::operator::source::Source;
 use crate::operator::{Data, Operator, StreamElement};
-use crate::persistency::{PersistencyService, PersistencyServices};
+use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::Stream;
 
@@ -104,7 +104,7 @@ pub struct CsvSource<Out: Data + for<'a> Deserialize<'a>> {
     /// Snapshot markers generator
     snapshot_generator: SnapshotGenerator,
     /// Persistency service to save the state
-    persistency_service: Option<PersistencyService>,
+    persistency_service: Option<PersistencyService<CsvSourceState>>,
 
     _out: PhantomData<Out>,
 }
@@ -292,13 +292,12 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
 
         self.operator_coord.from_coord(metadata.coord);
         let mut last_position = None;
-        if metadata.persistency_service.is_some(){
-            self.persistency_service = metadata.persistency_service.clone();
-            let persist_s = self.persistency_service.as_mut().unwrap();
-            let snapshot_id = persist_s.restart_from_snapshot(self.operator_coord);
+        if let Some(pb) = &metadata.persistency_builder{
+            let p_service = pb.generate_persistency_service::<CsvSourceState>();
+            let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
             if let Some(snap_id) = snapshot_id {
                 // Get the persisted state
-                let opt_state: Option<CsvSourceState> = persist_s.get_state(self.operator_coord, snap_id);
+                let opt_state: Option<CsvSourceState> = p_service.get_state(self.operator_coord, snap_id);
                 if let Some(state) = opt_state {
                     self.terminated = snap_id.terminate();
                     last_position = Some(state.current);
@@ -307,12 +306,13 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
                 } 
                 self.snapshot_generator.restart_from(snap_id);
             }
-            if let Some(snap_freq) = persist_s.snapshot_frequency_by_item {
+            if let Some(snap_freq) = p_service.snapshot_frequency_by_item {
                 self.snapshot_generator.set_item_interval(snap_freq);
             }
-            if let Some(snap_freq) = persist_s.snapshot_frequency_by_time {
+            if let Some(snap_freq) = p_service.snapshot_frequency_by_time {
                 self.snapshot_generator.set_time_interval(snap_freq);
             }
+            self.persistency_service = Some(p_service);
         }
 
         let file = File::options()

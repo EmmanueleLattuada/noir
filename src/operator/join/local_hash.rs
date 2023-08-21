@@ -12,7 +12,7 @@ use crate::operator::join::ship::{ShipBroadcastRight, ShipHash, ShipStrategy};
 use crate::operator::join::{InnerJoinTuple, JoinVariant, LeftJoinTuple, OuterJoinTuple};
 use crate::operator::start::{BinaryElement, BinaryStartOperator};
 use crate::operator::{DataKey, ExchangeData, KeyerFn, Operator, StreamElement, ExchangeDataKey, SnapshotId};
-use crate::persistency::{PersistencyService, PersistencyServices};
+use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::stream::{KeyedStream, Stream};
 
@@ -50,7 +50,7 @@ impl<Key: DataKey, Out> Default for SideHashMap<Key, Out> {
 /// can be asked to skip generating the `None` tuples if the join was actually inner.
 #[derive(Clone, Debug)]
 struct JoinLocalHash<
-    Key: DataKey,
+    Key: ExchangeDataKey,
     Out1: ExchangeData,
     Out2: ExchangeData,
     Keyer1: KeyerFn<Key, Out1>,
@@ -60,7 +60,7 @@ struct JoinLocalHash<
     prev: OperatorChain,
 
     operator_coord: OperatorCoord,
-    persistency_service: Option<PersistencyService>,
+    persistency_service: Option<PersistencyService<JoinLocalHashState<Key, Out1, Out2>>>,
 
     /// The content of the left side.
     left: SideHashMap<Key, Out1>,
@@ -80,7 +80,7 @@ struct JoinLocalHash<
 }
 
 impl<
-        Key: DataKey,
+        Key: ExchangeDataKey,
         Out1: ExchangeData,
         Out2: ExchangeData,
         Keyer1: KeyerFn<Key, Out1>,
@@ -210,7 +210,7 @@ impl<
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 struct JoinLocalHashState<Key: DataKey, Out1, Out2> {
     left: SideHashMap<Key, Out1>,
     right: SideHashMap<Key, Out2>,
@@ -233,12 +233,12 @@ impl<
 
         self.operator_coord.from_coord(metadata.coord);
 
-        if metadata.persistency_service.is_some(){
-            self.persistency_service = metadata.persistency_service.clone();
-            let snapshot_id = self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+        if let Some(pb) = &metadata.persistency_builder{
+            let p_service = pb.generate_persistency_service::<JoinLocalHashState<Key, Out1, Out2>>();
+            let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
             if snapshot_id.is_some() {
                 // Get and resume the persisted state
-                let opt_state: Option<JoinLocalHashState<Key, Out1, Out2>> = self.persistency_service.as_mut().unwrap().get_state(self.operator_coord, snapshot_id.unwrap());
+                let opt_state: Option<JoinLocalHashState<Key, Out1, Out2>> = p_service.get_state(self.operator_coord, snapshot_id.unwrap());
                 if let Some(state) = opt_state {
                     self.left = state.left;
                     self.right = state.right;
@@ -247,6 +247,7 @@ impl<
                     panic!("No persisted state founded for op: {0}", self.operator_coord);
                 } 
             }
+            self.persistency_service = Some(p_service);
         }
     }
 

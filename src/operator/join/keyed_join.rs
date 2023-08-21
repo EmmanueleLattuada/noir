@@ -13,7 +13,7 @@ use crate::{
         BinaryElement, BinaryStartOperator, Data, DataKey, ExchangeData, Operator, Start,
         StreamElement, SnapshotId,
     },
-    KeyedStream, scheduler::OperatorId, persistency::{PersistencyService, PersistencyServices},
+    KeyedStream, scheduler::OperatorId, persistency::persistency_service::PersistencyService,
 };
 
 use super::{InnerJoinTuple, JoinVariant, OuterJoinTuple};
@@ -52,7 +52,7 @@ impl<Key: DataKey, Out> Default for SideHashMap<Key, Out> {
 struct JoinKeyedOuter<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> {
     prev: BinaryStartOperator<(K, V1), (K, V2)>,
     operator_coord: OperatorCoord,
-    persistency_service: Option<PersistencyService>,
+    persistency_service: Option<PersistencyService<JoinKeyedOuterState<K, V1, V2>>>,
     variant: JoinVariant,
     _k: PhantomData<K>,
     _v1: PhantomData<V1>,
@@ -234,13 +234,13 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
         self.prev.setup(metadata);
         
         self.operator_coord.from_coord(metadata.coord);
-        if metadata.persistency_service.is_some() {
-            self.persistency_service = metadata.persistency_service.clone();
-        
-            let snapshot_id = self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+        if let Some(pb) = &metadata.persistency_builder {
+            let p_service = pb.generate_persistency_service::<JoinKeyedOuterState<K, V1, V2>>();
+                    
+            let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
             if snapshot_id.is_some() {
                 // Get and resume the persisted state
-                let opt_state: Option<JoinKeyedOuterState<K, V1, V2>> = self.persistency_service.as_mut().unwrap().get_state(self.operator_coord, snapshot_id.unwrap());
+                let opt_state: Option<JoinKeyedOuterState<K, V1, V2>> = p_service.get_state(self.operator_coord, snapshot_id.unwrap());
                 if let Some(state) = opt_state {
                     self.left = state.left;
                     self.right = state.right;
@@ -249,6 +249,7 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
                     panic!("No persisted state founded for op: {0}", self.operator_coord);
                 } 
             }
+            self.persistency_service = Some(p_service);
         }
     }
 
@@ -310,7 +311,7 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
 struct JoinKeyedInner<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> {
     prev: BinaryStartOperator<(K, V1), (K, V2)>,
     operator_coord: OperatorCoord,
-    persistency_service: Option<PersistencyService>,
+    persistency_service: Option<PersistencyService<JoinKeyedInnerState<K, V1, V2>>>,
     _k: PhantomData<K>,
     _v1: PhantomData<V1>,
     _v2: PhantomData<V2>,
@@ -444,12 +445,12 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
 
         self.operator_coord.from_coord(metadata.coord);
 
-        if metadata.persistency_service.is_some() {
-            self.persistency_service = metadata.persistency_service.clone();
-            let snapshot_id = self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+        if let Some(pb) = &metadata.persistency_builder{
+            let p_service = pb.generate_persistency_service::<JoinKeyedInnerState<K, V1, V2>>();
+            let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
             if snapshot_id.is_some() {
                 // Get and resume the persisted state
-                let opt_state: Option<JoinKeyedInnerState<K, V1, V2>> = self.persistency_service.as_mut().unwrap().get_state(self.operator_coord, snapshot_id.unwrap());
+                let opt_state: Option<JoinKeyedInnerState<K, V1, V2>> = p_service.get_state(self.operator_coord, snapshot_id.unwrap());
                 if let Some(state) = opt_state {
                     self.left_ended = state.left_ended;
                     self.right_ended = state.right_ended;
@@ -460,6 +461,7 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
                     panic!("No persisted state founded for op: {0}", self.operator_coord);
                 } 
             }
+            self.persistency_service = Some(p_service);
         }
     }
 

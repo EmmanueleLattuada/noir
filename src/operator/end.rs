@@ -6,7 +6,7 @@ use crate::block::{
 };
 use crate::network::{ReceiverEndpoint, OperatorCoord};
 use crate::operator::{ExchangeData, KeyerFn, Operator, StreamElement};
-use crate::persistency::{PersistencyService, PersistencyServices};
+use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{BlockId, ExecutionMetadata, OperatorId};
 
 /// The list with the interesting senders of a single block.
@@ -38,7 +38,7 @@ where
     senders: Vec<(ReceiverEndpoint, Batcher<Out>)>,
     feedback_id: Option<BlockId>,
     ignore_block_ids: Vec<BlockId>,
-    persistency_service: Option<PersistencyService>,
+    persistency_service: Option<PersistencyService<()>>,
     terminated: bool,
 }
 
@@ -157,14 +157,15 @@ where
         self.setup_senders();
 
         self.operator_coord.from_coord(metadata.coord);
-        if metadata.persistency_service.is_some(){
-            self.persistency_service = metadata.persistency_service.clone();
-            let snapshot_id = self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+        if let Some(pb) = &metadata.persistency_builder{
+            let p_service = pb.generate_persistency_service::<()>();
+            let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
             if let Some(snap_id) = snapshot_id {
                 if snap_id.terminate() {
                     self.terminated = true;
                 }
             }
+            self.persistency_service = Some(p_service);
         }
     }
 

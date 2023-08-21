@@ -9,7 +9,7 @@ use crate::network::OperatorCoord;
 use crate::operator::merge::MergeElement;
 
 use crate::operator::{ExchangeData, ExchangeDataKey, Operator, StreamElement, Timestamp};
-use crate::persistency::{PersistencyService, PersistencyServices};
+use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 
 use super::SnapshotId;
@@ -33,7 +33,7 @@ where
 {
     prev: OperatorChain,
     operator_coord: OperatorCoord,
-    persistency_service: Option<PersistencyService>,
+    persistency_service: Option<PersistencyService<IntervalJoinState<Key, Out, Out2>>>,
     /// Elements of the left side to be processed.
     left: VecDeque<(Timestamp, (Key, Out))>,
     /// Elements of the right side that might still be matched.
@@ -199,12 +199,12 @@ where
         self.prev.setup(metadata);
 
         self.operator_coord.from_coord(metadata.coord);
-        if metadata.persistency_service.is_some(){
-            self.persistency_service = metadata.persistency_service.clone();
-            let snapshot_id = self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+        if let Some(pb) = &metadata.persistency_builder{
+            let p_service = pb.generate_persistency_service::<IntervalJoinState<Key, Out, Out2>>();
+            let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
             if snapshot_id.is_some() {
                 // Get and resume the persisted state
-                let opt_state: Option<IntervalJoinState<Key, Out, Out2>> = self.persistency_service.as_mut().unwrap().get_state(self.operator_coord, snapshot_id.unwrap());
+                let opt_state: Option<IntervalJoinState<Key, Out, Out2>> = p_service.get_state(self.operator_coord, snapshot_id.unwrap());
                 if let Some(state) = opt_state {
                     self.left = state.left;
                     self.right = state.right;
@@ -215,6 +215,7 @@ where
                     panic!("No persisted state founded for op: {0}", self.operator_coord);
                 } 
             }
+            self.persistency_service = Some(p_service);
         }
     }
 

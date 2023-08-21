@@ -12,7 +12,7 @@ use serde::{Serialize, Deserialize};
 use crate::block::{GroupHasherBuilder, OperatorStructure, Replication};
 use crate::network::OperatorCoord;
 use crate::operator::{Data, DataKey, ExchangeData, Operator, StreamElement, Timestamp};
-use crate::persistency::{PersistencyService, PersistencyServices};
+use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::OperatorId;
 use crate::stream::{KeyedStream, Stream, WindowedStream};
 
@@ -139,6 +139,8 @@ impl<T> From<WindowResult<T>> for StreamElement<T> {
 #[derive(Clone)]
 pub(crate) struct WindowOperator<Key, In, Out, Prev, W>
 where
+    Key: ExchangeDataKey,
+    Out: ExchangeData,
     W: WindowManager,
 {
     /// The previous operators in the chain.
@@ -146,7 +148,7 @@ where
     /// Operator coordinate
     operator_coord: OperatorCoord,
     /// Persistency service
-    persistency_service: Option<PersistencyService>,
+    persistency_service: Option<PersistencyService<WindowOperatorState<Key, Out, W::ManagerState>>>,
     /// The name of the actual operator that this one abstracts.
     ///
     /// It is used only for tracing purposes.
@@ -159,6 +161,8 @@ where
 
 impl<Key, In, Out, Prev, W> Display for WindowOperator<Key, In, Out, Prev, W>
 where
+    Key: ExchangeDataKey,
+    Out: ExchangeData,
     W: WindowManager,
     Prev: Display,
 {
@@ -199,12 +203,12 @@ where
         self.prev.setup(metadata);
 
         self.operator_coord.from_coord(metadata.coord);
-        if metadata.persistency_service.is_some(){
-            self.persistency_service = metadata.persistency_service.clone();
-            let snapshot_id = self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+        if let Some(pb) = &metadata.persistency_builder{
+            let p_service = pb.generate_persistency_service::<WindowOperatorState<Key, Out, W::ManagerState>>();
+            let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
             if snapshot_id.is_some() {
                 // Get and resume the persisted state
-                let opt_state: Option<WindowOperatorState<Key, Out, W::ManagerState>> = self.persistency_service.as_mut().unwrap().get_state(self.operator_coord, snapshot_id.unwrap());
+                let opt_state: Option<WindowOperatorState<Key, Out, W::ManagerState>> = p_service.get_state(self.operator_coord, snapshot_id.unwrap());
                 if let Some(state) = opt_state {
                     self.output_buffer = state.output_buffer;                
                     state.manager.windows
@@ -222,6 +226,7 @@ where
                     panic!("No persisted state founded for op: {0}", self.operator_coord);
                 } 
             }
+            self.persistency_service = Some(p_service);
         }
     }
 

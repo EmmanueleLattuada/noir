@@ -12,7 +12,7 @@ use crate::operator::join::ship::{ShipBroadcastRight, ShipHash, ShipStrategy};
 use crate::operator::join::{InnerJoinTuple, JoinVariant, LeftJoinTuple, OuterJoinTuple};
 use crate::operator::start::{BinaryElement, BinaryStartOperator};
 use crate::operator::{Data, ExchangeData, KeyerFn, Operator, StreamElement, DataKey, ExchangeDataKey, SnapshotId};
-use crate::persistency::{PersistencyService, PersistencyServices};
+use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::stream::{KeyedStream, Stream};
 use crate::worker::replica_coord;
@@ -23,7 +23,7 @@ use crate::worker::replica_coord;
 /// can be asked to skip generating the `None` tuples if the join was actually inner.
 #[derive(Clone, Debug)]
 struct JoinLocalSortMerge<
-    Key: Data + Ord,
+    Key: ExchangeDataKey + Ord,
     Out1: ExchangeData,
     Out2: ExchangeData,
     Keyer1: KeyerFn<Key, Out1>,
@@ -33,7 +33,7 @@ struct JoinLocalSortMerge<
     prev: OperatorChain,
 
     operator_coord: OperatorCoord,
-    persistency_service: Option<PersistencyService>,
+    persistency_service: Option<PersistencyService<JoinLocalSortMergeState<Key, Out1, Out2>>>,
 
     keyer1: Keyer1,
     keyer2: Keyer2,
@@ -57,7 +57,7 @@ struct JoinLocalSortMerge<
 }
 
 impl<
-        Key: Data + Ord,
+        Key: ExchangeDataKey + Ord,
         Out1: ExchangeData,
         Out2: ExchangeData,
         Keyer1: KeyerFn<Key, Out1>,
@@ -189,7 +189,7 @@ impl<
 }
 
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 struct JoinLocalSortMergeState<Key: DataKey, Out1, Out2> {
     left_ended: bool,
     right_ended: bool,
@@ -215,12 +215,12 @@ impl<
 
         self.operator_coord.from_coord(metadata.coord);
 
-        if metadata.persistency_service.is_some(){
-            self.persistency_service = metadata.persistency_service.clone();
-            let snapshot_id = self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+        if let Some(pb) = &metadata.persistency_builder{
+            let p_service = pb.generate_persistency_service::<JoinLocalSortMergeState<Key, Out1, Out2>>();
+            let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
             if snapshot_id.is_some() {
                 // Get and resume the persisted state
-                let opt_state: Option<JoinLocalSortMergeState<Key, Out1, Out2>> = self.persistency_service.as_mut().unwrap().get_state(self.operator_coord, snapshot_id.unwrap());
+                let opt_state: Option<JoinLocalSortMergeState<Key, Out1, Out2>> =p_service.get_state(self.operator_coord, snapshot_id.unwrap());
                 if let Some(state) = opt_state {
                     self.left_ended = state.left_ended;
                     self.right_ended = state.right_ended;
@@ -232,6 +232,7 @@ impl<
                     panic!("No persisted state founded for op: {0}", self.operator_coord);
                 } 
             }
+            self.persistency_service = Some(p_service);
         }
     }
 

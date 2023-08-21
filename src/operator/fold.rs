@@ -6,7 +6,7 @@ use serde::{Serialize, Deserialize};
 use crate::block::{BlockStructure, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::{Data, ExchangeData, Operator, StreamElement, Timestamp};
-use crate::persistency::{PersistencyService, PersistencyServices};
+use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 
 use super::SnapshotId;
@@ -20,7 +20,7 @@ where
 {
     prev: PreviousOperators,
     operator_coord: OperatorCoord,
-    persistency_service: Option<PersistencyService>,
+    persistency_service: Option<PersistencyService<FoldState<NewOut>>>,
     #[derivative(Debug = "ignore")]
     fold: F,
     init: NewOut,
@@ -96,7 +96,7 @@ where
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 struct FoldState<T> {
     accumulator: Option<T>,
     timestamp: Option<Timestamp>,
@@ -114,12 +114,12 @@ where
         self.prev.setup(metadata);
 
         self.operator_coord.from_coord(metadata.coord);
-        if metadata.persistency_service.is_some(){
-            self.persistency_service = metadata.persistency_service.clone();
-            let snapshot_id = self.persistency_service.as_mut().unwrap().restart_from_snapshot(self.operator_coord);
+        if let Some(pb) = &metadata.persistency_builder{
+            let p_service = pb.generate_persistency_service::<FoldState<NewOut>>();
+            let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
             if snapshot_id.is_some() {
                 // Get and resume the persisted state
-                let opt_state: Option<FoldState<NewOut>> = self.persistency_service.as_mut().unwrap().get_state(self.operator_coord, snapshot_id.unwrap());
+                let opt_state: Option<FoldState<NewOut>> = p_service.get_state(self.operator_coord, snapshot_id.unwrap());
                 if let Some(state) = opt_state {
                     self.accumulator = state.accumulator;
                     self.timestamp = state.timestamp;
@@ -129,6 +129,7 @@ where
                     panic!("No persisted state founded for op: {0}", self.operator_coord);
                 } 
             }
+            self.persistency_service = Some(p_service);
         }
     }
 
@@ -215,7 +216,7 @@ mod tests {
     use crate::network::OperatorCoord;
     use crate::operator::fold::{Fold, FoldState};
     use crate::operator::{Operator, StreamElement, SnapshotId};
-    use crate::persistency::{PersistencyService, PersistencyServices};
+    use crate::persistency::builder::PersistencyBuilder;
     use crate::test::{FakeOperator, persistency_config_unit_tests};
 
     #[test]
@@ -285,15 +286,16 @@ mod tests {
             replica_id: 1,
             operator_id: 1,
         };
-        fold.persistency_service = Some(PersistencyService::new(Some(
-            persistency_config_unit_tests()
-        )));
+        let pers_builder = PersistencyBuilder::new(Some(persistency_config_unit_tests()));
+        fold.persistency_service = Some(pers_builder.generate_persistency_service());
 
         assert_eq!(fold.next(), StreamElement::Snapshot(SnapshotId::new(1)));
+        fold.persistency_service.as_mut().unwrap().flush_state_saver();
         let state: Option<FoldState<i32>> = fold.persistency_service.as_mut().unwrap().get_state(fold.operator_coord, SnapshotId::new(1));
         assert_eq!(state.unwrap().accumulator.unwrap(), 3);
 
         assert_eq!(fold.next(), StreamElement::Snapshot(SnapshotId::new(2)));
+        fold.persistency_service.as_mut().unwrap().flush_state_saver();
         let state: Option<FoldState<i32>> = fold.persistency_service.as_mut().unwrap().get_state(fold.operator_coord, SnapshotId::new(2));
         assert_eq!(state.unwrap().accumulator.unwrap(), 10);
 

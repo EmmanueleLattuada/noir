@@ -9,7 +9,7 @@ use crate::block::{BatchMode, Block, BlockStructure, JobGraphGenerator, Replicat
 use crate::config::{EnvironmentConfig, ExecutionRuntime, LocalRuntimeConfig, RemoteRuntimeConfig};
 use crate::network::{Coord, NetworkTopology, OperatorCoord};
 use crate::operator::{Data, Operator};
-use crate::persistency::PersistencyService;
+use crate::persistency::builder::PersistencyBuilder;
 use crate::profiler::{wait_profiler, ProfilerResult};
 use crate::worker::spawn_worker;
 use crate::CoordUInt;
@@ -42,8 +42,8 @@ pub struct ExecutionMetadata<'a> {
     pub(crate) network: &'a mut NetworkTopology,
     /// The batching mode to use inside this block.
     pub batch_mode: BatchMode,
-    /// Persistency service handler for saving the state
-    pub(crate) persistency_service: Option<PersistencyService>,
+    /// Persistency for saving the state
+    pub(crate) persistency_builder: Option<PersistencyBuilder>,
 }
 
 /// Information about a block in the job graph.
@@ -78,8 +78,8 @@ pub(crate) struct Scheduler {
     block_init: Vec<(Coord, BlockInitFn)>,
     /// The network topology that keeps track of all the connections inside the execution graph.
     network: NetworkTopology,
-    /// Persistency service handler for saving the state
-    persistency_service: Option<PersistencyService>,
+    /// Persistency service
+    persistency_builder: Option<PersistencyBuilder>,
     /// List with coordinates of all operators in the network
     operators_coordinates: Vec<OperatorCoord>,
 }
@@ -87,9 +87,9 @@ pub(crate) struct Scheduler {
 impl Scheduler {
     pub fn new(config: EnvironmentConfig) -> Self {
         let pers_conf = config.persistency_configuration.clone();
-        let mut pers_service = None;
+        let mut pers_builder = None;
         if pers_conf.is_some(){
-            pers_service = Some(PersistencyService::new(pers_conf));
+            pers_builder = Some(PersistencyBuilder::new(pers_conf));
         }
         Self {
             next_blocks: Default::default(),
@@ -98,7 +98,7 @@ impl Scheduler {
             block_init: Default::default(),
             network: NetworkTopology::new(config.clone()),
             config,
-            persistency_service: pers_service,
+            persistency_builder: pers_builder,
             operators_coordinates: Default::default()
         }
     }
@@ -123,7 +123,7 @@ impl Scheduler {
             // info
         );
 
-        if self.persistency_service.is_some() {
+        if self.persistency_builder.is_some() {
             self.compute_coordinates(self.block_info(&block), block_id);
         }
 
@@ -221,7 +221,7 @@ impl Scheduler {
                 prev: self.network.prev(coord),
                 network: &mut self.network,
                 batch_mode: block_info.batch_mode,
-                persistency_service: self.persistency_service.clone(),
+                persistency_builder: self.persistency_builder.clone(),
             };
             let (handle, structure) = init_fn(&mut metadata);
             join.push(handle);
@@ -286,7 +286,7 @@ impl Scheduler {
         // If set, try to restart from a snapshot
         if let Some(persistency_conf) = self.config.persistency_configuration.clone(){
             if persistency_conf.try_restart {
-                self.persistency_service.as_mut().unwrap().find_snapshot(self.operators_coordinates.clone(), persistency_conf.restart_from);
+                self.persistency_builder.as_mut().unwrap().find_snapshot(self.operators_coordinates.clone(), persistency_conf.restart_from);
             }
         }
 
@@ -326,7 +326,7 @@ impl Scheduler {
             if let Some(persistency_conf) = self.config.persistency_configuration{
                     if persistency_conf.clean_on_exit {
                         let this_host = self.config.host_id.unwrap();
-                        self.persistency_service.as_mut().unwrap().clean_persisted_state(
+                        self.persistency_builder.as_mut().unwrap().clean_persisted_state(
                             self.operators_coordinates
                                 .into_iter()
                                 .filter(|op_coord| op_coord.host_id == this_host)
