@@ -1,11 +1,13 @@
+use noir::StreamEnvironment;
 use noir::operator::sink::StreamOutput;
 use noir::operator::source::IteratorSource;
-
+use serial_test::serial;
 use super::utils::TestHelper;
 
 #[test]
+#[serial]
 fn test_replay_no_blocks_in_between() {
-    TestHelper::local_remote_env(|mut env| {
+    let body = |mut env: StreamEnvironment| {
         let n = 5u64;
         let n_iter = 5;
 
@@ -41,12 +43,32 @@ fn test_replay_no_blocks_in_between() {
 
             assert_eq!(res, state);
         }
-    });
+    };
+
+    TestHelper::local_remote_env(body);
+
+    let snap_freq = Some(1);
+
+    let execution_list = vec![
+        // Complete execution
+        TestHelper::persistency_config_test(false, false, None, snap_freq),
+        // Restart from snapshot 1
+        TestHelper::persistency_config_test(true, false, Some(1), snap_freq),
+        // Restart from snapshot 2
+        TestHelper::persistency_config_test(true, false, Some(2), snap_freq),
+        // Restart from snapshot  5, from the last iteration
+        TestHelper::persistency_config_test(true, false, Some(5), snap_freq),
+        // Restart from last snapshot, all operators have terminated
+        TestHelper::persistency_config_test(true, true, None, snap_freq),
+    ];
+
+    TestHelper::local_remote_env_with_persistency(body, execution_list);
 }
 
 #[test]
+#[serial]
 fn test_replay_with_shuffle() {
-    TestHelper::local_remote_env(|mut env| {
+    let body = |mut env: StreamEnvironment| {
         let n = 20u64;
         let n_iter = 5;
 
@@ -82,7 +104,26 @@ fn test_replay_with_shuffle() {
 
             assert_eq!(res, state);
         }
-    });
+    };
+
+    TestHelper::local_remote_env(body);
+
+    let snap_freq = Some(1);
+
+    let execution_list = vec![
+        // Complete execution
+        TestHelper::persistency_config_test(false, false, None, snap_freq),
+        // Restart from snapshot 1
+        TestHelper::persistency_config_test(true, false, Some(1), snap_freq),
+        // Restart from snapshot 2
+        TestHelper::persistency_config_test(true, false, Some(2), snap_freq),
+        // Restart from snapshot 20
+        TestHelper::persistency_config_test(true, false, Some(20), snap_freq),
+        // Restart from last snapshot, all operators have terminated
+        TestHelper::persistency_config_test(true, true, None, snap_freq),
+    ];
+
+    TestHelper::local_remote_env_with_persistency(body, execution_list);
 }
 
 fn check_nested_result(res: StreamOutput<Vec<u64>>) {
@@ -106,8 +147,9 @@ fn check_nested_result(res: StreamOutput<Vec<u64>>) {
 }
 
 #[test]
+#[serial]
 fn test_replay_nested_no_shuffle() {
-    TestHelper::local_remote_env(|mut env| {
+    let body = |mut env: StreamEnvironment| {
         let source = IteratorSource::new(0..10u64);
         let stream = env.stream(source).shuffle().replay(
             2,
@@ -129,12 +171,32 @@ fn test_replay_nested_no_shuffle() {
         let res = stream.collect_vec();
         env.execute_blocking();
         check_nested_result(res);
-    });
+    };
+
+    TestHelper::local_remote_env(body);
+
+    let snap_freq = Some(1);
+
+    let execution_list = vec![
+        // Complete execution
+        TestHelper::persistency_config_test(false, false, None, snap_freq),
+        // Restart from snapshot 1
+        TestHelper::persistency_config_test(true, false, Some(1), snap_freq),
+        // Restart from snapshot 2
+        TestHelper::persistency_config_test(true, false, Some(2), snap_freq),
+        // Restart from snapshot 10
+        TestHelper::persistency_config_test(true, false, Some(10), snap_freq),
+        // Restart from last snapshot, all operators have terminated
+        TestHelper::persistency_config_test(true, true, None, snap_freq),
+    ];
+
+    TestHelper::local_remote_env_with_persistency(body, execution_list);
 }
 
 #[test]
+#[serial]
 fn test_replay_nested_shuffle_inner() {
-    TestHelper::local_remote_env(|mut env| {
+    let body = |mut env: StreamEnvironment| {
         let source = IteratorSource::new(0..10u64);
         let stream = env.stream(source).shuffle().replay(
             2,
@@ -156,12 +218,32 @@ fn test_replay_nested_shuffle_inner() {
         let res = stream.collect_vec();
         env.execute_blocking();
         check_nested_result(res);
-    });
+    };
+
+    TestHelper::local_remote_env(body);
+
+    let snap_freq = Some(1);
+
+    let execution_list = vec![
+        // Complete execution
+        TestHelper::persistency_config_test(false, false, None, snap_freq),
+        // Restart from snapshot 1
+        TestHelper::persistency_config_test(true, false, Some(1), snap_freq),
+        // Restart from snapshot 2
+        TestHelper::persistency_config_test(true, false, Some(2), snap_freq),
+        // Restart from snapshot 10
+        TestHelper::persistency_config_test(true, false, Some(10), snap_freq),
+        // Restart from last snapshot, all operators have terminated
+        TestHelper::persistency_config_test(true, true, None, snap_freq),
+    ];
+
+    TestHelper::local_remote_env_with_persistency(body, execution_list);
 }
 
 #[test]
+#[serial]
 fn test_replay_nested_shuffle_outer() {
-    TestHelper::local_remote_env(|mut env| {
+    let body = |mut env: StreamEnvironment| {
         let source = IteratorSource::new(0..10u64);
         let stream = env.stream(source).shuffle().replay(
             2,
@@ -183,12 +265,32 @@ fn test_replay_nested_shuffle_outer() {
         let res = stream.collect_vec();
         env.execute_blocking();
         check_nested_result(res);
-    });
+    };
+
+    TestHelper::local_remote_env(body);
+
+    let snap_freq = Some(1);
+
+    let execution_list = vec![
+        // Complete execution
+        TestHelper::persistency_config_test(false, false, None, snap_freq),
+        // Restart from snapshot 1
+        TestHelper::persistency_config_test(true, false, Some(1), snap_freq),
+        // Restart from snapshot 2
+        TestHelper::persistency_config_test(true, false, Some(2), snap_freq),
+        // Restart from snapshot 10
+        TestHelper::persistency_config_test(true, false, Some(10), snap_freq),
+        // Restart from last snapshot, all operators have terminated
+        TestHelper::persistency_config_test(true, true, None, snap_freq),
+    ];
+
+    TestHelper::local_remote_env_with_persistency(body, execution_list);
 }
 
 #[test]
-fn test_replay_nested_shuffle_both() {
-    TestHelper::local_remote_env(|mut env| {
+#[serial]
+fn test_replay_nested_shuffle_both() { 
+    let body = |mut env: StreamEnvironment| {
         let source = IteratorSource::new(0..10u64);
         let stream = env.stream(source).shuffle().replay(
             2,
@@ -210,5 +312,25 @@ fn test_replay_nested_shuffle_both() {
         let res = stream.collect_vec();
         env.execute_blocking();
         check_nested_result(res);
-    });
+    };
+
+    TestHelper::local_remote_env(body);
+
+    let snap_freq = Some(1);
+
+    let execution_list = vec![
+        // Complete execution
+        TestHelper::persistency_config_test(false, false, None, snap_freq),
+        // Restart from snapshot 1
+        TestHelper::persistency_config_test(true, false, Some(1), snap_freq),
+        // Restart from snapshot 2
+        TestHelper::persistency_config_test(true, false, Some(2), snap_freq),
+        // Restart from snapshot 10, from the last iteration
+        TestHelper::persistency_config_test(true, false, Some(10), snap_freq),
+        // Restart from last snapshot, all operators have terminated
+        TestHelper::persistency_config_test(true, true, None, snap_freq),
+    ];
+
+    TestHelper::local_remote_env_with_persistency(body, execution_list);
+    
 }
