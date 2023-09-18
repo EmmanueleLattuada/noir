@@ -127,7 +127,7 @@ where
     fn snapshot_procedures(&mut self, message: &StreamElement<Out>) {
         match message {
             StreamElement::Snapshot(snap_id) => {
-                self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, *snap_id);
+                self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snap_id.clone());
             }
             StreamElement::Terminate => {                        
                 self.persistency_service.as_mut().unwrap().save_terminated_void_state(self.operator_coord);

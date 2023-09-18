@@ -39,6 +39,7 @@ pub (crate) struct SnapshotGenerator {
     timer: SystemTime,
     snap_item_interval: Option<u64>,
     item_counter: u64,
+    iter_stack: usize,
 }
 
 impl SnapshotGenerator {
@@ -49,6 +50,7 @@ impl SnapshotGenerator {
             timer: SystemTime::now(),
             snap_item_interval: None,
             item_counter: 0, 
+            iter_stack: 0,
         }
     }
     pub (crate) fn get_snapshot_marker(&mut self) -> Option<SnapshotId> {
@@ -61,13 +63,21 @@ impl SnapshotGenerator {
         }
         self.item_counter = self.item_counter + 1;
         if res {
-            let tmp = self.snapshot_id;
+            let tmp = self.snapshot_id.clone();
             self.item_counter = 0;
             self.timer = SystemTime::now();
-            self.snapshot_id = self.snapshot_id + 1;
+            if self.iter_stack == 0 {
+                self.snapshot_id = self.snapshot_id.next();
+            } else {
+                self.snapshot_id = self.snapshot_id.next_iter(self.iter_stack);
+            }
             return Some(tmp);
         }
         None
+    }
+
+    pub (crate) fn set_iter_stack(&mut self, iter_stack: usize) {
+        self.iter_stack = iter_stack;
     }
 
     pub (crate) fn set_time_interval(&mut self, time_interval: Duration) {
@@ -80,7 +90,11 @@ impl SnapshotGenerator {
 
     /// Afeter calling this method the snapshot generation will start from last_snapshot + 1
     pub (crate) fn restart_from(&mut self, last_snapshot: SnapshotId) {
-        self.snapshot_id = last_snapshot + 1;
+        if self.iter_stack == 0 {
+            self.snapshot_id = last_snapshot.next();
+        } else {
+            self.snapshot_id = last_snapshot.next_iter(self.iter_stack);
+        }
     }
 
 }
@@ -143,6 +157,64 @@ mod tests {
         assert_eq!(g1.get_snapshot_marker(), None);
         assert_eq!(g1.get_snapshot_marker(), Some(SnapshotId::new(3)));
     
-    }    
+    }  
+
+    
+    #[test]
+    fn test_snapshot_order(){
+        let mut snap1 = SnapshotId::new(2);
+        snap1.iteration_stack.push(1);
+        assert!(snap1 > SnapshotId::new(1));
+        assert!(snap1 >= SnapshotId::new(2));
+        assert!(snap1 < SnapshotId::new(3));
+        assert!(SnapshotId::new(2).check_next(snap1.clone()));
+        assert!(snap1.check_next(SnapshotId::new(3)));
+        assert!(!(snap1.check_next(SnapshotId::new(2))));
+
+        let mut snap2 = SnapshotId::new(2);
+        snap2.iteration_stack.push(0);
+        snap2.iteration_stack.push(1);        
+        assert!(snap2 < snap1);
+        assert!(SnapshotId::new(2).check_next(snap2.clone()));
+        assert!(snap2.check_next(snap1.clone()));
+        assert!(!(snap1.check_next(snap2.clone())));
+
+        let mut snap3 = SnapshotId::new(2);
+        snap3.iteration_stack.push(0);
+        snap3.iteration_stack.push(0);
+        snap3.iteration_stack.push(1);        
+        assert!(snap3 < snap1);
+        assert!(snap3 < snap2);
+        assert!(SnapshotId::new(2).check_next(snap3.clone()));
+        assert!(snap3.check_next(snap2.clone()));
+        assert!(!(snap2.check_next(snap3.clone())));
+
+        let s_next = snap1.next();
+        assert_eq!(s_next.id(), snap1.id() + 1);
+        assert_eq!(s_next.terminate(), snap1.terminate());
+        assert_eq!(s_next.iteration_stack,snap1.iteration_stack);
+        let s_next = snap3.next();
+        assert_eq!(s_next.id(), snap3.id() + 1);
+        assert_eq!(s_next.terminate(), snap3.terminate());
+        assert_eq!(s_next.iteration_stack, snap3.iteration_stack);
+
+        let s_next = snap1.next_iter(2);
+        assert_eq!(s_next.id(), snap2.id());
+        assert_eq!(s_next.terminate(), snap2.terminate());
+        assert_eq!(s_next.iteration_stack, vec![1, 1]);
+        let s_next = snap1.next_iter(3);
+        assert_eq!(s_next.id(), snap3.id());
+        assert_eq!(s_next.terminate(), snap3.terminate());
+        assert_eq!(s_next.iteration_stack, vec![1, 0, 1]);
+
+        let s_next = snap3.next_iter(2);
+        assert_eq!(s_next.id(), snap3.id());
+        assert_eq!(s_next.terminate(), snap3.terminate());
+        assert_eq!(s_next.iteration_stack, vec![0, 1, 1]);
+
+    
+    }  
+
+
 
 }

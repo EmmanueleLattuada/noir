@@ -201,8 +201,8 @@ impl<Out: ExchangeData, State: ExchangeData> Iterate<Out, State> {
             assert!(state_msg.num_items() == 1);
 
             match state_msg.into_iter().next().unwrap() {
-                StreamElement::Item((should_continue, new_state)) => {
-                    return (should_continue, new_state);
+                StreamElement::Item((should_continue, new_state, opt_snap)) => {
+                    return (should_continue, new_state, opt_snap);
                 }
                 StreamElement::FlushBatch => {}
                 StreamElement::FlushAndRestart => {}
@@ -420,6 +420,9 @@ where
         let shared_feedback_end_block_id = Arc::new(AtomicUsize::new(0));
         let shared_output_block_id = Arc::new(AtomicUsize::new(0));
 
+         // Compute iteration stack level
+         let iter_stack_level = self.block.iteration_ctx().len() + 1;
+
         // prepare the stream with the IterationLeader block, this will provide the state output
         let mut leader_stream = StreamEnvironmentInner::stream(
             env.clone(),
@@ -429,6 +432,7 @@ where
                 global_fold,
                 loop_condition,
                 shared_delta_update_end_block_id.clone(),
+                iter_stack_level,
             ),
         );
         let leader_block_id = leader_stream.block.id;
@@ -477,6 +481,7 @@ where
             Start::single(
                 iterate_block_id,
                 iter_start.block.iteration_ctx.last().cloned(),
+                0, // FIX
             ),
         );
         let output_block_id = output.block.id;
@@ -505,7 +510,7 @@ where
         // First split of the body: the data will be reduced into delta updates
         let state_update_end = StreamEnvironmentInner::stream(
             env.clone(),
-            Start::single(body.block.id, Some(state_lock)),
+            Start::single(body.block.id, Some(state_lock), 0), // FIX
         )
         .key_by(|_| ())
         .fold(StateUpdate::default(), local_fold)

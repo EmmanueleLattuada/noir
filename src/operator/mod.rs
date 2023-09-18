@@ -7,7 +7,7 @@
 use std::cmp::Ordering;
 use std::fmt::{Display, self};
 use std::hash::Hash;
-use std::ops::{Add, AddAssign, Sub, Div};
+use std::ops::{AddAssign, Div};
 
 #[cfg(feature = "crossbeam")]
 use crossbeam_channel::{unbounded, Receiver, Sender};
@@ -120,22 +120,25 @@ pub type Timestamp = i64;
 pub type Timestamp = ();
 
 /// Identifier of the snapshot
-#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, Serialize, Deserialize)]
 pub struct SnapshotId {
     snapshot_id: u64,
     terminate: bool,
+    pub(crate) iteration_stack: Vec<u64>,
 }
 impl SnapshotId {
     pub (crate) fn new(snapshot_id: u64) -> Self {
         Self{
             snapshot_id,
             terminate: false,
+            iteration_stack: Vec::default(),
         }
     }
     pub (crate) fn new_terminate(snapshot_id: u64) -> Self {
         Self{
             snapshot_id,
             terminate: true,
+            iteration_stack: Vec::default(),
         }
     }
     pub (crate) fn id(&self) -> u64 {
@@ -145,6 +148,92 @@ impl SnapshotId {
     pub (crate) fn terminate(&self) -> bool {
         self.terminate
     }
+
+    // TODO: test this
+    pub (crate) fn check_next(&self, next: Self) -> bool {
+        if self.snapshot_id == next.snapshot_id {
+            //check each stack lev
+            let mut i = 0;
+            loop {
+                if self.iteration_stack.len() < i + 1 {
+                    if next.iteration_stack.len() < i + 1 {
+                        return false;
+                    } else {
+                        while next.iteration_stack.len() > i + 1 {
+                            if next.iteration_stack[i] != 0 {
+                                return false;
+                            }
+                            i += 1;
+                        }
+                        if next.iteration_stack[i] != 1 {
+                            return false;
+                        } else {
+                            return true;
+                        }
+                    }                    
+                }
+                if next.iteration_stack.len() < i + 1{
+                    return false;
+                }
+                if self.iteration_stack[i] + 1 == next.iteration_stack[i] {
+                    return true;
+                } else if self.iteration_stack[i] != next.iteration_stack[i] {
+                    return false;
+                }
+                i += 1;
+            }
+        } else if self.snapshot_id + 1 == next.snapshot_id {
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    pub (crate) fn next(&self) -> Self {
+        Self {
+            snapshot_id: self.snapshot_id + 1,
+            terminate: self.terminate,
+            iteration_stack: self.iteration_stack.clone(),
+        }
+    }
+
+    // TODO: test this
+    pub (crate) fn next_iter(&self, iteration_stack_level: usize) -> Self {
+        if iteration_stack_level < 1 {
+            panic!("Iteration level must be greater than 0");
+        }
+        if self.iteration_stack.len() >= iteration_stack_level {
+            let mut it_stack = self.iteration_stack.clone();
+            it_stack[iteration_stack_level - 1] += 1;
+            return Self {
+                snapshot_id: self.snapshot_id,
+                terminate: self.terminate,
+                iteration_stack: it_stack,
+            };
+        /*} else if self.iteration_stack.len() == iteration_stack_level - 1 {
+            let mut it_stack = self.iteration_stack.clone();
+            it_stack.push(1);
+            return Self {
+                snapshot_id: self.snapshot_id,
+                terminate: self.terminate,
+                iteration_stack: it_stack,
+            };*/
+        } else {
+            let mut it_stack = self.iteration_stack.clone();
+            while it_stack.len() < iteration_stack_level {
+                it_stack.push(0);
+            }
+            it_stack[iteration_stack_level - 1] = 1;
+            return Self {
+                snapshot_id: self.snapshot_id,
+                terminate: self.terminate,
+                iteration_stack: it_stack,
+            };
+        }
+    }
+
+
+    
 }
 impl fmt::Display for SnapshotId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -155,29 +244,53 @@ impl fmt::Display for SnapshotId {
         }
     }
 }
-impl Ord for SnapshotId {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.snapshot_id.cmp(&other.snapshot_id)
+
+impl PartialOrd for SnapshotId {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        let mut res = self.snapshot_id.cmp(&other.snapshot_id);
+        if res == Ordering::Equal {
+            // compare the iteration stack level per level
+            let mut i = 0;
+            loop {
+                if self.iteration_stack.len() < i + 1  || other.iteration_stack.len() < i + 1 {
+                    // one or both stack are finished 
+                    return Some(res);
+                } 
+                res = self.iteration_stack[i].cmp(&other.iteration_stack[i]);
+                if res != Ordering::Equal {
+                    return Some(res);
+                }
+                i += 1;
+            }
+        }
+        return Some(res);
     }
 }
+// TODO:    simple add --> id = id + 1
+//          iter add --> add 1 to specified stack level
+/*
 impl Add<u64> for SnapshotId {
     type Output = Self;
     fn add(self, other: u64) -> Self {
         Self {
             snapshot_id: self.snapshot_id + other,
             terminate: self.terminate,
+            iteration_stack: self.iteration_stack.clone(),
         }
     }
-}
+}*/
+
+/*
 impl Sub<u64> for SnapshotId {
     type Output = Self;
     fn sub(self, other: u64) -> Self {
         Self {
             snapshot_id: self.snapshot_id - other,
             terminate: self.terminate,
+            iteration_stack: self.iteration_stack.clone(),
         }
     }
-}
+}*/
 
 /// An element of the stream. This is what enters and exits from the operators.
 ///
@@ -253,7 +366,7 @@ impl<Out> StreamElement<Out> {
             StreamElement::Terminate => StreamElement::Terminate,
             StreamElement::FlushAndRestart => StreamElement::FlushAndRestart,
             StreamElement::FlushBatch => StreamElement::FlushBatch,
-            StreamElement::Snapshot(s) => StreamElement::Snapshot(*s),
+            StreamElement::Snapshot(s) => StreamElement::Snapshot(s.clone()),
         }
     }
 

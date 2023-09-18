@@ -99,7 +99,7 @@ where
             let snapshot_id =p_service.restart_from_snapshot(self.operator_coord);
             if let Some(snap_id) = snapshot_id {
                 // Get and resume the persisted state
-                let opt_state: Option<IteratorSourceState> =p_service.get_state(self.operator_coord, snap_id);
+                let opt_state: Option<IteratorSourceState> =p_service.get_state(self.operator_coord, snap_id.clone());
                 if let Some(state) = opt_state {
                     self.terminated = snap_id.terminate();
                     if let Some(idx) = state.last_index {
@@ -141,7 +141,7 @@ where
                 let state = IteratorSourceState{
                     last_index: self.last_index,
                 };
-                self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id, state);
+                self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id.clone(), state);
                 return StreamElement::Snapshot(snapshot_id);
             }
         }

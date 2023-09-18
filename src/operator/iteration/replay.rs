@@ -3,9 +3,11 @@ use std::fmt::Display;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use serde::{Serialize, Deserialize};
+
 use crate::block::{BlockStructure, NextStrategy, OperatorReceiver, OperatorStructure};
 use crate::environment::StreamEnvironmentInner;
-use crate::network::{Coord, OperatorCoord};
+use crate::network::OperatorCoord;
 use crate::operator::end::End;
 use crate::operator::iteration::iteration_end::IterationEnd;
 use crate::operator::iteration::leader::IterationLeader;
@@ -13,7 +15,8 @@ use crate::operator::iteration::state_handler::IterationStateHandler;
 use crate::operator::iteration::{
     IterationResult, IterationStateHandle, IterationStateLock, StateFeedback,
 };
-use crate::operator::{Data, ExchangeData, Operator, StreamElement};
+use crate::operator::{ExchangeData, Operator, StreamElement, SnapshotId};
+use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{BlockId, ExecutionMetadata, OperatorId};
 use crate::stream::Stream;
 
@@ -21,20 +24,18 @@ use crate::stream::Stream;
 ///
 /// If a new iteration should start, the initial dataset is replayed.
 #[derive(Debug, Clone)]
-pub struct Replay<Out: Data, State: ExchangeData, OperatorChain>
+pub struct Replay<Out: ExchangeData, State: ExchangeData, OperatorChain>
 where
     OperatorChain: Operator<Out>,
 {
-    /// The coordinate of this replica.
-    coord: Coord,
+    /// The coordinate of this operator.
+    operator_coord: OperatorCoord,
 
     /// Helper structure that manages the iteration's state.
     state: IterationStateHandler<State>,
 
     /// The chain of previous operators where the dataset to replay is read from.
     prev: OperatorChain,
-
-    operator_coord: OperatorCoord,
 
     /// The content of the stream to replay.
     content: Vec<StreamElement<Out>>,
@@ -43,9 +44,29 @@ where
 
     /// Whether the input stream has ended or not.
     input_finished: bool,
+
+    /// Persistency service
+    persistency_service: Option<PersistencyService<ReplayState<Out, State>>>,
+    /// Pending snapshot
+    pending_snapshot: Option<SnapshotId>,
+    /// State recovered from snaphot
+    recovered_state: Option<State>,
+    /// Level of this iterator
+    iter_stack_level: usize,
+
+    should_flush: bool,
 }
 
-impl<Out: Data, State: ExchangeData, OperatorChain> Display for Replay<Out, State, OperatorChain>
+#[derive(Clone, Serialize, Deserialize, Debug)]
+struct ReplayState<Out, State> {
+    state: State,
+    content: Vec<StreamElement<Out>>,
+    content_index: u64,
+    // maybe this is unecessary
+    input_finished: bool,
+}
+
+impl<Out: ExchangeData, State: ExchangeData, OperatorChain> Display for Replay<Out, State, OperatorChain>
 where
     OperatorChain: Operator<Out>,
 {
@@ -59,7 +80,7 @@ where
     }
 }
 
-impl<Out: Data, State: ExchangeData, OperatorChain> Replay<Out, State, OperatorChain>
+impl<Out: ExchangeData, State: ExchangeData, OperatorChain> Replay<Out, State, OperatorChain>
 where
     OperatorChain: Operator<Out>,
 {
@@ -68,12 +89,13 @@ where
         state_ref: IterationStateHandle<State>,
         leader_block_id: BlockId,
         state_lock: Arc<IterationStateLock>,
+        iter_stack_level: usize
     ) -> Self {
         let op_id = prev.get_op_id() + 1;
         Self {
             // these fields will be set inside the `setup` method
-            coord: Coord::new(0, 0, 0),
             operator_coord: OperatorCoord::new(0 , 0, 0, op_id),
+            persistency_service: None,
 
             prev,
             
@@ -81,6 +103,10 @@ where
             content_index: 0,
             input_finished: false,
             state: IterationStateHandler::new(leader_block_id, state_ref, state_lock),
+            pending_snapshot: None,
+            recovered_state: None,
+            iter_stack_level,
+            should_flush: false,
         }
     }
 
@@ -93,7 +119,7 @@ where
             StreamElement::FlushAndRestart => {
                 log::debug!(
                     "Replay at {} received all the input: {} elements total",
-                    self.coord,
+                    self.operator_coord.get_coord(),
                     self.content.len()
                 );
                 self.input_finished = true;
@@ -112,15 +138,50 @@ where
                 el
             }
 
-            // TODO: handle snapshot marker
-            StreamElement::Snapshot(_) => {
-                panic!("Snapshot not supported for replay operator")
+            // forward snapshot marker but do not put in the queue
+            StreamElement::Snapshot(mut snap_id) => {
+                //fix snapshot id: iter_stack should be of the same lenght of this iteration level
+                while snap_id.iteration_stack.len() < self.iter_stack_level {
+                    // put 0 at each missing level
+                    snap_id.iteration_stack.push(0);
+                }
+                //save state
+                let state = ReplayState {
+                    state: self.state.state_ref.get().clone(),
+                    content: self.content.clone(),
+                    content_index: self.content_index as u64,
+                    input_finished: self.input_finished,
+                };
+                self.persistency_service
+                    .as_mut()
+                    .unwrap()
+                    .save_state(
+                        self.operator_coord,
+                        snap_id.clone(), 
+                        state,
+                    );
+                StreamElement::Snapshot(snap_id)
             }
 
             // messages to forward without replaying
             StreamElement::FlushBatch => StreamElement::FlushBatch,
             StreamElement::Terminate => {
-                log::debug!("Replay at {} is terminating", self.coord);
+                log::debug!("Replay at {} is terminating", self.operator_coord.get_coord());
+                if self.persistency_service.is_some() {
+                    let state = ReplayState {
+                        state: self.state.state_ref.get().clone(),
+                        content: self.content.clone(),
+                        content_index: self.content_index as u64,
+                        input_finished: self.input_finished,
+                    };
+                    self.persistency_service
+                        .as_mut()
+                        .unwrap()
+                        .save_terminated_state(
+                            self.operator_coord,
+                            state,
+                        );
+                }
                 StreamElement::Terminate
             }
         };
@@ -140,8 +201,8 @@ where
             assert!(message.num_items() == 1);
 
             match message.into_iter().next().unwrap() {
-                StreamElement::Item((should_continue, new_state)) => {
-                    return (should_continue, new_state);
+                StreamElement::Item((should_continue, new_state, opt_snap)) => {
+                    return (should_continue, new_state, opt_snap);
                 }
                 StreamElement::FlushBatch => {}
                 StreamElement::FlushAndRestart => {}
@@ -154,23 +215,78 @@ where
     }
 }
 
-impl<Out: Data, State: ExchangeData + Sync, OperatorChain> Operator<Out>
+impl<Out: ExchangeData, State: ExchangeData + Sync, OperatorChain> Operator<Out>
     for Replay<Out, State, OperatorChain>
 where
     OperatorChain: Operator<Out>,
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
-        self.coord = metadata.coord;
+        self.operator_coord.from_coord(metadata.coord);
         self.prev.setup(metadata);
         self.state.setup(metadata);
 
-        self.operator_coord.block_id = metadata.coord.block_id;
-        self.operator_coord.host_id = metadata.coord.host_id;
-        self.operator_coord.replica_id = metadata.coord.replica_id;
+        if let Some(pb) = &metadata.persistency_builder {
+            let p_service = pb.generate_persistency_service::<ReplayState<Out, State>>();
+            let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
+            if let Some(snap_id) = snapshot_id {
+                if snap_id.iteration_stack.last() != Some(&0) && !snap_id.terminate() {
+                    self.should_flush = true;
+                }
+                // Get and resume the persisted state
+                let opt_state: Option<ReplayState<Out, State>> = p_service.get_state(self.operator_coord, snap_id.clone());
+                if let Some(state) = opt_state {
+                    self.recovered_state = Some(state.state.clone());
+                    self.content = state.content.clone();
+                    self.content_index = state.content_index as usize;
+                    self.input_finished = state.input_finished;
+                } else {
+                    panic!("No persisted state founded for op: {0}", self.operator_coord);
+                }
+            }
+            self.persistency_service = Some(p_service);
+        }
     }
 
     fn next(&mut self) -> StreamElement<Out> {
+        // recover state if needed
+        if let Some(r_state) = self.recovered_state.take(){
+            let recovery_update = (IterationResult::Continue, r_state, None);
+            self.state.lock();
+            self.state.wait_sync_state(recovery_update);
+        }
+        // if i restart from a snap with 0 at this level of iter stack i need to flush all input
+        if self.should_flush {
+            loop {
+                match self.prev.next() {
+                    StreamElement::FlushAndRestart => {
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            self.should_flush = false;
+        }
         loop {
+            // Snapshot if required
+            // The snapshot must be done at the start of the iteration
+            if let Some(snap_id) = self.pending_snapshot.take() {
+                //save state
+                let state = ReplayState {
+                    state: self.state.state_ref.get().clone(),
+                    content: self.content.clone(),
+                    content_index: self.content_index as u64,
+                    input_finished: self.input_finished,
+                };
+                self.persistency_service
+                    .as_mut()
+                    .unwrap()
+                    .save_state(
+                        self.operator_coord,
+                        snap_id.clone(), 
+                        state,
+                    );
+                return StreamElement::Snapshot(snap_id);
+            }
             if let Some(value) = self.input_next() {
                 return value;
             }
@@ -187,14 +303,17 @@ where
                 return item;
             }
 
-            log::debug!("Replay at {} has ended the iteration", self.coord);
+            log::debug!("Replay at {} has ended the iteration", self.operator_coord.get_coord());
 
             self.content_index = 0;
 
             let state_update = self.wait_update();
 
+            // Get snapshot id to be used at next iteration snapshot
+            self.pending_snapshot = state_update.2.clone();
+
             if let IterationResult::Finished = self.state.wait_sync_state(state_update) {
-                log::debug!("Replay block at {} ended the iteration", self.coord);
+                log::debug!("Replay block at {} ended the iteration", self.operator_coord.get_coord());
                 // cleanup so that if this is a nested iteration next time we'll be good to start again
                 self.content.clear();
                 self.input_finished = false;
@@ -222,7 +341,7 @@ where
     }
 }
 
-impl<Out: Data, OperatorChain> Stream<Out, OperatorChain>
+impl<Out: ExchangeData, OperatorChain> Stream<Out, OperatorChain>
 where
     OperatorChain: Operator<Out> + 'static,
 {
@@ -308,15 +427,20 @@ where
         // store a fake value inside this and as soon as we know it we set it to the right value.
         let feedback_block_id = Arc::new(AtomicUsize::new(0));
 
+        // Compute iteration stack level
+        let iter_stack_level = self.block.iteration_ctx().len() + 1;
+        
+        let leader = IterationLeader::new(
+            initial_state,
+            num_iterations,
+            global_fold,
+            loop_condition,
+            feedback_block_id.clone(),
+            iter_stack_level,
+        );
         let mut output_stream = StreamEnvironmentInner::stream(
             env,
-            IterationLeader::new(
-                initial_state,
-                num_iterations,
-                global_fold,
-                loop_condition,
-                feedback_block_id.clone(),
-            ),
+            leader,
         );
         let leader_block_id = output_stream.block.id;
         // the output stream is outside this loop, so it doesn't have the lock for this state
@@ -326,7 +450,7 @@ where
         let state_lock = Arc::new(IterationStateLock::default());
 
         let mut iter_start =
-            self.add_operator(|prev| Replay::new(prev, state, leader_block_id, state_lock.clone()));
+            self.add_operator(|prev| Replay::new(prev, state, leader_block_id, state_lock.clone(), iter_stack_level));
         let replay_block_id = iter_start.block.id;
 
         // save the stack of the iteration for checking the stream returned by the body

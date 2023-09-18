@@ -3,12 +3,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 
+use serde::{Serialize, Deserialize};
+
 use crate::block::{BlockStructure, Connection, NextStrategy, OperatorStructure, Replication};
-use crate::network::{Coord, NetworkMessage, NetworkSender, OperatorCoord};
+use crate::network::{NetworkMessage, NetworkSender, OperatorCoord};
 use crate::operator::iteration::{IterationResult, StateFeedback};
-use crate::operator::source::Source;
+use crate::operator::source::{Source, SnapshotGenerator};
 use crate::operator::start::{SimpleStartOperator, Start, StartReceiver};
-use crate::operator::{ExchangeData, Operator, StreamElement};
+use crate::operator::{ExchangeData, Operator, StreamElement, SnapshotId};
+use crate::persistency::persistency_service::PersistencyService;
 use crate::profiler::{get_profiler, Profiler};
 use crate::scheduler::{BlockId, ExecutionMetadata, OperatorId};
 
@@ -29,8 +32,7 @@ where
     Global: Fn(&mut State, StateUpdate) + Send + Clone,
     LoopCond: Fn(&mut State) -> bool + Send + Clone,
 {
-    /// The coordinates of this block.
-    coord: Coord,
+    /// The coordinates of this operator.
     operator_coord: OperatorCoord,
 
     /// The index of the current iteration (0-based).
@@ -54,6 +56,8 @@ where
     state_update_receiver: Option<SimpleStartOperator<StateUpdate>>,
     /// The number of replicas of `IterationEnd`.
     num_receivers: usize,
+    /// Missing state updates
+    missing_state_updates: usize,    
     /// The id of the block where `IterationEnd` is.
     ///
     /// This is a shared reference because when this block is constructed the tail of the iteration
@@ -74,6 +78,25 @@ where
     /// A function that, given the global state, checks whether the iteration should continue.
     #[derivative(Debug = "ignore")]
     loop_condition: LoopCond,
+
+    /// Persistency service
+    persistency_service: Option<PersistencyService<IterationLeaderState<State>>>, 
+    /// Snapshot generator 
+    snapshot_generator: SnapshotGenerator,
+    /// Max snap id
+    max_snap_id: Option<SnapshotId>,
+    /// Iteration level
+    iter_stack_level: usize,
+    /// Pending snapshot
+    pending_snapshot: Option<SnapshotId>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+struct IterationLeaderState<State> {
+    state: Option<State>,
+    iteration_index: u64,
+    flush_and_restart: bool,
+    missing_state_updates: u64,
 }
 
 impl<DeltaUpdate: ExchangeData, State: ExchangeData, Global, LoopCond> Display
@@ -99,16 +122,19 @@ where
         global_fold: Global,
         loop_condition: LoopCond,
         feedback_block_id: Arc<AtomicUsize>,
+        iter_stack_level: usize,
     ) -> Self {
+        let mut snap_gen = SnapshotGenerator::new();
+        snap_gen.set_iter_stack(iter_stack_level);
         Self {
             // these fields will be set inside the `setup` method
             state_update_receiver: None,
             feedback_senders: Default::default(),
-            coord: Coord::new(0, 0, 0),
             num_receivers: 0,
+            missing_state_updates: 0,
             // This the second block in the chain
-            // TODO: check this
             operator_coord: OperatorCoord::new(0, 0, 0, 1),
+            persistency_service: None,
 
             max_iterations: num_iterations,
             iteration_index: 0,
@@ -118,40 +144,78 @@ where
             flush_and_restart: false,
             global_fold,
             loop_condition,
+            snapshot_generator: snap_gen,
+            iter_stack_level,
+            max_snap_id: None,
+            pending_snapshot: None,
         }
     }
 
-    fn process_updates(&mut self) -> Option<StreamElement<State>> {
-        let mut missing_state_updates = self.num_receivers;
+    fn process_update(&mut self) -> Option<StreamElement<State>> {
         let rx = self.state_update_receiver.as_mut().unwrap();
-        while missing_state_updates > 0 {
-            match rx.next() {
-                StreamElement::Item(state_update) => {
-                    missing_state_updates -= 1;
-                    log::trace!(
-                        "iter_leader delta_update {}, {} left",
-                        self.coord,
-                        missing_state_updates
-                    );
-                    (self.global_fold)(self.state.as_mut().unwrap(), state_update);
-                }
-                StreamElement::Terminate => {
-                    log::trace!("iter_leader terminate {}", self.coord);
-                    return Some(StreamElement::Terminate);
-                }
-                StreamElement::FlushAndRestart | StreamElement::FlushBatch => {}
-                // TODO: handle snapshot marker
-                StreamElement::Snapshot(_) => {
-                    panic!("Snapshot not supported for leader operator")
-                }
-                update => unreachable!(
-                    "IterationLeader received an invalid message: {}",
-                    update.variant()
-                ),
+        match rx.next() {
+            StreamElement::Item(state_update) => {
+                self.missing_state_updates -= 1;
+                log::trace!(
+                    "iter_leader delta_update {}, {} left",
+                    self.operator_coord.get_coord(),
+                    self.missing_state_updates
+                );
+                (self.global_fold)(self.state.as_mut().unwrap(), state_update);
             }
+            StreamElement::Terminate => {
+                log::trace!("iter_leader terminate {}", self.operator_coord.get_coord());
+                if self.persistency_service.is_some() {
+                    let state = IterationLeaderState {
+                        state: self.state.clone(),
+                        iteration_index: self.iteration_index as u64,
+                        flush_and_restart: self.flush_and_restart,
+                        missing_state_updates: self.missing_state_updates as u64,
+                    };
+                    self.persistency_service
+                        .as_mut()
+                        .unwrap()
+                        .save_terminated_state(
+                            self.operator_coord,
+                            state,
+                        );
+                }
+                return Some(StreamElement::Terminate);
+            }
+            StreamElement::FlushAndRestart | StreamElement::FlushBatch => {}
+            StreamElement::Snapshot(mut snap_id) => {
+                if self.iteration_index == 0 && snap_id.iteration_stack.last() == Some(&0) {
+                    // take the latest snapshot id generated by an operator before the replay                   
+                    self.max_snap_id = Some(snap_id.clone());              
+                    // save state 
+                    let state = IterationLeaderState {
+                        state: self.state.clone(),
+                        iteration_index: self.iteration_index as u64,
+                        flush_and_restart: self.flush_and_restart,
+                        missing_state_updates: self.missing_state_updates as u64,
+                    };
+                    self.persistency_service
+                        .as_mut()
+                        .unwrap()
+                        .save_state(
+                            self.operator_coord,
+                            snap_id.clone(), 
+                            state,
+                        );
+                    // remove the last 0 in the ire stack before exit the iterator
+                    snap_id.iteration_stack.pop();
+                    // return marker
+                    return Some(StreamElement::Snapshot(snap_id));
+                    
+                }
+            }
+            update => unreachable!(
+                "IterationLeader received an invalid message: {}",
+                update.variant()
+            ),
         }
         None
-    }
+    }   
 
     /// Returns Some if it's the last loop and the state should be returned
     fn final_result(&mut self) -> Option<State> {
@@ -160,10 +224,10 @@ where
         let should_continue = loop_condition && more_iterations;
 
         if !loop_condition {
-            log::trace!("iter_leader finish_condition {}", self.coord,);
+            log::trace!("iter_leader finish_condition {}", self.operator_coord.get_coord(),);
         }
         if !more_iterations {
-            log::trace!("iter_leader finish_max_iter {}", self.coord);
+            log::trace!("iter_leader finish_max_iter {}", self.operator_coord.get_coord());
         }
 
         if should_continue {
@@ -184,7 +248,7 @@ where
     LoopCond: Fn(&mut State) -> bool + Send + Clone,
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
-        self.coord = metadata.coord;
+        self.operator_coord.from_coord(metadata.coord);
         self.feedback_senders = metadata
             .network
             .get_senders(metadata.coord)
@@ -195,14 +259,41 @@ where
         // at this point the id of the block with IterationEnd must be known
         let feedback_block_id = self.feedback_block_id.load(Ordering::Acquire) as BlockId;
         // get the receiver for the delta updates
-        let mut delta_update_receiver = Start::single(feedback_block_id, None);
+        let mut delta_update_receiver = Start::single(feedback_block_id, None, self.iter_stack_level);
         delta_update_receiver.setup(metadata);
         self.num_receivers = delta_update_receiver.receiver().prev_replicas().len();
         self.state_update_receiver = Some(delta_update_receiver);
+        self.missing_state_updates = self.num_receivers;
 
-        self.operator_coord.block_id = metadata.coord.block_id;
-        self.operator_coord.host_id = metadata.coord.host_id;
-        self.operator_coord.replica_id = metadata.coord.replica_id;
+        // Setup persistency
+        if let Some(pb) = &metadata.persistency_builder {
+            let p_service = pb.generate_persistency_service::<IterationLeaderState<State>>(); 
+            let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
+            if snapshot_id.is_some() {
+                // Get and resume the persisted state
+                let opt_state: Option<IterationLeaderState<State>> = p_service.get_state(self.operator_coord, snapshot_id.clone().unwrap());
+                if let Some(state) = opt_state {
+                    self.state = state.state.clone();
+                    self.iteration_index = state.iteration_index as usize;
+                    self.flush_and_restart = state.flush_and_restart;
+                    self.missing_state_updates = state.missing_state_updates as usize;
+                } else {
+                    panic!("No persisted state founded for op: {0}", self.operator_coord);
+                } 
+                self.snapshot_generator.restart_from(snapshot_id.unwrap());
+            }
+            // Set snapshot generator, this will be used starting from the secodn iterations
+            // Frequency by item will count the iterations
+            if let Some(i) = p_service.snapshot_frequency_by_item{
+                self.snapshot_generator.set_item_interval(i);
+            }
+            if let Some(t) = p_service.snapshot_frequency_by_time{
+                self.snapshot_generator.set_time_interval(t);
+            }
+
+            self.persistency_service = Some(p_service);
+        }
+
     }
 
     fn next(&mut self) -> StreamElement<State> {
@@ -213,25 +304,45 @@ where
         loop {
             log::trace!(
                 "iter_leader {} {} delta updates left",
-                self.coord,
+                self.operator_coord.get_coord(),
                 self.num_receivers
             );
-            if let Some(value) = self.process_updates() {
-                return value;
+            // Get all state updates
+            if self.missing_state_updates > 0 {
+                if let Some(value) = self.process_update() {
+                    return value;
+                } else {
+                    continue;
+                }
             }
+            self.missing_state_updates = self.num_receivers;
 
-            get_profiler().iteration_boundary(self.coord.block_id);
+            get_profiler().iteration_boundary(self.operator_coord.block_id);
             self.iteration_index += 1;
             let result = self.final_result();
 
+            if self.persistency_service.is_some() {
+                if self.iteration_index == 1 {
+                    // Initialize the snapshot generator to the max snapshot id receiver
+                    if let Some(last_snap) = self.max_snap_id.take() {
+                        self.snapshot_generator.restart_from(last_snap);
+                    }
+                }
+                if result.is_none() {
+                    // If this is the last iteration i don't try to do snapshot
+                    self.pending_snapshot = self.snapshot_generator.get_snapshot_marker();
+                }
+            }
+            
             let state_feedback = (
                 IterationResult::from_condition(result.is_none()),
                 self.state.clone().unwrap(),
+                self.pending_snapshot.clone(),
             );
             for sender in &self.feedback_senders {
                 let message = NetworkMessage::new_single(
                     StreamElement::Item(state_feedback.clone()),
-                    self.coord,
+                    self.operator_coord.get_coord(),
                 );
                 sender.send(message).unwrap();
             }
@@ -240,6 +351,24 @@ where
                 self.flush_and_restart = true;
                 self.iteration_index = 0;
                 return StreamElement::Item(state);
+            }
+
+            if let Some(snap_id) = self.pending_snapshot.take() {                    
+                // save state
+                let state = IterationLeaderState {
+                    state: self.state.clone(),
+                    iteration_index: self.iteration_index as u64,
+                    flush_and_restart: self.flush_and_restart,
+                    missing_state_updates: self.missing_state_updates as u64,
+                };
+                self.persistency_service
+                    .as_mut()
+                    .unwrap()
+                    .save_state(
+                        self.operator_coord,
+                        snap_id.clone(), 
+                        state,
+                    );
             }
         }
     }

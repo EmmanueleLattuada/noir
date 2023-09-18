@@ -131,7 +131,7 @@ where
                 StreamElement::Terminate
             }
             StreamElement::Snapshot(snap_id) => {
-                self.save_snap(snap_id);
+                self.save_snap(snap_id.clone());
                 return StreamElement::Snapshot(snap_id)
             }
             _ => panic!("AddTimestamp received invalid variant: {}", elem.variant()),
@@ -211,7 +211,7 @@ where
                 StreamElement::Timestamped(item, _) => return StreamElement::Item(item),
                 StreamElement::Snapshot(snapshot_id) => {
                     // Save void state and forward snapshot marker
-                    self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snapshot_id);
+                    self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snapshot_id.clone());
                     return StreamElement::Snapshot(snapshot_id)
                 }
                 StreamElement::Terminate => {

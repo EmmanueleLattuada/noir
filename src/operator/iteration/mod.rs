@@ -4,6 +4,8 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use serde::{Deserialize, Serialize};
 
+use super::SnapshotId;
+
 mod iterate;
 mod iterate_delta;
 mod iteration_end;
@@ -32,7 +34,7 @@ impl IterationResult {
 ///
 /// - a boolean indicating if a new iteration should start
 /// - the new state for the next iteration
-pub(crate) type StateFeedback<State> = (IterationResult, State);
+pub(crate) type StateFeedback<State> = (IterationResult, State, Option<SnapshotId>);
 
 /// A shared reference to the state of an iteration,
 ///

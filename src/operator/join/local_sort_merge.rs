@@ -266,7 +266,7 @@ impl<
                     panic!("Cannot join timestamp streams")
                 }
                 StreamElement::Snapshot(snapshot_id) => {
-                    self.save_snap(snapshot_id);
+                    self.save_snap(snapshot_id.clone());
                     return StreamElement::Snapshot(snapshot_id);
                 }
                 StreamElement::FlushAndRestart => {

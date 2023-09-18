@@ -103,7 +103,7 @@ where
             StreamElement::FlushBatch => StreamElement::FlushBatch,
             StreamElement::FlushAndRestart => StreamElement::FlushAndRestart,
             StreamElement::Snapshot(snap_id) => {
-                self.save_snap(snap_id);
+                self.save_snap(snap_id.clone());
                 StreamElement::Snapshot(snap_id)
             }
         }

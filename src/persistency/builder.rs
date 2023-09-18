@@ -54,14 +54,17 @@ impl PersistencyBuilder {
     #[inline(never)]
     pub (crate) fn find_snapshot(&mut self, operators: Vec<OperatorCoord>, snapshot_index: Option<u64>) {
         self.compute_last_complete_snapshot(operators.clone());
-        if let Some(restart) = self.restart_from{
+        if let Some(restart) = self.restart_from.clone(){
             if let Some(snap_idx) = snapshot_index {
                 if snap_idx == 0 {
                     self.restart_from = None;
                     self.clean_persisted_state(operators.clone());  //FIX
                 } else if snap_idx < restart.id() {
                     // TODO: Check that the snapshot with this id has not been deleted
-                    self.restart_from = Some(SnapshotId::new(snap_idx));
+                    let mut snap = SnapshotId::new(snap_idx);
+                    let last_iter_stack = self.compute_last_iter_stack(operators, snap_idx);
+                    snap.iteration_stack = last_iter_stack;
+                    self.restart_from = Some(snap);
                 }
             }
         } 
@@ -73,7 +76,7 @@ impl PersistencyBuilder {
             panic!("Persistency is not active");
         }
         
-        let mut op_iter = operators.into_iter();
+        let mut op_iter = operators.clone().into_iter();
         let last_snap = self.handler.get_last_snapshot(op_iter.next().unwrap_or_else(||
             panic!("No operators provided")
         ));
@@ -110,7 +113,43 @@ impl PersistencyBuilder {
                 }
             }
         }
+
+        let snap_index = last_snap.id();
+        let last_iter_stack = self.compute_last_iter_stack(operators, snap_index);
+        last_snap.iteration_stack = last_iter_stack;        
+        
         self.restart_from = Some(last_snap);
+    }
+
+    /// For each operator get the iter stack, take max common for each level
+    fn compute_last_iter_stack(&mut self, operators: Vec<OperatorCoord>, snap_index: u64) -> Vec<u64> {
+        // for each operator get the iter stack, take max common for each level
+        let mut last_iter_stack: Vec<u64> = Vec::default();    
+        for op in operators {
+            let opt_iter_stack = self.handler.get_last_snapshot_with_index(op, snap_index);
+            if let Some(iter_stack) = opt_iter_stack {
+                let mut i = 0;
+                loop {
+                    if last_iter_stack.len() < i + 1 {
+                        // iter_stack has more levels
+                        last_iter_stack = iter_stack;
+                        break;
+                    } else if iter_stack.len() < i + 1{
+                        // iter_stack has less levels
+                        break;
+                    } else {
+                        if last_iter_stack[i] > iter_stack[i] {
+                            last_iter_stack = iter_stack;
+                            break;
+                        } else if last_iter_stack[i] < iter_stack[i] {
+                            break;
+                        }
+                    }
+                    i += 1;
+                }
+            }
+        }
+        last_iter_stack
     }
 
     /// Method to remove all persisted data.
@@ -135,7 +174,7 @@ impl PersistencyBuilder {
         } else {
             PersistencyService::new(
                 self.handler.clone(), 
-                self.restart_from, 
+                self.restart_from.clone(), 
                 self.snapshot_frequency_by_item, 
                 self.snapshot_frequency_by_time
             )

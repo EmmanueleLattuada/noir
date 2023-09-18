@@ -112,7 +112,7 @@ impl<Out: Data + core::fmt::Debug> Operator<Out> for ChannelSource<Out> {
                 if snapshot.is_some() {
                     let snapshot_id = snapshot.unwrap();
                     // Save void state (this operator is stateless) and forward snapshot marker
-                    self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snapshot_id);
+                    self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snapshot_id.clone());
                     return StreamElement::Snapshot(snapshot_id);
                 }
             }

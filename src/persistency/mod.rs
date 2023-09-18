@@ -60,6 +60,26 @@ fn serialize_snapshot_id(snapshot_id: SnapshotId) -> Vec<u8> {
     snap_id_buf
 } 
 
+fn serialize_data<D: ExchangeData>(data: D) -> Vec<u8> {
+    let data_len = SERIALIZER
+            .serialized_size(&data)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "Failed to compute serialized length of provided data. Error: {e:?}",
+                )
+            });        
+        let mut data_buf = Vec::with_capacity(data_len as usize);
+        SERIALIZER
+            .serialize_into(&mut data_buf, &data)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "Failed to serialize data (was {data_len} bytes). Error: {e:?}",
+                )
+            });
+        assert_eq!(data_buf.len(), data_len as usize);
+        data_buf
+}
+
 pub(crate) trait PersistencyServices {  
     /// Method to save the state of the operator
     fn save_state<State: ExchangeData>(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId, state: State);
@@ -69,6 +89,8 @@ pub(crate) trait PersistencyServices {
     fn get_state<State: ExchangeData>(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId) -> Option<State>;
     /// Method to get the id of the last snapshot done by specified operator
     fn get_last_snapshot(&self, op_coord: OperatorCoord) -> Option<SnapshotId>;
+    /// Method to get the iter_stack of the last snapshot with specified index done by specified operator
+    fn get_last_snapshot_with_index(&self, op_coord: OperatorCoord, snapshot_index: u64) -> Option<Vec<u64>>;
     /// Method to remove the state associated to specified operator and snapshot id
     fn delete_state(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId);
 }

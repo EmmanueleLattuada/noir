@@ -167,7 +167,7 @@ where
                     return StreamElement::Terminate;
                 }
                 StreamElement::Snapshot(snap_id) => {
-                    self.save_snap(snap_id);
+                    self.save_snap(snap_id.clone());
                     return StreamElement::Snapshot(snap_id);
                 }
             }

@@ -87,7 +87,7 @@ fn do_work<State: ExchangeData>(saver: ActualSaver<State>) {
             if let PersistencyMessage::State(op_coord, snap_id, state) = msg {
                 // Checks on snapshot id
                 let last_snapshot = saver.handler.get_last_snapshot(op_coord);
-                if !((snap_id.id() == 1 && last_snapshot.is_none()) || last_snapshot.unwrap_or(SnapshotId::new(0)) == snap_id - 1) {
+                if !((snap_id.id() == 1 && last_snapshot.is_none()) || last_snapshot.clone().unwrap_or(SnapshotId::new(0)).check_next(snap_id.clone())) {
                     panic!("Passed snap_id: {snap_id:?}.\n Last saved snap_id: {last_snapshot:?}.\n  Op_coord: {op_coord:?}.\n Snapshot id must be a sequence with step 1 starting from 1");
                 }
                 saver.handler.save_state(op_coord, snap_id, state);

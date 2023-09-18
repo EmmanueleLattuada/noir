@@ -52,18 +52,17 @@ impl<State:ExchangeData> PersistencyService<State> {
     /// Remove all partial snapshotd with id > self.restart_from
     #[inline(never)]
     pub (crate) fn restart_from_snapshot(&self, op_coord: OperatorCoord) -> Option<SnapshotId> {
-        if let Some(snap_id) = self.restart_from {
+        if let Some(snap_id) = self.restart_from.clone() {
             let mut last_snap = self.get_last_snapshot(op_coord).unwrap();
-            if last_snap.id() <= snap_id.id() && last_snap.terminate() {
-                return Some(last_snap)
+            if !(last_snap <= snap_id && last_snap.terminate()) {
+                while last_snap > snap_id {
+                    self.delete_state(op_coord, last_snap);
+                    last_snap = self.get_last_snapshot(op_coord).unwrap();                
+                }
             }
-            // Remove all partial snapshots with id > self.restart_from           
-            while last_snap.id() > snap_id.id() {
-                self.delete_state(op_coord, last_snap);
-                last_snap = self.get_last_snapshot(op_coord).unwrap();                
-            }             
+            return Some(last_snap)      
         }
-        self.restart_from.clone()
+        None
     }
 
     /// This will get the last saved snapshot id, then save state with 
@@ -74,6 +73,20 @@ impl<State:ExchangeData> PersistencyService<State> {
     #[inline(never)]
     pub (crate) fn save_terminated_state(&self, op_coord: OperatorCoord, state: State) {
         self.state_saver.save_terminated_state(op_coord, state);
+        // Old version 
+        /*
+        // Get snapshot id for terminated state
+        let opt_last_snapshot_id = saver.handler.get_last_snapshot(op_coord);
+        if let Some(last_snapshot_id) = opt_last_snapshot_id {
+            if !last_snapshot_id.terminate() {
+                let terminal_snap_id = SnapshotId::new_terminate(last_snapshot_id.id() + 1);
+                self.handler.save_state(op_coord, terminal_snap_id, state)
+            }
+        } else {
+            // Save with id = 1
+            let terminal_snap_id = SnapshotId::new_terminate(1);
+            self.handler.save_state(op_coord, terminal_snap_id, state)
+        }*/
     }
 
     /// Similar to save_terminated_state
@@ -102,6 +115,13 @@ impl<State:ExchangeData> PersistencyService<State> {
         if snapshot_id.id() == 0 {
             panic!("Passed snap_id: {snapshot_id:?}.\nSnapshot id must start from 1");
         }
+        /*
+        // Checks on snapshot id
+        let last_snapshot = saver.handler.get_last_snapshot(op_coord);
+        if !((snap_id.id() == 1 && last_snapshot.is_none()) || last_snapshot.unwrap_or(SnapshotId::new(0)) == snap_id - 1) {
+            panic!("Passed snap_id: {snap_id:?}.\n Last saved snap_id: {last_snapshot:?}.\n  Op_coord: {op_coord:?}.\n Snapshot id must be a sequence with step 1 starting from 1");
+        }
+         */
         self.state_saver.save(op_coord, snapshot_id, state)
     }
     #[inline(never)]
@@ -110,7 +130,7 @@ impl<State:ExchangeData> PersistencyService<State> {
             panic!("Passed snap_id: {snapshot_id:?}.\nSnapshot id must start from 1");
         }
         let last_snapshot = self.get_last_snapshot(op_coord);
-        if !((snapshot_id.id() == 1 && last_snapshot.is_none()) || last_snapshot.unwrap_or(SnapshotId::new(0)) == snapshot_id - 1) {
+        if !((snapshot_id.id() == 1 && last_snapshot.is_none()) || last_snapshot.clone().unwrap_or(SnapshotId::new(0)).check_next(snapshot_id.clone())) {
             panic!("Passed snap_id: {snapshot_id:?}.\n Last saved snap_id: {last_snapshot:?}.\n  Op_coord: {op_coord:?}.\n Snapshot id must be a sequence with step 1 starting from 1");
         }
         self.handler.save_void_state(op_coord, snapshot_id);

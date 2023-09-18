@@ -113,6 +113,7 @@ pub(crate) struct Start<Out: ExchangeData, Receiver: StartReceiver<Out> + Send +
     wait_for_state: bool,
     state_lock: Option<Arc<IterationStateLock>>,
     state_generation: usize,
+    iteration_stack_level: usize,
 }
 
 impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send> Display for Start<Out, Receiver> {
@@ -126,8 +127,9 @@ impl<Out: ExchangeData> Start<Out, SimpleStartReceiver<Out>> {
     pub(crate) fn single(
         previous_block_id: BlockId,
         state_lock: Option<Arc<IterationStateLock>>,
+        iteration_stack_level: usize,
     ) -> SimpleStartOperator<Out> {
-        Start::new(SimpleStartReceiver::new(previous_block_id), state_lock)
+        Start::new(SimpleStartReceiver::new(previous_block_id), state_lock, iteration_stack_level)
     }
 }
 
@@ -141,6 +143,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData>
         left_cache: bool,
         right_cache: bool,
         state_lock: Option<Arc<IterationStateLock>>,
+        iteration_stack_level: usize,
     ) -> BinaryStartOperator<OutL, OutR> {
         Start::new(
             BinaryStartReceiver::new(
@@ -150,12 +153,13 @@ impl<OutL: ExchangeData, OutR: ExchangeData>
                 right_cache,
             ),
             state_lock,
+            iteration_stack_level,
         )
     }
 }
 
 impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out, Receiver> {
-    fn new(receiver: Receiver, state_lock: Option<Arc<IterationStateLock>>) -> Self {
+    fn new(receiver: Receiver, state_lock: Option<Arc<IterationStateLock>>, iteration_stack_level: usize) -> Self {
         Self {
             max_delay: Default::default(),
 
@@ -182,6 +186,7 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
             wait_for_state: Default::default(),
             state_lock,
             state_generation: Default::default(),
+            iteration_stack_level,
         }
     }
 
@@ -192,7 +197,7 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
     #[inline(never)]
     fn process_snapshot(&mut self, snap_id: SnapshotId, sender: Coord) -> Option<SnapshotId> {
         // Update last snapshots map
-        self.last_snapshots.insert(sender, snap_id);
+        self.last_snapshots.insert(sender, snap_id.clone());
         // Check if is already arrived this snapshot id
         if self.on_going_snapshots.contains_key(&snap_id) {
             // Remove the sender from the set of previous replicas for this snapshot
@@ -210,7 +215,6 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
             let state: StartState<Out, Receiver>= StartState{
                 missing_flush_and_restart: self.missing_flush_and_restart as u64,
                 wait_for_state: self.wait_for_state,
-                state_generation: self.state_generation as u64,
                 watermark_forntier: self.watermark_frontier.clone(),
                 receiver_state: self.receiver.get_state(),
                 message_queue: VecDeque::default(),
@@ -225,10 +229,10 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
             // Check if the snapshot is already complete
             if prev_replicas.len() == 0 {
                 // This snapshot is complete: i can save it immediately 
-                self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snap_id, state);
+                self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snap_id.clone(), state);
             } else {
                 // Add a new entry in the map with this snapshot id
-                self.on_going_snapshots.insert(snap_id, (state, prev_replicas));
+                self.on_going_snapshots.insert(snap_id.clone(), (state, prev_replicas));
             }
             // Forward the snapshot marker
             Some(snap_id)
@@ -253,7 +257,7 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
             // Sender has already terminated, we can just ignore it 
             return None;
         }
-        snapshot_id = snapshot_id + 1;
+        snapshot_id = snapshot_id.next();
         let term_snap = SnapshotId::new_terminate(snapshot_id.id());
         self.last_snapshots.insert(sender, term_snap);
         let mut result: Option<SnapshotId> = None;
@@ -283,7 +287,6 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
             let state: StartState<Out, Receiver>= StartState{
                 missing_flush_and_restart: self.missing_flush_and_restart as u64,
                 wait_for_state: self.wait_for_state,
-                state_generation: self.state_generation as u64,
                 watermark_forntier: self.watermark_frontier.clone(),
                 receiver_state: self.receiver.get_state(),
                 message_queue: VecDeque::default(),
@@ -298,10 +301,10 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
             // Check if the snapshot is already complete
             if prev_replicas.len() == 0 {
                 // This snapshot is complete: i can save it immediately 
-                self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id, state);
+                self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id.clone(), state);
             } else {
                 // Add a new entry in the map with this snapshot id
-                self.on_going_snapshots.insert(snapshot_id, (state, prev_replicas));
+                self.on_going_snapshots.insert(snapshot_id.clone(), (state, prev_replicas));
             }
             // Forward the snapshot marker
             result = Some(snapshot_id);
@@ -316,7 +319,6 @@ struct StartState<Out, Receiver: StartReceiver<Out>> {
     missing_flush_and_restart: u64,
 
     wait_for_state: bool,
-    state_generation: u64,
 
     watermark_forntier: WatermarkFrontier,
     #[serde(bound(
@@ -353,17 +355,19 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Operator<
             let snapshot_id =p_service.restart_from_snapshot(self.operator_coord);
             if let Some(snap_id) = snapshot_id {
                 // Get and resume the persisted state
-                let opt_state: Option<StartState<Out, Receiver>> = p_service.get_state(self.operator_coord, snap_id);
+                let opt_state: Option<StartState<Out, Receiver>> = p_service.get_state(self.operator_coord, snap_id.clone());
                 if let Some(state) = opt_state {
                     self.missing_flush_and_restart = state.missing_flush_and_restart as usize;
                     self.wait_for_state = state.wait_for_state;
-                    self.state_generation = state.state_generation as usize;
                     self.watermark_frontier = state.watermark_forntier;
                     self.receiver.set_state(state.receiver_state);
-                    self.persisted_message_queue = state.message_queue;  
+                    self.persisted_message_queue = state.message_queue; 
+                    // Set state gen to 2 because if we are in iteration Replay/Iterate 
+                    // needs to lock and unlock the state to restore it to saved one
+                    self.state_generation = 2; 
                     // Set last snapshots off all previous replicas to this snapshot_id
                     for prev_rep in self.receiver.prev_replicas() {
-                        self.last_snapshots.insert(prev_rep, snap_id);
+                        self.last_snapshots.insert(prev_rep, snap_id.clone());
                     }             
                     
                 } else {
@@ -383,7 +387,6 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Operator<
                     let state: StartState<Out, Receiver>= StartState{
                         missing_flush_and_restart: self.missing_flush_and_restart as u64,
                         wait_for_state: self.wait_for_state,
-                        state_generation: self.state_generation as u64,
                         watermark_forntier: self.watermark_frontier.clone(),
                         receiver_state: self.receiver.get_state(),
                         // This is empty since all previous replicas terminated, so no more messages will arrive
@@ -486,12 +489,17 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Operator<
                                     continue;
                                 }
                             }
-                            StreamElement::Snapshot(snapshot_id) => {
-                                let to_forward = self.process_snapshot(snapshot_id, sender);
+                            StreamElement::Snapshot(mut snapshot_id) => {
+                                // Set the iteration stack accordingly to iteration stack level
+                                while snapshot_id.iteration_stack.len() < self.iteration_stack_level {
+                                    // put 0 at each missing level
+                                    snapshot_id.iteration_stack.push(0);
+                                }
+                                let to_forward = self.process_snapshot(snapshot_id.clone(), sender);
                                 if to_forward.is_none() {
                                     continue;
                                 }
-                                item
+                                StreamElement::Snapshot(snapshot_id)
                             }
                             _ => {
                                 if self.persistency_service.is_some(){
@@ -584,7 +592,7 @@ mod tests {
         let (from2, sender2) = t.senders_mut()[0].pop().unwrap();
 
         let mut start_block =
-            Start::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None);
+            Start::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None, 0);
         start_block.setup(&mut t.metadata());
 
         sender1
@@ -624,7 +632,7 @@ mod tests {
         let (from2, sender2) = t.senders_mut()[0].pop().unwrap();
 
         let mut start_block =
-            Start::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None);
+            Start::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None, 0);
         start_block.setup(&mut t.metadata());
 
         sender1
@@ -678,6 +686,7 @@ mod tests {
             false,
             false,
             None,
+            0,
         );
         start_block.setup(&mut t.metadata());
 
@@ -748,6 +757,7 @@ mod tests {
             true,
             false,
             None,
+            0,
         );
         start_block.setup(&mut t.metadata());
 
@@ -829,6 +839,7 @@ mod tests {
             false,
             true,
             None,
+            0,
         );
         start_block.setup(&mut t.metadata());
 
@@ -883,7 +894,7 @@ mod tests {
         let (from2, sender2) = t.senders_mut()[0].pop().unwrap();
 
         let mut start_block =
-            Start::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None);
+            Start::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None, 0);
 
         let mut metadata = t.metadata();
         metadata.persistency_builder = Some(PersistencyBuilder::new(Some(
@@ -928,7 +939,6 @@ mod tests {
         let state: StartState<i32, SimpleStartReceiver<i32>> = StartState {
             missing_flush_and_restart: 2,
             wait_for_state: false,
-            state_generation: 0,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: None,
             message_queue: VecDeque::from([
@@ -942,7 +952,6 @@ mod tests {
 
         assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
         assert_eq!(state.wait_for_state, retrived_state.wait_for_state);
-        assert_eq!(state.state_generation, retrived_state.state_generation);
         assert_eq!(state.watermark_forntier.compute_frontier(), retrived_state.watermark_forntier.compute_frontier());
         assert_eq!(state.receiver_state, retrived_state.receiver_state);
         assert_eq!(state.message_queue, retrived_state.message_queue);
@@ -961,7 +970,7 @@ mod tests {
         let (from2, sender2) = t.senders_mut()[0].pop().unwrap();
 
         let mut start_block =
-            Start::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None);
+            Start::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None, 0);
 
         let mut metadata = t.metadata();
         metadata.persistency_builder = Some(PersistencyBuilder::new(Some(
@@ -1012,7 +1021,6 @@ mod tests {
         let state: StartState<i32, SimpleStartReceiver<i32>> = StartState {
             missing_flush_and_restart: 2,
             wait_for_state: false,
-            state_generation: 0,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: None,
             message_queue: VecDeque::from([
@@ -1026,7 +1034,6 @@ mod tests {
 
         assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
         assert_eq!(state.wait_for_state, retrived_state.wait_for_state);
-        assert_eq!(state.state_generation, retrived_state.state_generation);
         assert_eq!(state.watermark_forntier.compute_frontier(), retrived_state.watermark_forntier.compute_frontier());
         assert_eq!(state.receiver_state, retrived_state.receiver_state);
         assert_eq!(state.message_queue, retrived_state.message_queue);
@@ -1036,7 +1043,6 @@ mod tests {
         let state: StartState<i32, SimpleStartReceiver<i32>> = StartState {
             missing_flush_and_restart: 2,
             wait_for_state: false,
-            state_generation: 0,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: None,
             message_queue: VecDeque::from([
@@ -1051,7 +1057,6 @@ mod tests {
 
         assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
         assert_eq!(state.wait_for_state, retrived_state.wait_for_state);
-        assert_eq!(state.state_generation, retrived_state.state_generation);
         assert_eq!(state.watermark_forntier.compute_frontier(), retrived_state.watermark_forntier.compute_frontier());
         assert_eq!(state.receiver_state, retrived_state.receiver_state);
         assert_eq!(state.message_queue, retrived_state.message_queue);
@@ -1070,7 +1075,7 @@ mod tests {
         let (from2, sender2) = t.senders_mut()[0].pop().unwrap();
 
         let mut start_block =
-            Start::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None);
+            Start::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None, 0);
 
         let mut metadata = t.metadata();
         metadata.persistency_builder = Some(PersistencyBuilder::new(Some(
@@ -1126,7 +1131,6 @@ mod tests {
         let state: StartState<i32, SimpleStartReceiver<i32>> = StartState {
             missing_flush_and_restart: 2,
             wait_for_state: false,
-            state_generation: 0,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: None,
             message_queue: VecDeque::from([
@@ -1140,7 +1144,6 @@ mod tests {
 
         assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
         assert_eq!(state.wait_for_state, retrived_state.wait_for_state);
-        assert_eq!(state.state_generation, retrived_state.state_generation);
         assert_eq!(state.watermark_forntier.compute_frontier(), retrived_state.watermark_forntier.compute_frontier());
         assert_eq!(state.receiver_state, retrived_state.receiver_state);
         assert_eq!(state.message_queue, retrived_state.message_queue);
@@ -1163,7 +1166,6 @@ mod tests {
         let state: StartState<i32, SimpleStartReceiver<i32>> = StartState {
             missing_flush_and_restart: 1,
             wait_for_state: false,
-            state_generation: 0,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: None,
             message_queue: VecDeque::from([]),
@@ -1174,7 +1176,6 @@ mod tests {
 
         assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
         assert_eq!(state.wait_for_state, retrived_state.wait_for_state);
-        assert_eq!(state.state_generation, retrived_state.state_generation);
         assert_eq!(state.watermark_forntier.compute_frontier(), retrived_state.watermark_forntier.compute_frontier());
         assert_eq!(state.receiver_state, retrived_state.receiver_state);
         assert_eq!(state.message_queue, retrived_state.message_queue);

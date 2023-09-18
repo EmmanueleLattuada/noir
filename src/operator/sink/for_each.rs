@@ -86,7 +86,7 @@ where
                 StreamElement::FlushAndRestart => return StreamElement::FlushAndRestart,
                 StreamElement::Snapshot(snap_id) => {
                     // No state is keeped: this can only provide at-least-one semantic
-                    self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snap_id);
+                    self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snap_id.clone());
                     return StreamElement::Snapshot(snap_id);
                 }
             }

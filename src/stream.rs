@@ -132,7 +132,7 @@ where
         let mut env_lock = env.lock();
         let prev_id = env_lock.close_block(block);
         // Create new block
-        let source = Start::single(prev_id, iteration_ctx.last().cloned());
+        let source = Start::single(prev_id, iteration_ctx.last().cloned(), iteration_ctx.len());
         let new_block = env_lock.new_block(source, batch_mode, iteration_ctx);
         // Connect blocks
         env_lock.connect_blocks::<I>(prev_id, new_block.id);
@@ -170,7 +170,7 @@ where
         Op2: Operator<I2> + 'static,
         O: Data,
         S: Operator<O> + Source<O>,
-        Fs: FnOnce(BlockId, BlockId, bool, bool, Option<Arc<IterationStateLock>>) -> S,
+        Fs: FnOnce(BlockId, BlockId, bool, bool, Option<Arc<IterationStateLock>>, usize) -> S,
     {
         let Stream { block: b1, env } = self;
         let Stream { block: b2, .. } = oth;
@@ -225,6 +225,7 @@ where
             left_cache,
             right_cache,
             iteration_ctx.last().cloned(),
+            iteration_ctx.len(),
         );
 
         let mut new_block = env_lock.new_block(source, batch_mode, iteration_ctx);

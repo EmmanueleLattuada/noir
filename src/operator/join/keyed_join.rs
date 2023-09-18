@@ -282,7 +282,7 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
                 }
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
                 StreamElement::Snapshot(snapshot_id) => {
-                    self.save_snap(snapshot_id);
+                    self.save_snap(snapshot_id.clone());
                     return StreamElement::Snapshot(snapshot_id);
                 }
                 StreamElement::Watermark(_) | StreamElement::Timestamped(_, _) => {
@@ -488,7 +488,7 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
                 }
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
                 StreamElement::Snapshot(snapshot_id) => {
-                    self.save_snap(snapshot_id);
+                    self.save_snap(snapshot_id.clone());
                     return StreamElement::Snapshot(snapshot_id);
                 }
                 StreamElement::Watermark(_) | StreamElement::Timestamped(_, _) => {

@@ -83,7 +83,7 @@ where
             StreamElement::FlushBatch => StreamElement::FlushBatch,
             StreamElement::FlushAndRestart => StreamElement::FlushAndRestart,
             StreamElement::Snapshot(snap_id) => {
-                self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snap_id);
+                self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snap_id.clone());
                 StreamElement::Snapshot(snap_id)
             }
         }

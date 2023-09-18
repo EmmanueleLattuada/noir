@@ -458,6 +458,7 @@ mod tests {
             true,
             false,
             None,
+            0,
         );
        
         let mut metadata = t.metadata();
@@ -555,7 +556,6 @@ mod tests {
         let state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = StartState {
             missing_flush_and_restart: 2,
             wait_for_state: false,
-            state_generation: 0,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: Some(recv_state),
             message_queue: VecDeque::from([
@@ -569,7 +569,6 @@ mod tests {
 
         assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
         assert_eq!(state.wait_for_state, retrived_state.wait_for_state);
-        assert_eq!(state.state_generation, retrived_state.state_generation);
         assert_eq!(state.watermark_forntier.compute_frontier(), retrived_state.watermark_forntier.compute_frontier());
         assert_eq!(state.message_queue, retrived_state.message_queue);
         // Check receiver state
@@ -606,6 +605,7 @@ mod tests {
             true,
             false,
             None,
+            0,
         );
        
         let mut metadata = t.metadata();
@@ -734,7 +734,6 @@ mod tests {
         let state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = StartState {
             missing_flush_and_restart: 2,
             wait_for_state: false,
-            state_generation: 0,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: Some(recv_state),
             message_queue: VecDeque::from([
@@ -792,7 +791,6 @@ mod tests {
         let state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = StartState {
             missing_flush_and_restart: 2,
             wait_for_state: false,
-            state_generation: 0,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: Some(recv_state),
             message_queue: VecDeque::from([
@@ -835,6 +833,7 @@ mod tests {
             true,
             false,
             None,
+            0,
         );
        
         let mut metadata = t.metadata();
@@ -920,7 +919,6 @@ mod tests {
         let state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = StartState {
             missing_flush_and_restart: 1,
             wait_for_state: false,
-            state_generation: 0,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: Some(recv_state),
             message_queue: VecDeque::from([
@@ -993,7 +991,6 @@ mod tests {
         let state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = StartState {
             missing_flush_and_restart: 2,
             wait_for_state: true,
-            state_generation: 2,
             watermark_forntier: WatermarkFrontier::new(vec![from1, from2]),
             receiver_state: Some(recv_state),
             message_queue: VecDeque::from([
@@ -1003,7 +1000,6 @@ mod tests {
 
         assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
         assert_eq!(state.wait_for_state, retrived_state.wait_for_state);
-        assert_eq!(state.state_generation, retrived_state.state_generation);
         assert_eq!(state.watermark_forntier.compute_frontier(), retrived_state.watermark_forntier.compute_frontier());
         assert_eq!(state.message_queue, retrived_state.message_queue);
         // Check receiver state

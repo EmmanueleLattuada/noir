@@ -65,7 +65,7 @@ impl<Out: ExchangeData, OperatorChain: Operator<Out> + 'static> RouterBuilder<Ou
         let mut new_blocks = (0..self.routes.len())
             .map(|_| {
                 env.new_block(
-                    Start::single(block_id, iteration_context.last().cloned()),
+                    Start::single(block_id, iteration_context.last().cloned(), iteration_context.len()),
                     batch_mode,
                     iteration_context.clone(),
                 )
@@ -284,7 +284,7 @@ where
             StreamElement::FlushBatch => {}
             StreamElement::Snapshot(snap_id) => {
                 // Save void state and broaadcast marker
-                self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, *snap_id);
+                self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snap_id.clone());
                 for e in self.endpoints.iter() {
                     for &sender_idx in e.block_senders.indexes.iter() {
                         let sender = &mut self.senders[sender_idx];

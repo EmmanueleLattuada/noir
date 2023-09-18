@@ -1,6 +1,7 @@
 use crate::block::{BlockStructure, Connection, NextStrategy, OperatorStructure};
-use crate::network::{Coord, NetworkMessage, NetworkSender, ReceiverEndpoint, OperatorCoord};
+use crate::network::{NetworkMessage, NetworkSender, ReceiverEndpoint, OperatorCoord};
 use crate::operator::{ExchangeData, Operator, StreamElement};
+use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{BlockId, ExecutionMetadata, OperatorId};
 
 /// Similar to `End`, but tied specifically for the iterations.
@@ -30,8 +31,8 @@ where
     leader_block_id: BlockId,
     /// The sender that points to the `IterationLeader` for sending the `DeltaUpdate` messages.
     leader_sender: Option<NetworkSender<DeltaUpdate>>,
-    /// The coordinates of this block.
-    coord: Coord,
+    /// PersistencyService
+    persistency_service: Option<PersistencyService<bool>>,
 }
 
 impl<DeltaUpdate: ExchangeData, OperatorChain> std::fmt::Display
@@ -62,7 +63,7 @@ where
             has_received_item: false,
             leader_block_id,
             leader_sender: None,
-            coord: Default::default(),
+            persistency_service: None,
         }
     }
 }
@@ -88,19 +89,31 @@ where
             .get_sender(ReceiverEndpoint::new(leader, metadata.coord.block_id));
         self.leader_sender = Some(sender);
 
-        self.coord = metadata.coord;
+        self.operator_coord.from_coord(metadata.coord);
         self.prev.setup(metadata);
 
-        self.operator_coord.block_id = metadata.coord.block_id;
-        self.operator_coord.host_id = metadata.coord.host_id;
-        self.operator_coord.replica_id = metadata.coord.replica_id;
+        // Setup persistency
+        if let Some(pb) = &metadata.persistency_builder {
+            let p_service = pb.generate_persistency_service::<bool>(); 
+            let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
+            if snapshot_id.is_some() {
+                // Get and resume the persisted state
+                let opt_state: Option<bool> = p_service.get_state(self.operator_coord, snapshot_id.unwrap());
+                if let Some(state) = opt_state {
+                    self.has_received_item = state;
+                } else {
+                    panic!("No persisted state founded for op: {0}", self.operator_coord);
+                } 
+            }
+            self.persistency_service = Some(p_service);
+        }
     }
 
     fn next(&mut self) -> StreamElement<()> {
         let elem = self.prev.next();
         match &elem {
             StreamElement::Item(_) => {
-                let message = NetworkMessage::new_single(elem, self.coord);
+                let message = NetworkMessage::new_single(elem, self.operator_coord.get_coord());
                 self.leader_sender.as_ref().unwrap().send(message).unwrap();
                 self.has_received_item = true;
                 StreamElement::Item(())
@@ -112,7 +125,7 @@ where
                 if !self.has_received_item {
                     let update = Default::default();
                     let message =
-                        NetworkMessage::new_single(StreamElement::Item(update), self.coord);
+                        NetworkMessage::new_single(StreamElement::Item(update), self.operator_coord.get_coord());
                     let sender = self.leader_sender.as_ref().unwrap();
                     sender.send(message).unwrap();
                 }
@@ -120,14 +133,35 @@ where
                 StreamElement::FlushAndRestart
             }
             StreamElement::Terminate => {
-                let message = NetworkMessage::new_single(StreamElement::Terminate, self.coord);
+                let message = NetworkMessage::new_single(StreamElement::Terminate, self.operator_coord.get_coord());
                 self.leader_sender.as_ref().unwrap().send(message).unwrap();
+                if self.persistency_service.is_some() {
+                    let state = self.has_received_item;
+                    self.persistency_service
+                        .as_mut()
+                        .unwrap()
+                        .save_terminated_state(
+                            self.operator_coord,
+                            state,
+                        );
+                }
                 StreamElement::Terminate
             }
             StreamElement::FlushBatch => elem.map(|_| unreachable!()),
-            // TODO: handle snapshot marker
-            StreamElement::Snapshot(_) => {
-                panic!("Snapshot not supported for iteration_end operator")
+            StreamElement::Snapshot(snap_id) => {
+                //save state
+                let state = self.has_received_item;
+                self.persistency_service
+                    .as_mut()
+                    .unwrap()
+                    .save_state(
+                        self.operator_coord,
+                        snap_id.clone(), 
+                        state,
+                    );
+                let message = NetworkMessage::new_single(StreamElement::Snapshot(snap_id.clone()), self.operator_coord.get_coord());
+                self.leader_sender.as_ref().unwrap().send(message).unwrap();
+                StreamElement::Snapshot(snap_id.clone())
             }
             _ => unreachable!(),
         }

@@ -324,7 +324,7 @@ impl<
                 }
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
                 StreamElement::Snapshot(snap_id) => {
-                    self.save_snap(snap_id);
+                    self.save_snap(snap_id.clone());
                     return StreamElement::Snapshot(snap_id);
                 }
                 StreamElement::Watermark(_) | StreamElement::Timestamped(_, _) => {

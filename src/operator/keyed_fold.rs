@@ -184,7 +184,7 @@ where
                 // this block won't sent anything until the stream ends
                 StreamElement::FlushBatch => {}
                 StreamElement::Snapshot(snap_id) => {
-                    self.save_snap(snap_id);
+                    self.save_snap(snap_id.clone());
                     return StreamElement::Snapshot(snap_id);
                 }
             }

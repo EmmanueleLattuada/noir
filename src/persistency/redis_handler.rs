@@ -3,7 +3,7 @@ extern crate redis;
 use bincode::Options;
 use r2d2::Pool;
 use redis::{Client, Commands};
-use crate::{network::OperatorCoord, operator::{SnapshotId, ExchangeData}};
+use crate::{network::OperatorCoord, operator::{SnapshotId, ExchangeData}, persistency::serialize_data};
 use super::{PersistencyServices, SERIALIZER, KEY_SERIALIZER, serialize_op_coord, serialize_snapshot_id};
 
 /// Redis handler
@@ -36,28 +36,13 @@ impl PersistencyServices for RedisHandler{
             );
         
         // Serialize the state
-        let state_len = SERIALIZER
-            .serialized_size(&state)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "Failed to compute serialized length of the state of operator: {op_coord}, at snapshot id: {snapshot_id}. Error: {e:?}",
-                )
-            });        
-        let mut state_buf = Vec::with_capacity(state_len as usize);
-        SERIALIZER
-            .serialize_into(&mut state_buf, &state)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "Failed to serialize state (was {state_len} bytes) of operator: {op_coord}, at snapshot id: {snapshot_id}. Error: {e:?}",
-                )
-            });
-        assert_eq!(state_buf.len(), state_len as usize);
+        let state_buf = serialize_data(state);
 
         // Serialize op_coord
         let op_coord_key_buf = serialize_op_coord(op_coord);
                 
         // Serialize snap_id
-        let snap_id_buf= serialize_snapshot_id(snapshot_id);
+        let snap_id_buf= serialize_snapshot_id(snapshot_id.clone());
         
         // Save op_coord + snap_id -> state
         let mut op_snap_key_buf = Vec::with_capacity(op_coord_key_buf.len() + snap_id_buf.len());
@@ -71,10 +56,29 @@ impl PersistencyServices for RedisHandler{
             );
 
         // Save op_coord -> snap_id (push on list)
-        conn.lpush(op_coord_key_buf, snap_id_buf)
+        conn.lpush(op_coord_key_buf.clone(), snap_id_buf)
             .unwrap_or_else(|e|
                 panic!("Fail to save the state: {e:?}")
             );
+
+        // Another list for the iter_stack
+        let iter_stack =  snapshot_id.iteration_stack.clone();
+        if iter_stack.len() > 0 {
+            // Serialize the iter_stack
+            let ser_iter_stack = serialize_data(iter_stack);
+
+            let serial_index = snapshot_id.id().to_be_bytes().to_vec();
+            let mut op_snap_id_key_buf = Vec::with_capacity(op_coord_key_buf.len() + serial_index.len());
+            op_snap_id_key_buf.append(&mut op_coord_key_buf.clone());
+            op_snap_id_key_buf.append(&mut serial_index.clone());
+            assert_eq!(op_snap_id_key_buf.len(), op_coord_key_buf.len() + serial_index.len());
+
+            // Save op_coord -> snap_id (push on list)
+            conn.lpush(op_snap_id_key_buf, ser_iter_stack)
+                .unwrap_or_else(|e|
+                    panic!("Fail to save the state: {e:?}")
+                );
+        }
         
         // Log the store
         log::debug!("Saved state for operator: {op_coord}, at snapshot id: {snapshot_id}\n",);     
@@ -94,13 +98,32 @@ impl PersistencyServices for RedisHandler{
         let op_coord_key_buf = serialize_op_coord(op_coord);
 
         // Serialize snap_id
-        let snap_id_buf= serialize_snapshot_id(snapshot_id);
+        let snap_id_buf= serialize_snapshot_id(snapshot_id.clone());
 
         // Save op_coord -> snap_id (push on list)
-        conn.lpush(op_coord_key_buf, snap_id_buf)
+        conn.lpush(op_coord_key_buf.clone(), snap_id_buf)
             .unwrap_or_else(|e|
                 panic!("Fail to save the state: {e:?}")
             );
+
+        // Another list for the iter_stack
+        let iter_stack =  snapshot_id.iteration_stack.clone();
+        if iter_stack.len() > 0 {
+            // Serialize the iter_stack
+            let ser_iter_stack = serialize_data(iter_stack);
+
+            let serial_index = snapshot_id.id().to_be_bytes().to_vec();
+            let mut op_snap_id_key_buf = Vec::with_capacity(op_coord_key_buf.len() + serial_index.len());
+            op_snap_id_key_buf.append(&mut op_coord_key_buf.clone());
+            op_snap_id_key_buf.append(&mut serial_index.clone());
+            assert_eq!(op_snap_id_key_buf.len(), op_coord_key_buf.len() + serial_index.len());
+
+            // Save op_coord -> snap_id (push on list)
+            conn.lpush(op_snap_id_key_buf, ser_iter_stack)
+                .unwrap_or_else(|e|
+                    panic!("Fail to save the state: {e:?}")
+                );
+        }
 
         // Log the store
         log::debug!("Saved void state for operator: {op_coord}, at snapshot id: {snapshot_id}\n",);
@@ -137,6 +160,45 @@ impl PersistencyServices for RedisHandler{
         None
     }
 
+    
+    fn get_last_snapshot_with_index(&self, op_coord: OperatorCoord, snapshot_index: u64) -> Option<Vec<u64>> {
+        // Prepare connection
+        let mut conn = self.conn_pool
+            .as_ref()
+            .unwrap()
+            .get()
+            .unwrap_or_else(|e|
+                panic!("Fail to connect to Redis: {e:?}")
+            );
+
+        // Serialize op_coord
+        let op_coord_key_buf = serialize_op_coord(op_coord);
+        
+
+        let serial_index = snapshot_index.to_be_bytes().to_vec();
+        let mut op_snap_id_key_buf = Vec::with_capacity(op_coord_key_buf.len() + serial_index.len());
+        op_snap_id_key_buf.append(&mut op_coord_key_buf.clone());
+        op_snap_id_key_buf.append(&mut serial_index.clone());
+        assert_eq!(op_snap_id_key_buf.len(), op_coord_key_buf.len() + serial_index.len());
+        
+        // Get the last iter stack
+        let opt_iter_stack: Option<Vec<u8>> = conn.lindex(op_snap_id_key_buf.clone(), 0)
+        .unwrap_or_else(|e| {
+            panic!("Failed to get last snapshot id of operator: {op_coord}. Error: {e:?}")
+        });
+        // Deserialize iter_stack 
+        
+        if let Some(iter_stack) = opt_iter_stack {
+            // Deserialize the state
+            let error_msg = format!("Fail deserialization of iter_stack for operator: {op_coord}");
+            let des_iter_stack: Vec<u64> = SERIALIZER
+                .deserialize(iter_stack.as_ref())
+                .expect(&error_msg);
+            return Some(des_iter_stack);
+        } 
+        None  
+    } 
+
     fn get_state<State: ExchangeData>(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId) -> Option<State> {
         // Prepare connection
         let mut conn = self.conn_pool
@@ -151,7 +213,7 @@ impl PersistencyServices for RedisHandler{
         let op_coord_key_buf = serialize_op_coord(op_coord);
                 
         // Serialize snap_id
-        let snap_id_buf= serialize_snapshot_id(snapshot_id);
+        let snap_id_buf= serialize_snapshot_id(snapshot_id.clone());
 
         // Get op_coord + snap_id -> state
         let mut op_snap_key_buf = Vec::with_capacity(op_coord_key_buf.len() + snap_id_buf.len());
@@ -191,7 +253,7 @@ impl PersistencyServices for RedisHandler{
         let op_coord_key_buf = serialize_op_coord(op_coord);
                 
         // Serialize snap_id
-        let snap_id_buf= serialize_snapshot_id(snapshot_id);
+        let snap_id_buf= serialize_snapshot_id(snapshot_id.clone());
 
         // Compute key op_coord + snap_id
         let mut op_snap_key_buf = Vec::with_capacity(op_coord_key_buf.len() + snap_id_buf.len());
@@ -211,20 +273,27 @@ impl PersistencyServices for RedisHandler{
         }
 
         // Remove op_coord from list
-        conn.lrem(op_coord_key_buf, 1, snap_id_buf).unwrap_or_else(|e|
+        conn.lrem(op_coord_key_buf.clone(), 1, snap_id_buf).unwrap_or_else(|e|
             panic!("Fail to delete the state: {e:?}")
         );
 
-        /* FIX 
-        let exists: i64 = conn.lpos(op_coord_key_buf, snapshot_id, ).unwrap_or_else(|e|
-            panic!("Fail to delete the state: {e:?}")
-        );
-        if exists >= 0 {
-            panic!("Fail to delete the state for operator: {op_coord} and snapshot_id: {snapshot_id}");
-        }*/
+        // Remove the iter_stack from iter_stack list 
+        let iter_stack =  snapshot_id.iteration_stack.clone();
+        if iter_stack.len() > 0 {
+            let ser_iter_stack = serialize_data(iter_stack);
+            let serial_index = snapshot_id.id().to_be_bytes().to_vec();
+            let mut op_snap_id_key_buf = Vec::with_capacity(op_coord_key_buf.len() + serial_index.len());
+            op_snap_id_key_buf.append(&mut op_coord_key_buf.clone());
+            op_snap_id_key_buf.append(&mut serial_index.clone());
+            assert_eq!(op_snap_id_key_buf.len(), op_coord_key_buf.len() + serial_index.len());
 
-        // Remove op_cord + snap_id from list
-        // TODO
+            // Remove the iter_stack
+            conn.lrem(op_snap_id_key_buf, 1, ser_iter_stack).unwrap_or_else(|e|
+                    panic!("Fail to delete the state: {e:?}")
+                );
+        }
+        
+        
 
         // Log the delete
         log::debug!("Deleted state for operator: {op_coord}, at snapshot id: {snapshot_id}\n",);

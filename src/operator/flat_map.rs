@@ -171,7 +171,7 @@ where
                 StreamElement::Snapshot(snap_id) => {
                     // Save void state and forward snapshot marker
                     // No state because when a snapshot marker arrives frontiter and timestamp are None 
-                    self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snap_id);
+                    self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snap_id.clone());
                     return StreamElement::Snapshot(snap_id);
                 }
             }
@@ -365,7 +365,7 @@ where
                 StreamElement::Snapshot(snap_id) => {
                     // Save void state and forward snapshot marker
                     // No state because when a snapshot marker arrives frontiter and timestamp are None 
-                    self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snap_id);
+                    self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snap_id.clone());
                     return StreamElement::Snapshot(snap_id);
                 }
             }

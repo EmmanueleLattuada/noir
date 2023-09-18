@@ -109,7 +109,7 @@ impl<State: ExchangeData> IterationStateHandler<State> {
         &mut self,
         state_update: StateFeedback<State>,
     ) -> IterationResult {
-        let (should_continue, new_state) = state_update;
+        let (should_continue, new_state, _) = state_update;
 
         // update the state only once per host
         if self.is_local_leader {

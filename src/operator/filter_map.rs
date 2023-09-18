@@ -103,7 +103,7 @@ where
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
                 StreamElement::Snapshot(snap_id) => {
                     // Save void state and forward snapshot marker
-                    self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snap_id);
+                    self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snap_id.clone());
                     return StreamElement::Snapshot(snap_id);
                 }
             }

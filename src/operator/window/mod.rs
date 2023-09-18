@@ -261,7 +261,7 @@ where
                 }
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
                 StreamElement::Snapshot(snap_id) => {
-                    self.save_snap(snap_id);
+                    self.save_snap(snap_id.clone());
                     self.output_buffer.push_back(StreamElement::Snapshot(snap_id));
 
                 }

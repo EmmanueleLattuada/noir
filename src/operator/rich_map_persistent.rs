@@ -145,7 +145,7 @@ where
             }
             StreamElement::Snapshot(snap_id) => {
                 let state = self.states_by_key.clone();
-                self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snap_id, state);
+                self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snap_id.clone(), state);
                 StreamElement::Snapshot(snap_id)
             }
             StreamElement::Watermark(w) => {
