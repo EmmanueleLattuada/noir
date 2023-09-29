@@ -1,6 +1,7 @@
 use noir::StreamEnvironment;
 use noir::operator::sink::StreamOutput;
 use noir::operator::source::IteratorSource;
+use noir::prelude::ParallelIteratorSource;
 use serial_test::serial;
 use super::utils::TestHelper;
 
@@ -333,4 +334,74 @@ fn test_replay_nested_shuffle_both() {
 
     TestHelper::local_remote_env_with_persistency(body, execution_list);
     
+}
+
+
+
+#[test]
+#[serial]
+fn test_replay_snapshot_not_alligned() {
+    let body = |mut env: StreamEnvironment| {
+        let n = 5u64;
+        let n_iter = 5;
+
+        let source = ParallelIteratorSource::new(move |id, instances| {
+            let chunk_size = (n + instances - 1) / instances;
+            let remaining = n - n.min(chunk_size * id);
+            let range = remaining.min(chunk_size);
+        
+            let start = id * chunk_size;
+            let stop = id * chunk_size + range;
+            start..stop
+        });
+        let res = env
+            .stream(source)
+            .map(|x| x)
+            // the body of this iteration does not split the block (it's just a map)
+            .replay(
+                n_iter,
+                1,
+                |s, state| s.map(move |x| x * *state.get()),
+                |delta: &mut u64, x| *delta += x,
+                |old_state, delta| *old_state += delta,
+                |state| {
+                    *state -= 1;
+                    true
+                },
+            )
+            .collect_vec();
+        env.execute_blocking();
+
+        if let Some(res) = res.get() {
+            assert_eq!(res.len(), 1);
+            let res = res.into_iter().next().unwrap();
+
+            let mut state = 1;
+            for _ in 0..n_iter {
+                let s: u64 = (0..n).map(|x| x * state).sum();
+                state = state + s - 1;
+            }
+
+            assert_eq!(res, state);
+        }
+    };
+
+    TestHelper::local_remote_env(body);
+
+    let snap_freq = Some(1);
+
+    let execution_list = vec![
+        // Complete execution
+        TestHelper::persistency_config_test(false, false, None, snap_freq),
+        // Restart from snapshot 1
+        TestHelper::persistency_config_test(true, false, Some(1), snap_freq),
+        // Restart from snapshot 2
+        TestHelper::persistency_config_test(true, false, Some(2), snap_freq),
+        // Restart from snapshot  5, from the last iteration
+        TestHelper::persistency_config_test(true, false, Some(5), snap_freq),
+        // Restart from last snapshot, all operators have terminated
+        TestHelper::persistency_config_test(true, true, None, snap_freq),
+    ];
+
+    TestHelper::local_remote_env_with_persistency(body, execution_list);
 }

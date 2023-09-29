@@ -1,8 +1,9 @@
 use itertools::Itertools;
 
-use noir::operator::source::IteratorSource;
+use noir::{operator::source::IteratorSource, StreamEnvironment, prelude::ParallelIteratorSource};
 
 use super::utils::TestHelper;
+use serial_test::serial;
 
 fn check_result(n: u64, n_iter: usize, state: Option<Vec<u64>>, items: Option<Vec<u64>>) {
     if let Some(res) = state {
@@ -34,8 +35,9 @@ fn check_result(n: u64, n_iter: usize, state: Option<Vec<u64>>, items: Option<Ve
 }
 
 #[test]
+#[serial]
 fn test_iterate_no_blocks_in_between() {
-    TestHelper::local_remote_env(|mut env| {
+    let body = |mut env: StreamEnvironment| {
         let n = 5u64;
         let n_iter = 5;
 
@@ -57,12 +59,32 @@ fn test_iterate_no_blocks_in_between() {
         env.execute_blocking();
 
         check_result(n, n_iter, state.get(), res.get());
-    });
+    };
+
+    TestHelper::local_remote_env(body);
+
+    let snap_freq = Some(1);
+
+    let execution_list = vec![
+        // Complete execution
+        TestHelper::persistency_config_test(false, false, None, snap_freq),
+        // Restart from snapshot 1
+        TestHelper::persistency_config_test(true, false, Some(1), snap_freq),
+        // Restart from snapshot 2
+        TestHelper::persistency_config_test(true, false, Some(2), snap_freq),
+        // Restart from snapshot 5
+        TestHelper::persistency_config_test(true, false, Some(5), snap_freq),
+        // Restart from last snapshot, all operators have terminated
+        TestHelper::persistency_config_test(true, true, None, snap_freq),
+    ];
+
+    TestHelper::local_remote_env_with_persistency(body, execution_list);
 }
 
 #[test]
+#[serial]
 fn test_iterate_side_input() {
-    TestHelper::local_remote_env(|mut env| {
+    let body = |mut env: StreamEnvironment| {
         let n = 5u64;
         let n_iter = 5;
 
@@ -85,12 +107,35 @@ fn test_iterate_side_input() {
         env.execute_blocking();
 
         check_result(n, n_iter, state.get(), res.get());
-    });
+    };
+
+    TestHelper::local_remote_env(body);
+
+    // TODO: fix side inputs
+    /*
+    let snap_freq = Some(1);
+
+    let execution_list = vec![
+        // Complete execution
+        TestHelper::persistency_config_test(false, false, None, snap_freq),
+        // Restart from snapshot 1
+        TestHelper::persistency_config_test(true, false, Some(1), snap_freq),
+        // Restart from snapshot 2
+        TestHelper::persistency_config_test(true, false, Some(2), snap_freq),
+        // Restart from snapshot 5
+        TestHelper::persistency_config_test(true, false, Some(5), snap_freq),
+        // Restart from last snapshot, all operators have terminated
+        TestHelper::persistency_config_test(true, true, None, snap_freq),
+    ];
+
+    TestHelper::local_remote_env_with_persistency(body, execution_list);
+    */
 }
 
 #[test]
+#[serial]
 fn test_iterate_with_shuffle() {
-    TestHelper::local_remote_env(|mut env| {
+    let body = |mut env: StreamEnvironment| {
         let n = 5u64;
         let n_iter = 2;
 
@@ -120,12 +165,32 @@ fn test_iterate_with_shuffle() {
         env.execute_blocking();
 
         check_result(n, n_iter, state.get(), res.get());
-    });
+    };
+
+    TestHelper::local_remote_env(body);
+
+    let snap_freq = Some(1);
+
+    let execution_list = vec![
+        // Complete execution
+        TestHelper::persistency_config_test(false, false, None, snap_freq),
+        // Restart from snapshot 1
+        TestHelper::persistency_config_test(true, false, Some(1), snap_freq),
+        // Restart from snapshot 2
+        TestHelper::persistency_config_test(true, false, Some(2), snap_freq),
+        // Restart from snapshot 5
+        TestHelper::persistency_config_test(true, false, Some(5), snap_freq),
+        // Restart from last snapshot, all operators have terminated
+        TestHelper::persistency_config_test(true, true, None, snap_freq),
+    ];
+
+    TestHelper::local_remote_env_with_persistency(body, execution_list);
 }
 
 #[test]
+#[serial]
 fn test_iterate_primes() {
-    TestHelper::local_remote_env(|mut env| {
+    let body = |mut env: StreamEnvironment| {
         let n = 1000u64;
         let n_iter = (n as f64).sqrt().ceil() as usize;
 
@@ -166,5 +231,79 @@ fn test_iterate_primes() {
             }
             assert_eq!(primes, expected);
         }
-    });
+    };
+
+    TestHelper::local_remote_env(body);
+
+    let snap_freq = Some(20);
+
+    let execution_list = vec![
+        // Complete execution
+        TestHelper::persistency_config_test(false, false, None, snap_freq),
+        // Restart from snapshot 1
+        TestHelper::persistency_config_test(true, false, Some(1), snap_freq),
+        // Restart from snapshot 2
+        TestHelper::persistency_config_test(true, false, Some(2), snap_freq),
+        // Restart from snapshot 5
+        TestHelper::persistency_config_test(true, false, Some(5), snap_freq),
+        // Restart from last snapshot, all operators have terminated
+        TestHelper::persistency_config_test(true, true, None, snap_freq),
+    ];
+
+    TestHelper::local_remote_env_with_persistency(body, execution_list);
+}
+
+
+
+#[test]
+#[serial]
+fn test_iterate_snapshot_not_alligned() {
+    let body = |mut env: StreamEnvironment| {
+        let n = 5u64;
+        let n_iter = 5;
+
+        let source = ParallelIteratorSource::new(move |id, instances| {
+            let chunk_size = (n + instances - 1) / instances;
+            let remaining = n - n.min(chunk_size * id);
+            let range = remaining.min(chunk_size);
+        
+            let start = id * chunk_size;
+            let stop = id * chunk_size + range;
+            start..stop
+        });
+        let (state, res) = env
+            .stream(source)
+            .iterate(
+                n_iter,
+                0u64,
+                |s, state| s.map(move |x| x + *state.get()),
+                |delta: &mut u64, x| *delta += x,
+                |old_state, delta| *old_state += delta,
+                |_state| true,
+            );
+        let state = state.collect_vec();
+        let res = res.collect_vec();
+        env.execute_blocking();
+
+        check_result(n, n_iter, state.get(), res.get());
+    };
+
+    TestHelper::local_remote_env(body);
+
+    let snap_freq = Some(1);
+
+    let execution_list = vec![
+        // Complete execution
+        TestHelper::persistency_config_test(false, false, None, snap_freq),
+        // Restart from snapshot 1
+        TestHelper::persistency_config_test(true, false, Some(1), snap_freq),
+        // Restart from snapshot 2
+        TestHelper::persistency_config_test(true, false, Some(2), snap_freq),
+        // Restart from snapshot 5
+        TestHelper::persistency_config_test(true, false, Some(5), snap_freq),
+        // Restart from last snapshot, all operators have terminated
+        TestHelper::persistency_config_test(true, true, None, snap_freq),
+    ];
+
+    TestHelper::local_remote_env_with_persistency(body, execution_list);
 }
