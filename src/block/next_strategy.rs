@@ -27,6 +27,9 @@ where
     Random,
     /// Among the next replica, the one is selected based on the hash of the key of the message.
     GroupBy(IndexFn, PhantomData<Out>),
+    /// Like previous one but the key is fixed and is the replica index
+    /// Used to allign snapshotId before iterations
+    GroupByReplica(usize),
     /// Every following replica will receive every message.
     All,
 }
@@ -50,6 +53,11 @@ impl<Out: ExchangeData> NextStrategy<Out> {
         NextStrategy::All
     }
 
+    /// Returns `NextStrategy::GroupByReplica`.
+    pub(crate) fn group_by_replica(replica: usize) -> NextStrategy<Out> {
+        NextStrategy::GroupByReplica(replica)
+    }
+
     /// Returns `NextStrategy::OnlyOne` with default `IndexFn`.
     pub(crate) fn only_one() -> NextStrategy<Out> {
         NextStrategy::OnlyOne
@@ -71,6 +79,18 @@ where
             NextStrategy::OnlyOne | NextStrategy::All => 0,
             NextStrategy::Random => tls_rng().generate(),
             NextStrategy::GroupBy(keyer, _) => keyer(message) as usize,
+            NextStrategy::GroupByReplica(replica) => *replica,
+        }
+    }
+
+    pub(crate) fn set_replica(&mut self, new_replica: usize) {
+        match self {
+            NextStrategy::GroupByReplica(replica) => {
+                *replica = new_replica;
+            },
+            _ => {
+                panic!("set_replica can be used only on GroupByReplica strategy")
+            }
         }
     }
 }

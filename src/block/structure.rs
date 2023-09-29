@@ -203,7 +203,7 @@ where
         match strategy {
             NextStrategy::OnlyOne => ConnectionStrategy::OnlyOne,
             NextStrategy::Random => ConnectionStrategy::Random,
-            NextStrategy::GroupBy(_, _) => ConnectionStrategy::GroupBy,
+            NextStrategy::GroupBy(_, _) | NextStrategy::GroupByReplica(_) => ConnectionStrategy::GroupBy,
             NextStrategy::All => ConnectionStrategy::All,
         }
     }

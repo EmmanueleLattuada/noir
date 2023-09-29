@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
 
 use crate::block::{
@@ -40,6 +40,7 @@ where
     ignore_block_ids: Vec<BlockId>,
     persistency_service: Option<PersistencyService<()>>,
     terminated: bool,
+    feedback_pending_snapshots: VecDeque<StreamElement<Out>>,
 }
 
 impl<Out: ExchangeData, OperatorChain, IndexFn> Display for End<Out, OperatorChain, IndexFn>
@@ -79,12 +80,15 @@ where
             ignore_block_ids: Default::default(),
             persistency_service: None,
             terminated: false,
+            feedback_pending_snapshots: VecDeque::default(),
         }
     }
 
     // group the senders based on the strategy
-    fn setup_senders(&mut self) {
+    fn setup_senders(&mut self) -> usize {
         glidesort::sort_by_key(&mut self.senders, |s| s.0);
+
+        let mut groupbyreplica_index = 0;
 
         self.block_senders = match self.next_strategy {
             NextStrategy::All => (0..self.senders.len())
@@ -96,6 +100,10 @@ where
                 .iter()
                 .enumerate()
                 .fold(HashMap::<_, Vec<_>>::new(), |mut map, (i, (coord, _))| {
+                    if coord.coord.host_id == self.operator_coord.host_id &&
+                        coord.coord.replica_id == self.operator_coord.replica_id {
+                            groupbyreplica_index = i;
+                        }
                     map.entry(coord.coord.block_id).or_default().push(i);
                     map
                 })
@@ -109,6 +117,7 @@ where
                 .iter()
                 .for_each(|s| assert_eq!(s.indexes.len(), 1));
         }
+        groupbyreplica_index
     }
 
     /// Mark this `End` as the end of a feedback loop.
@@ -144,6 +153,7 @@ where
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
+        self.operator_coord.from_coord(metadata.coord);
 
         // TODO: wrap sender-block assignment logic in a struct
         let senders = metadata.network.get_senders(metadata.coord);
@@ -154,9 +164,14 @@ where
             .map(|(coord, sender)| (coord, Batcher::new(sender, self.batch_mode, metadata.coord)))
             .collect();
 
-        self.setup_senders();
+        let groupbyreplica_index = self.setup_senders();
 
-        self.operator_coord.from_coord(metadata.coord);
+        
+        // if strategy is GroupByReplica set the right replica id
+        if matches!(self.next_strategy, NextStrategy::GroupByReplica(_)) {
+            self.next_strategy.set_replica(groupbyreplica_index);
+        }
+
         if let Some(pb) = &metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<()>();
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
@@ -187,11 +202,22 @@ where
 
                         // if this block is the end of the feedback loop it should not forward
                         // `Terminate` since the destination is before us in the termination chain,
-                        // and therefore has already left
-                        if matches!(message, StreamElement::Terminate)
-                            && Some(sender.0.coord.block_id) == self.feedback_id
-                        {
-                            continue;
+                        // and therefore has already left.
+                        // same thing may happen with snapshots
+                        if Some(sender.0.coord.block_id) == self.feedback_id {
+                            match &message {
+                                StreamElement::Terminate => continue,
+                                StreamElement::Snapshot(_) => {
+                                    self.feedback_pending_snapshots.push_front(message.clone());
+                                    continue
+                                },
+                                _ => {
+                                    // flush feedback pending snapshots
+                                    while self.feedback_pending_snapshots.len() > 0 {
+                                        sender.1.enqueue(self.feedback_pending_snapshots.pop_back().unwrap());
+                                    }
+                                }
+                            }
                         }
                         sender.1.enqueue(message.clone());
                     }
@@ -203,6 +229,16 @@ where
                 for block in self.block_senders.iter() {
                     let index = index % block.indexes.len();
                     let sender_idx = block.indexes[index];
+                    if Some(self.senders[sender_idx].0.coord.block_id) == self.feedback_id {
+                        // flush feedback pending snapshots
+                        while self.feedback_pending_snapshots.len() > 0 {
+                            self.senders[sender_idx].1.enqueue(self.feedback_pending_snapshots.pop_back().unwrap());
+                        }
+                    }
+                    if matches!(self.next_strategy, NextStrategy::GroupByReplica(_)) {
+                        assert_eq!(self.operator_coord.host_id, self.senders[sender_idx].0.coord.host_id);
+                        assert_eq!(self.operator_coord.replica_id, self.senders[sender_idx].0.coord.replica_id)
+                    }
                     self.senders[sender_idx].1.enqueue(message.clone());
                 }
             }

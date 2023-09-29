@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use serde::{Serialize, Deserialize};
 
-use crate::block::{BlockStructure, NextStrategy, OperatorReceiver, OperatorStructure};
+use crate::block::{BlockStructure, NextStrategy, OperatorReceiver, OperatorStructure, Block};
 use crate::environment::StreamEnvironmentInner;
 use crate::network::OperatorCoord;
 use crate::operator::end::End;
@@ -15,7 +15,7 @@ use crate::operator::iteration::state_handler::IterationStateHandler;
 use crate::operator::iteration::{
     IterationResult, IterationStateHandle, IterationStateLock, StateFeedback,
 };
-use crate::operator::{ExchangeData, Operator, StreamElement, SnapshotId};
+use crate::operator::{ExchangeData, Operator, StreamElement, SnapshotId, Start, SimpleStartReceiver};
 use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{BlockId, ExecutionMetadata, OperatorId};
 use crate::stream::Stream;
@@ -24,9 +24,7 @@ use crate::stream::Stream;
 ///
 /// If a new iteration should start, the initial dataset is replayed.
 #[derive(Debug, Clone)]
-pub struct Replay<Out: ExchangeData, State: ExchangeData, OperatorChain>
-where
-    OperatorChain: Operator<Out>,
+pub struct Replay<Out: ExchangeData, State: ExchangeData>
 {
     /// The coordinate of this operator.
     operator_coord: OperatorCoord,
@@ -35,7 +33,7 @@ where
     state: IterationStateHandler<State>,
 
     /// The chain of previous operators where the dataset to replay is read from.
-    prev: OperatorChain,
+    prev: Start<Out, SimpleStartReceiver<Out>>,
 
     /// The content of the stream to replay.
     content: Vec<StreamElement<Out>>,
@@ -66,9 +64,7 @@ struct ReplayState<Out, State> {
     input_finished: bool,
 }
 
-impl<Out: ExchangeData, State: ExchangeData, OperatorChain> Display for Replay<Out, State, OperatorChain>
-where
-    OperatorChain: Operator<Out>,
+impl<Out: ExchangeData, State: ExchangeData> Display for Replay<Out, State>
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -80,12 +76,10 @@ where
     }
 }
 
-impl<Out: ExchangeData, State: ExchangeData, OperatorChain> Replay<Out, State, OperatorChain>
-where
-    OperatorChain: Operator<Out>,
+impl<Out: ExchangeData, State: ExchangeData> Replay<Out, State>
 {
     fn new(
-        prev: OperatorChain,
+        prev: Start<Out, SimpleStartReceiver<Out>>,
         state_ref: IterationStateHandle<State>,
         leader_block_id: BlockId,
         state_lock: Arc<IterationStateLock>,
@@ -215,10 +209,8 @@ where
     }
 }
 
-impl<Out: ExchangeData, State: ExchangeData + Sync, OperatorChain> Operator<Out>
-    for Replay<Out, State, OperatorChain>
-where
-    OperatorChain: Operator<Out>,
+impl<Out: ExchangeData, State: ExchangeData + Sync> Operator<Out>
+    for Replay<Out, State>
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.operator_coord.from_coord(metadata.coord);
@@ -407,7 +399,7 @@ where
     ) -> Stream<State, impl Operator<State>>
     where
         Body: FnOnce(
-            Stream<Out, Replay<Out, State, OperatorChain>>,
+            Stream<Out, Replay<Out, State>>,
             IterationStateHandle<State>,
         ) -> Stream<Out, OperatorChain2>,
         OperatorChain2: Operator<Out> + 'static,
@@ -439,7 +431,7 @@ where
             iter_stack_level,
         );
         let mut output_stream = StreamEnvironmentInner::stream(
-            env,
+            env.clone(),
             leader,
         );
         let leader_block_id = output_stream.block.id;
@@ -449,8 +441,68 @@ where
         // the lock for synchronizing the access to the state of this iteration
         let state_lock = Arc::new(IterationStateLock::default());
 
+        let batch_mode = self.block.batch_mode;
+        let input_block_id;
+        let iter_ctx = self.block.iteration_ctx.clone();
+
+        // This change
+        let mut input_block = None;
+        let mut allign_block = None;
+
+        // Add block to allign snapshots tokens if this is not a nested iteration
+        // and if persistency is configured (to avoid unnecessary overhead)
+        let persistency = {
+            let env = env.lock();
+            env.config.persistency_configuration.is_some()
+        };
+        if self.block.iteration_ctx().len() == 0 && persistency {
+            // Add allignment block
+            let input_stream = self.split_block(
+                End::new, 
+                NextStrategy::group_by_replica(0)   // The right replica id is known only after setup, so this will be overwritten
+            );
+            let mut input = input_stream.add_operator(|prev| End::new(
+                prev, 
+                NextStrategy::only_one(), 
+                batch_mode
+            ));
+            input.block.is_only_one_strategy = true;
+            input_block_id = input.block.id;
+            allign_block = Some(input.block);
+
+        } else {
+            let mut input = self.add_operator(|prev| End::new(
+                prev, 
+                NextStrategy::only_one(), 
+                batch_mode
+            ));
+            input.block.is_only_one_strategy = true;
+            input_block_id = input.block.id;
+            input_block = Some(input.block);
+        }
+
+        let replay_block_id = {
+            let mut env = env.lock();
+            env.new_block_id()
+        };
+        let replay_source = Start::single(
+            input_block_id,
+            iter_ctx.last().cloned(),
+            iter_ctx.len(),
+        );
+
+        let rep_start = Stream {
+            block: Block::new(
+                replay_block_id,
+                replay_source,
+                batch_mode,
+                iter_ctx,
+            ),
+            env: env.clone(),
+        };       
+        
         let mut iter_start =
-            self.add_operator(|prev| Replay::new(prev, state, leader_block_id, state_lock.clone(), iter_stack_level));
+            rep_start.add_operator(|prev| Replay::new(prev, state, leader_block_id, state_lock.clone(), iter_stack_level));
         let replay_block_id = iter_start.block.id;
 
         // save the stack of the iteration for checking the stream returned by the body
@@ -474,6 +526,12 @@ where
         let mut env = iter_end.env.lock();
         let scheduler = env.scheduler_mut();
         scheduler.schedule_block(iter_end.block);
+        if input_block.is_some() {
+            scheduler.schedule_block(input_block.unwrap());
+        } else {
+            scheduler.schedule_block(allign_block.unwrap());
+        }
+        scheduler.connect_blocks(input_block_id, replay_block_id, TypeId::of::<Out>());
         // connect the IterationEnd to the IterationLeader
         scheduler.connect_blocks(
             iteration_end_block_id,

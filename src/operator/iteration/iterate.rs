@@ -4,6 +4,10 @@ use std::fmt::Display;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use hashbrown::HashMap;
+use itertools::Itertools;
+use serde::{Serialize, Deserialize};
+
 use crate::block::{
     Block, BlockStructure, Connection, NextStrategy, OperatorReceiver, OperatorStructure,
     Replication,
@@ -21,7 +25,8 @@ use crate::operator::iteration::{
 };
 use crate::operator::source::Source;
 use crate::operator::start::Start;
-use crate::operator::{ExchangeData, Operator, StreamElement};
+use crate::operator::{ExchangeData, Operator, StreamElement, SnapshotId};
+use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{BlockId, ExecutionMetadata, OperatorId};
 use crate::stream::Stream;
 
@@ -36,10 +41,6 @@ fn clone_with_default<T: Default>(_: &T) -> T {
 #[derivative(Debug, Clone)]
 pub struct Iterate<Out: ExchangeData, State: ExchangeData> {
     /// The coordinate of this replica.
-    coord: Coord,
-
-    /// Operator coordinate. 
-    // TODO: fix it
     operator_coord: OperatorCoord,
 
     /// Helper structure that manages the iteration's state.
@@ -70,6 +71,26 @@ pub struct Iterate<Out: ExchangeData, State: ExchangeData> {
 
     /// Whether the input stream has ended or not.
     input_finished: bool,
+
+    /// Persistency service
+    persistency_service: Option<PersistencyService<IterateState<Out, State>>>,
+    /// Strutcure to handle partial snapshots
+    on_going_snapshots: HashMap<SnapshotId, IterateState<Out, State>>,
+    /// Pending snapshot
+    pending_snapshot: Option<SnapshotId>,
+    /// State recovered from snaphot
+    recovered_state: Option<State>,
+    /// Level of this iterator
+    iter_stack_level: usize,
+    should_flush: bool,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+struct IterateState<Out, State> {
+    content: VecDeque<StreamElement<Out>>,
+    feedback_content: VecDeque<StreamElement<Out>>,
+    input_finished: bool,
+    state: State,
 }
 
 impl<Out: ExchangeData, State: ExchangeData> Iterate<Out, State> {
@@ -80,24 +101,30 @@ impl<Out: ExchangeData, State: ExchangeData> Iterate<Out, State> {
         feedback_end_block_id: Arc<AtomicUsize>,
         output_block_id: Arc<AtomicUsize>,
         state_lock: Arc<IterationStateLock>,
+        iter_stack_level: usize,
     ) -> Self {
         Self {
             // these fields will be set inside the `setup` method
-            coord: Coord::new(0, 0, 0),
+            operator_coord: OperatorCoord::new(0, 0, 0, 0),
             input_receiver: None,
             feedback_receiver: None,
             feedback_end_block_id,
             input_block_id,
             output_sender: None,
             output_block_id,
-            // TODO: Check this, is the first op in the chain?
-            operator_coord: OperatorCoord::new(0, 0, 0, 0),
-
+            
             content: Default::default(),
             input_stash: Default::default(),
             feedback_content: Default::default(),
             input_finished: false,
             state: IterationStateHandler::new(leader_block_id, state_ref, state_lock),
+
+            persistency_service: None,
+            on_going_snapshots: HashMap::default(),
+            pending_snapshot: None,
+            recovered_state: None,
+            iter_stack_level,
+            should_flush: false,
         }
     }
 
@@ -106,15 +133,56 @@ impl<Out: ExchangeData, State: ExchangeData> Iterate<Out, State> {
 
         let el = match &item {
             StreamElement::FlushAndRestart => {
-                log::debug!("input finished for iterate {}", self.coord);
+                log::debug!("input finished for iterate {}", self.operator_coord.get_coord());
                 self.input_finished = true;
                 // since this moment accessing the state for the next iteration must wait
                 self.state.lock();
                 StreamElement::FlushAndRestart
             }
-            // TODO: handle snapshot marker
-            StreamElement::Snapshot(_) => {
-                panic!("Snapshot not supported for iterate operator")
+            StreamElement::Snapshot(snapshot_id) => {
+                // This snapshot comes from outside
+                // input stash don't need to be saved, previus operators will send again same data
+                // content should be empty
+                // feedback should be saved we snapshot token arrive from that channel
+
+                // fix snapshot id: iter_stack should be of the same lenght of this iteration level
+                let mut snap_id = snapshot_id.clone();
+                while snap_id.iteration_stack.len() < self.iter_stack_level {
+                    // put 0 at each missing level
+                    snap_id.iteration_stack.push(0);
+                }       
+                // Check if its already in the map
+                if let Some(mut state) = self.on_going_snapshots.remove(&snap_id){
+                    // Complete and save this snapshot
+
+                    assert!(state.content.len() == 0);
+                    assert!(self.content.len() == 0);
+
+                    state.input_finished = self.input_finished;
+                    self.persistency_service
+                        .as_mut()
+                        .unwrap()
+                        .save_state(
+                            self.operator_coord,
+                            snap_id.clone(), 
+                            state,
+                        );  
+                } else {        
+                    //save state in the map
+                    let state = IterateState {
+                        content: self.content.clone(),                      // should be empty
+                        feedback_content: VecDeque::default(),              // overwritten later
+                        input_finished: self.input_finished,
+                        state: self.state.state_ref.get().clone(),
+                    };
+                    self.on_going_snapshots.insert(snap_id.clone(), state);
+                }
+                // Send the snapshot token also to output block
+                let mut snap_id_out = snap_id.clone();
+                snap_id_out.iteration_stack.pop();
+                let message = NetworkMessage::new_single(StreamElement::Snapshot(snap_id_out), self.operator_coord.get_coord());
+                self.output_sender.as_ref().unwrap().send(message).unwrap();
+                return Some(StreamElement::Snapshot(snap_id)); 
             }
 
             StreamElement::Item(_)
@@ -122,8 +190,39 @@ impl<Out: ExchangeData, State: ExchangeData> Iterate<Out, State> {
             | StreamElement::Watermark(_)
             | StreamElement::FlushBatch => item,
             StreamElement::Terminate => {
-                log::debug!("Iterate at {} is terminating", self.coord);
-                let message = NetworkMessage::new_single(StreamElement::Terminate, self.coord);
+                log::debug!("Iterate at {} is terminating", self.operator_coord.get_coord());
+                if self.persistency_service.is_some() {
+                    // flush all on going snapshots
+                    let mut partial_snapshots = self.on_going_snapshots.keys().collect_vec();
+                    partial_snapshots.sort();
+                    for snap_id in partial_snapshots {
+                        let state = self.on_going_snapshots.get(snap_id).unwrap();
+                        self.persistency_service
+                            .as_mut()
+                            .unwrap()
+                            .save_state(
+                                self.operator_coord,
+                                snap_id.clone(), 
+                                state.clone(),
+                            );
+                    }
+                    // save terminated state
+                    let state = IterateState {
+                        state: self.state.state_ref.get().clone(),
+                        content: self.content.clone(),
+                        feedback_content: self.feedback_content.clone(),
+                        input_finished: self.input_finished,
+                    };
+                    self.persistency_service
+                        .as_mut()
+                        .unwrap()
+                        .save_terminated_state(
+                            self.operator_coord,
+                            state,
+                        );
+                }               
+                // send Terminate to output block
+                let message = NetworkMessage::new_single(StreamElement::Terminate, self.operator_coord.get_coord());
                 self.output_sender.as_ref().unwrap().send(message).unwrap();
                 item
             }
@@ -133,11 +232,23 @@ impl<Out: ExchangeData, State: ExchangeData> Iterate<Out, State> {
 
     fn next_stored(&mut self) -> Option<StreamElement<Out>> {
         let item = self.content.pop_front()?;
-        if matches!(item, StreamElement::FlushAndRestart) {
-            // since this moment accessing the state for the next iteration must wait
-            self.state.lock();
-        }
-        Some(item)
+        let el = match &item {
+            StreamElement::FlushAndRestart => {
+                // since this moment accessing the state for the next iteration must wait
+                self.state.lock();
+                item
+            }
+            StreamElement::Snapshot(_) => {
+                panic!("Snapshot token must not be saved in content or feedback_content")
+            }
+            StreamElement::Item(_)
+            | StreamElement::Timestamped(_, _)
+            | StreamElement::Watermark(_)
+            | StreamElement::FlushBatch
+            | StreamElement::Terminate => item,
+        };
+
+        Some(el)
     }
 
     fn feedback_finished(&self) -> bool {
@@ -145,6 +256,35 @@ impl<Out: ExchangeData, State: ExchangeData> Iterate<Out, State> {
             self.feedback_content.back(),
             Some(StreamElement::FlushAndRestart)
         )
+    }
+
+    fn handle_feedback_snapshot(&mut self, snap_id: SnapshotId) {
+        // Handle partial snapshot
+        if snap_id.iteration_stack[self.iter_stack_level - 1] == 0 {
+            if let Some(mut state) = self.on_going_snapshots.remove(&snap_id){
+                // Complete and save this snapshot
+                state.feedback_content = self.feedback_content.clone();
+                self.persistency_service
+                    .as_mut()
+                    .unwrap()
+                    .save_state(
+                        self.operator_coord,
+                        snap_id.clone(), 
+                        state,
+                    );  
+            } else {
+                // I recevived this snap from the feedback channel but not yet from input channel
+                //save state in the map
+                let state = IterateState {
+                    content: self.content.clone(),                      // should be empty
+                    feedback_content: VecDeque::default(),              // fixed do not overwrite it later
+                    input_finished: self.input_finished,                // overwrite it later
+                    state: self.state.state_ref.get().clone(), 
+                };
+                self.on_going_snapshots.insert(snap_id.clone(), state);
+            }
+        }
+        // A snapshot generated by leader is saved immediately by iterate so just ignore it        
     }
 
     pub(crate) fn input_or_feedback(&mut self) {
@@ -156,7 +296,17 @@ impl<Out: ExchangeData, State: ExchangeData> Iterate<Out, State> {
                     self.input_stash.extend(msg.into_iter());
                 }
                 SelectResult::B(Ok(msg)) => {
-                    self.feedback_content.extend(msg.into_iter());
+                    // Check if it is a snapshot
+                    for el in msg.into_iter() {
+                        match el {
+                            StreamElement::Snapshot(snap_id) => {
+                                self.handle_feedback_snapshot(snap_id);
+                            },
+                            _ => {
+                                self.feedback_content.push_back(el);
+                            }
+                        }
+                    }
                 }
                 SelectResult::A(Err(Disconnected)) => {
                     self.input_receiver = None;
@@ -168,8 +318,18 @@ impl<Out: ExchangeData, State: ExchangeData> Iterate<Out, State> {
                 }
             }
         } else {
-            self.feedback_content
-                .extend(rx_feedback.recv().unwrap().into_iter());
+            let msg = rx_feedback.recv().unwrap();
+            // Check if it is a snapshot
+            for el in msg.into_iter() {
+                match el {
+                    StreamElement::Snapshot(snap_id) => {
+                        self.handle_feedback_snapshot(snap_id);
+                    },
+                    _ => {
+                        self.feedback_content.push_back(el);
+                    }
+                }
+            }
         }
     }
 
@@ -217,7 +377,7 @@ impl<Out: ExchangeData, State: ExchangeData> Iterate<Out, State> {
 
 impl<Out: ExchangeData, State: ExchangeData + Sync> Operator<Out> for Iterate<Out, State> {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
-        self.coord = metadata.coord;
+        self.operator_coord.from_coord(metadata.coord);
 
         let endpoint = ReceiverEndpoint::new(metadata.coord, self.input_block_id);
         self.input_receiver = Some(metadata.network.get_receiver(endpoint));
@@ -239,16 +399,83 @@ impl<Out: ExchangeData, State: ExchangeData + Sync> Operator<Out> for Iterate<Ou
 
         self.state.setup(metadata);
 
-        self.operator_coord.block_id = metadata.coord.block_id;
-        self.operator_coord.host_id = metadata.coord.host_id;
-        self.operator_coord.replica_id = metadata.coord.replica_id;
+        if let Some(pb) = &metadata.persistency_builder {
+            let p_service = pb.generate_persistency_service::<IterateState<Out, State>>();
+            let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
+            if let Some(snap_id) = snapshot_id {
+                if snap_id.iteration_stack.last() != Some(&0) && !snap_id.terminate() {
+                    self.should_flush = true;
+                }
+                // Get and resume the persisted state
+                let opt_state: Option<IterateState<Out, State>> = p_service.get_state(self.operator_coord, snap_id.clone());
+                if let Some(state) = opt_state {
+                    self.recovered_state = Some(state.state.clone());
+                    self.content = state.content.clone();
+                    self.feedback_content = state.feedback_content.clone();
+                    self.input_finished = state.input_finished;
+                } else {
+                    panic!("No persisted state founded for op: {0}", self.operator_coord);
+                }
+            }
+            self.persistency_service = Some(p_service);
+        }
+
     }
 
     fn next(&mut self) -> StreamElement<Out> {
+        // recover state if needed
+        if let Some(r_state) = self.recovered_state.take(){
+            let recovery_update = (IterationResult::Continue, r_state, None);
+            self.state.lock();
+            self.state.wait_sync_state(recovery_update);
+        }
+        // if i restart from an internal snapshot at this level of iter stack i need to flush all input
+        while self.should_flush {
+            let msg = self.input_receiver.as_ref().unwrap().recv().unwrap();
+            for el in msg.into_iter() {
+                match el {
+                    StreamElement::FlushAndRestart => {
+                        self.should_flush = false;
+                    }
+                    _ => {}
+                }
+            }
+        }
         loop {
+            // Snapshot if required
+            // The snapshot must be done at the start of the iteration
+            if let Some(snap_id) = self.pending_snapshot.take() {
+                //save state
+                let state = IterateState {
+                    state: self.state.state_ref.get().clone(),
+                    content: self.content.clone(),
+                    feedback_content: self.feedback_content.clone(), // should be empty
+                    input_finished: self.input_finished,
+                };
+                self.persistency_service
+                    .as_mut()
+                    .unwrap()
+                    .save_state(
+                        self.operator_coord,
+                        snap_id.clone(), 
+                        state,
+                    );
+                return StreamElement::Snapshot(snap_id);
+            }
+            
             // try to make progress on the feedback
             while let Ok(message) = self.feedback_receiver.as_ref().unwrap().try_recv() {
-                self.feedback_content.extend(&mut message.into_iter());
+                // Checks for snapshots
+                for el in message.into_iter() {
+                    match el {
+                        StreamElement::Snapshot(snap_id) => {
+                            self.handle_feedback_snapshot(snap_id);
+                        },
+                        _ => {
+                            self.feedback_content.push_back(el);
+                        }
+                    }
+                }
             }
 
             if !self.input_finished {
@@ -269,19 +496,25 @@ impl<Out: ExchangeData, State: ExchangeData + Sync> Operator<Out> for Iterate<Ou
 
             // All feedback received
 
-            log::debug!("Iterate at {} has finished the iteration", self.coord);
+            // from now do like replay, i can snapshot immediately since content should 
+            // be full and feedback should be empty
+
+            log::debug!("Iterate at {} has finished the iteration", self.operator_coord.get_coord());
             assert!(self.content.is_empty());
             std::mem::swap(&mut self.content, &mut self.feedback_content);
 
             let state_update = self.wait_update();
 
+            // Get snapshot id to be used at next iteration snapshot
+            self.pending_snapshot = state_update.2.clone();
+
             if let IterationResult::Finished = self.state.wait_sync_state(state_update) {
-                log::debug!("Iterate block at {} finished", self.coord,);
+                log::debug!("Iterate block at {} finished", self.operator_coord.get_coord());
                 // cleanup so that if this is a nested iteration next time we'll be good to start again
                 self.input_finished = false;
 
                 let message =
-                    NetworkMessage::new_batch(self.content.drain(..).collect(), self.coord);
+                    NetworkMessage::new_batch(self.content.drain(..).collect(), self.operator_coord.get_coord());
                 self.output_sender.as_ref().unwrap().send(message).unwrap();
             }
 
@@ -439,14 +672,48 @@ where
         // the output stream is outside this loop, so it doesn't have the lock for this state
         leader_stream.block.iteration_ctx = self.block.iteration_ctx.clone();
 
+        let batch_mode = self.block.batch_mode;
+        let input_block_id;
+        let iter_ctx = self.block.iteration_ctx.clone();
+
+        // This change
+        let mut input_block = None;
+        let mut allign_block = None;
+
+        // Add block to allign snapshots tokens if this is not a nested iteration
+        // and if persistency is configured (to avoid unnecessary overhead)
+        let persistency = {
+            let env = env.lock();
+            env.config.persistency_configuration.is_some()
+        };
+        if self.block.iteration_ctx().len() == 0 && persistency {
+            // Add allignment block
+            let input_stream = self.split_block(
+                End::new, 
+                NextStrategy::group_by_replica(0)   // The right replica id is known only after setup, so this will be overwritten
+            );
+            let mut input = input_stream.add_operator(|prev| End::new(
+                prev, 
+                NextStrategy::only_one(), 
+                batch_mode
+            ));
+            input.block.is_only_one_strategy = true;
+            input_block_id = input.block.id;
+            allign_block = Some(input.block);
+
+        } else {
+            let mut input = self.add_operator(|prev| End::new(
+                prev, 
+                NextStrategy::only_one(), 
+                batch_mode
+            ));
+            input.block.is_only_one_strategy = true;
+            input_block_id = input.block.id;
+            input_block = Some(input.block);
+        }
+
         // the lock for synchronizing the access to the state of this iteration
         let state_lock = Arc::new(IterationStateLock::default());
-
-        let input_block_id = self.block.id;
-        let batch_mode = self.block.batch_mode;
-        let mut input =
-            self.add_operator(|prev| End::new(prev, NextStrategy::only_one(), batch_mode));
-        input.block.is_only_one_strategy = true;
 
         let iterate_block_id = {
             let mut env = env.lock();
@@ -459,6 +726,7 @@ where
             shared_feedback_end_block_id.clone(),
             shared_output_block_id.clone(),
             state_lock.clone(),
+            iter_stack_level,
         );
 
         let mut iter_start = Stream {
@@ -466,7 +734,7 @@ where
                 iterate_block_id,
                 iter_source,
                 batch_mode,
-                input.block.iteration_ctx.clone(),
+                iter_ctx,
             ),
             env: env.clone(),
         };
@@ -481,7 +749,7 @@ where
             Start::single(
                 iterate_block_id,
                 iter_start.block.iteration_ctx.last().cloned(),
-                0, // FIX
+                iter_stack_level - 1,
             ),
         );
         let output_block_id = output.block.id;
@@ -510,7 +778,7 @@ where
         // First split of the body: the data will be reduced into delta updates
         let state_update_end = StreamEnvironmentInner::stream(
             env.clone(),
-            Start::single(body.block.id, Some(state_lock), 0), // FIX
+            Start::single(body.block.id, Some(state_lock), iter_stack_level),
         )
         .key_by(|_| ())
         .fold(StateUpdate::default(), local_fold)
@@ -532,7 +800,11 @@ where
         let scheduler = env.scheduler_mut();
         scheduler.schedule_block(state_update_end.block);
         scheduler.schedule_block(feedback_end.block);
-        scheduler.schedule_block(input.block);
+        if input_block.is_some() {
+            scheduler.schedule_block(input_block.unwrap());
+        } else {
+            scheduler.schedule_block(allign_block.unwrap());
+        }
         scheduler.connect_blocks(input_block_id, iterate_block_id, TypeId::of::<Out>());
         // connect the end of the loop to the IterationEnd
         scheduler.connect_blocks(
