@@ -51,7 +51,9 @@ pub(crate) trait StartReceiver<Out>: Clone {
     /// Type of the state of the receiver
     type ReceiverState: ExchangeData + Debug;
     /// Get the state of the receiver
-    fn get_state(&self) -> Option<Self::ReceiverState>;
+    fn get_state(&mut self, snap_id: SnapshotId) -> Option<Self::ReceiverState>;
+    /// True if receiver keep snapshot message queue, false if not
+    fn keep_msg_queue(&self) -> bool;
     /// Set the state of the receiver
     fn set_state(&mut self, receiver_state: Option<Self::ReceiverState>);
 }
@@ -151,6 +153,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData>
                 previous_block_id2,
                 left_cache,
                 right_cache,
+                iteration_stack_level,
             ),
             state_lock,
             iteration_stack_level,
@@ -200,39 +203,69 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
         self.last_snapshots.insert(sender, snap_id.clone());
         // Check if is already arrived this snapshot id
         if self.on_going_snapshots.contains_key(&snap_id) {
-            // Remove the sender from the set of previous replicas for this snapshot
-            self.on_going_snapshots.get_mut(&snap_id).unwrap().1.remove(&sender);
-            // Check if there are no more replicas
-            if self.on_going_snapshots.get(&snap_id).unwrap().1.len() == 0 {
-                // This snapshot is complete: now i can save it 
-                let state = self.on_going_snapshots.remove(&snap_id).unwrap().0;
-                self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snap_id, state);
+            if self.receiver.keep_msg_queue() {
+                // if receiver returns state, is ready to be persisted
+                if let Some(receiver_state) = self.receiver.get_state(snap_id.clone()){
+                    // This snapshot is complete: now i can save it 
+                    let mut state = self.on_going_snapshots.remove(&snap_id).unwrap().0;
+                    state.receiver_state = Some(receiver_state);
+                    self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snap_id, state);
+                }
+            } else {
+                // Remove the sender from the set of previous replicas for this snapshot
+                self.on_going_snapshots.get_mut(&snap_id).unwrap().1.remove(&sender);
+                // Check if there are no more replicas
+                if self.on_going_snapshots.get(&snap_id).unwrap().1.len() == 0 {
+                    // This snapshot is complete: now i can save it 
+                    let state = self.on_going_snapshots.remove(&snap_id).unwrap().0;
+                    self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snap_id, state);
+                }
             }
             // I've already forwarded the snapshot marker
             None
         } else {
-            // Save current state, messages will be add then 
-            let state: StartState<Out, Receiver>= StartState{
-                missing_flush_and_restart: self.missing_flush_and_restart as u64,
-                wait_for_state: self.wait_for_state,
-                watermark_forntier: self.watermark_frontier.clone(),
-                receiver_state: self.receiver.get_state(),
-                message_queue: VecDeque::default(),
-            };
-
-            // Set all previous replicas that have to send this snapshot id
-            let mut prev_replicas = HashSet::from_iter(self.receiver().prev_replicas());
-            prev_replicas.remove(&sender);
-            for replica in self.terminated_replicas.iter() {
-                prev_replicas.remove(replica);
-            }
-            // Check if the snapshot is already complete
-            if prev_replicas.len() == 0 {
-                // This snapshot is complete: i can save it immediately 
-                self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snap_id.clone(), state);
+            if self.receiver.keep_msg_queue() {
+                // Save current state, receiver state will be add then 
+                let mut state: StartState<Out, Receiver>= StartState{
+                    missing_flush_and_restart: self.missing_flush_and_restart as u64,
+                    wait_for_state: self.wait_for_state,
+                    watermark_forntier: self.watermark_frontier.clone(),
+                    receiver_state: None,
+                    message_queue: VecDeque::default(),
+                };
+                // Check if the snapshot is already complete
+                if let Some(receiver_state) = self.receiver.get_state(snap_id.clone()){
+                    // This snapshot is complete: now i can save it 
+                    state.receiver_state = Some(receiver_state);
+                    self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snap_id.clone(), state);
+                } else {
+                    // Add a new entry in the map with this snapshot id, i don't care about prev replicas
+                    self.on_going_snapshots.insert(snap_id.clone(), (state, HashSet::new()));
+                }
             } else {
-                // Add a new entry in the map with this snapshot id
-                self.on_going_snapshots.insert(snap_id.clone(), (state, prev_replicas));
+                // Save current state, messages will be add then 
+                let state: StartState<Out, Receiver>= StartState{
+                    missing_flush_and_restart: self.missing_flush_and_restart as u64,
+                    wait_for_state: self.wait_for_state,
+                    watermark_forntier: self.watermark_frontier.clone(),
+                    receiver_state: self.receiver.get_state(snap_id.clone()),
+                    message_queue: VecDeque::default(),
+                };
+
+                // Set all previous replicas that have to send this snapshot id
+                let mut prev_replicas = HashSet::from_iter(self.receiver().prev_replicas());
+                prev_replicas.remove(&sender);
+                for replica in self.terminated_replicas.iter() {
+                    prev_replicas.remove(replica);
+                }
+                // Check if the snapshot is already complete
+                if prev_replicas.len() == 0 {
+                    // This snapshot is complete: i can save it immediately 
+                    self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snap_id.clone(), state);
+                } else {
+                    // Add a new entry in the map with this snapshot id
+                    self.on_going_snapshots.insert(snap_id.clone(), (state, prev_replicas));
+                }
             }
             // Forward the snapshot marker
             Some(snap_id)
@@ -240,39 +273,41 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
     }
     #[inline(never)]
     fn add_item_to_snapshot(&mut self, item: StreamElement<Out>, sender: Coord) {
-        // Add item to message queue state 
-        for entry in self.on_going_snapshots.iter_mut() {
-            if entry.1.1.contains(&sender) {
-                entry.1.0.message_queue.push_back((sender, item.clone()));
+        if !self.receiver.keep_msg_queue() {
+            // Add item to message queue state 
+            for entry in self.on_going_snapshots.iter_mut() {
+                if entry.1.1.contains(&sender) {
+                    entry.1.0.message_queue.push_back((sender, item.clone()));
+                }
             }
         }
     }
     #[inline(never)]
-    fn process_terminate(&mut self, sender: Coord) -> Option<SnapshotId> {
-        // Sender terminated: it did implicitely a terminate snapshot, continue that snapshot
+    fn process_terminate(&mut self, sender: Coord){
+        // Be sure this is the first Terminate we receive 
         let mut snapshot_id = self.last_snapshots.get(&sender)
             .unwrap_or(&SnapshotId::new(0))
             .clone();
         if snapshot_id.terminate() {
             // Sender has already terminated, we can just ignore it 
-            return None;
+            return;
         }
         snapshot_id = snapshot_id.next();
         let term_snap = SnapshotId::new_terminate(snapshot_id.id());
         self.last_snapshots.insert(sender, term_snap);
-        let mut result: Option<SnapshotId> = None;
         // Add sender to terminated replicas
-        self.terminated_replicas.push(sender);        
-        // Check if is already arrived this snapshot id
-        if self.on_going_snapshots.contains_key(&snapshot_id) {
-            // Fix on going snapshot by remove sender form sets of partial snapshots with id >= snap_id
-            let mut future_snap: Vec<SnapshotId> = self.on_going_snapshots
-                .keys()
-                .filter(|id| id.id() >= snapshot_id.id())
-                .cloned()
-                .collect();
-            future_snap.sort();
-            for partial_snapshot in future_snap {
+        self.terminated_replicas.push(sender); 
+        let mut future_snap: Vec<SnapshotId> = self.on_going_snapshots.keys().cloned().collect();
+        future_snap.sort();
+        for partial_snapshot in future_snap {
+            if self.receiver.keep_msg_queue() {
+                if let Some(receiver_state) = self.receiver.get_state(partial_snapshot.clone()){
+                    // This snapshot is complete: now i can save it 
+                    let mut state = self.on_going_snapshots.remove(&partial_snapshot).unwrap().0;
+                    state.receiver_state = Some(receiver_state);
+                    self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, partial_snapshot, state);
+                }
+            } else {
                 // Remove the sender from the set of previous replicas for this snapshot
                 self.on_going_snapshots.get_mut(&partial_snapshot).unwrap().1.remove(&sender);
                 // Check if there are no more replicas
@@ -282,34 +317,7 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
                     self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, partial_snapshot, state);
                 }
             }
-        } else {
-            // Save current state, messages will be add then 
-            let state: StartState<Out, Receiver>= StartState{
-                missing_flush_and_restart: self.missing_flush_and_restart as u64,
-                wait_for_state: self.wait_for_state,
-                watermark_forntier: self.watermark_frontier.clone(),
-                receiver_state: self.receiver.get_state(),
-                message_queue: VecDeque::default(),
-            };
-
-            // Set all previous replicas that have to send this snapshot id
-            let mut prev_replicas = HashSet::from_iter(self.receiver().prev_replicas());
-            prev_replicas.remove(&sender);
-            for replica in self.terminated_replicas.iter() {
-                prev_replicas.remove(replica);
-            }
-            // Check if the snapshot is already complete
-            if prev_replicas.len() == 0 {
-                // This snapshot is complete: i can save it immediately 
-                self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id.clone(), state);
-            } else {
-                // Add a new entry in the map with this snapshot id
-                self.on_going_snapshots.insert(snapshot_id.clone(), (state, prev_replicas));
-            }
-            // Forward the snapshot marker
-            result = Some(snapshot_id);
         }
-        result
     }
 
 }
@@ -388,7 +396,7 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Operator<
                         missing_flush_and_restart: self.missing_flush_and_restart as u64,
                         wait_for_state: self.wait_for_state,
                         watermark_forntier: self.watermark_frontier.clone(),
-                        receiver_state: self.receiver.get_state(),
+                        receiver_state: None, 
                         // This is empty since all previous replicas terminated, so no more messages will arrive
                         message_queue: VecDeque::default(),
                     };
@@ -479,15 +487,9 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Operator<
                                 );
                                 // If persistency is on, process_terminate. This may return a Snapshot marker 
                                 if self.persistency_service.is_some() {
-                                    let to_forward = self.process_terminate(sender);
-                                    if to_forward.is_none() {
-                                        continue;
-                                    } else {
-                                        StreamElement::Snapshot(to_forward.unwrap())
-                                    }
-                                } else {
-                                    continue;
-                                }
+                                    self.process_terminate(sender);
+                                } 
+                                continue;
                             }
                             StreamElement::Snapshot(mut snapshot_id) => {
                                 // Set the iteration stack accordingly to iteration stack level
