@@ -376,7 +376,7 @@ fn bench_main(c: &mut Criterion) {
                 |b, size| {
                     let size = *size;
                     b.iter(|| {
-                        remote_loopback_deploy(4, 4, move |env| run_query(env, $q, size));
+                        remote_loopback_deploy(4, 4, None, move |env| run_query(env, $q, size));
                     })
                 },
             );

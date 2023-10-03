@@ -130,7 +130,7 @@ fn bench_main(c: &mut Criterion) {
             |b, size| {
                 let edges = *size;
                 b.iter(|| {
-                    remote_loopback_deploy(4, 4, move |env| {
+                    remote_loopback_deploy(4, 4, None, move |env| {
                         let nodes = ((edges as f32).sqrt() * 25.) as u64 + 1;
 
                         let source = env.stream_par_iter(move |id, peers| {

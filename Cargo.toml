@@ -152,7 +152,10 @@ harness = false
 name = "nexmark"
 harness = false
 [[bench]]
-name = "persistency"
+name = "wordcount_persistency"
+harness = false
+[[bench]]
+name = "nexmark_persistency"
 harness = false
 
 [profile.release]

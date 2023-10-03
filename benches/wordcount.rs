@@ -144,7 +144,7 @@ fn wordcount_bench(c: &mut Criterion) {
                 let pathb = Arc::new(path.to_path_buf());
                 b.iter(|| {
                     let p = pathb.clone();
-                    remote_loopback_deploy(4, 4, move |env| wc_fold(env, &p));
+                    remote_loopback_deploy(4, 4, None, move |env| wc_fold(env, &p));
                 })
             },
         );
@@ -156,7 +156,7 @@ fn wordcount_bench(c: &mut Criterion) {
                 let pathb = Arc::new(path.to_path_buf());
                 b.iter(|| {
                     let p = pathb.clone();
-                    remote_loopback_deploy(4, 4, move |env| wc_fold_assoc(env, &p));
+                    remote_loopback_deploy(4, 4, None, move |env| wc_fold_assoc(env, &p));
                 })
             },
         );
@@ -168,7 +168,7 @@ fn wordcount_bench(c: &mut Criterion) {
                 let pathb = Arc::new(path.to_path_buf());
                 b.iter(|| {
                     let p = pathb.clone();
-                    remote_loopback_deploy(4, 4, move |env| wc_fast(env, &p));
+                    remote_loopback_deploy(4, 4, None, move |env| wc_fast(env, &p));
                 })
             },
         );

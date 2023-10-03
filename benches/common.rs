@@ -1,7 +1,7 @@
 #![allow(unused)]
 
 use criterion::{black_box, Bencher};
-use noir::config::{ExecutionRuntime, RemoteHostConfig, RemoteRuntimeConfig};
+use noir::config::{ExecutionRuntime, RemoteHostConfig, RemoteRuntimeConfig, PersistencyConfig};
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
@@ -19,6 +19,7 @@ const PORT_BASE: u16 = 9090;
 pub fn remote_loopback_deploy(
     num_hosts: CoordUInt,
     cores_per_host: CoordUInt,
+    persistency_config: Option<PersistencyConfig>,
     body: impl Fn(&mut StreamEnvironment) + Send + Sync + 'static,
 ) {
     let mut hosts = vec![];
@@ -48,7 +49,7 @@ pub fn remote_loopback_deploy(
             runtime: runtime.clone(),
             host_id: Some(host_id),
             skip_single_remote_check: true,
-            persistency_configuration: None,
+            persistency_configuration: persistency_config.clone(),
         };
         let body = body.clone();
         join_handles.push(
