@@ -240,7 +240,7 @@ where
         self.prev.setup(metadata);
 
         self.operator_coord.from_coord(metadata.coord);
-        if let Some(pb) = &metadata.persistency_builder{
+        if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<()>();
             p_service.restart_from_snapshot(self.operator_coord);
             self.persistency_service = Some(p_service);

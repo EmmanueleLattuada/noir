@@ -253,7 +253,7 @@ where
         );
 
         self.operator_coord.from_coord(metadata.coord);
-        if let Some(pb) = &metadata.persistency_builder{
+        if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<ParallelIteratorSourceState>();
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
             if let Some(snap_id) = snapshot_id {

@@ -25,7 +25,7 @@ impl RedisHandler {
 
 
 impl PersistencyServices for RedisHandler{  
-    fn save_state<State: ExchangeData>(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId, state: State) {
+    fn save_state(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId, state_buf: Vec<u8>) {
         // Prepare connection
         let mut conn = self.conn_pool
             .as_ref()
@@ -36,7 +36,7 @@ impl PersistencyServices for RedisHandler{
             );
         
         // Serialize the state
-        let state_buf = serialize_data(state);
+        // let state_buf = serialize_data(state);
 
         // Serialize op_coord
         let op_coord_key_buf = serialize_op_coord(op_coord);

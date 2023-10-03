@@ -234,7 +234,7 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
         self.prev.setup(metadata);
         
         self.operator_coord.from_coord(metadata.coord);
-        if let Some(pb) = &metadata.persistency_builder {
+        if let Some(pb) = metadata.persistency_builder {
             let p_service = pb.generate_persistency_service::<JoinKeyedOuterState<K, V1, V2>>();
                     
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
@@ -445,7 +445,7 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
 
         self.operator_coord.from_coord(metadata.coord);
 
-        if let Some(pb) = &metadata.persistency_builder{
+        if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<JoinKeyedInnerState<K, V1, V2>>();
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
             if snapshot_id.is_some() {

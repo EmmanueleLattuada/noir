@@ -138,7 +138,7 @@ where
         self.prev.setup(metadata);
 
         self.operator_coord.from_coord(metadata.coord);
-        if let Some(pb) = &metadata.persistency_builder{
+        if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<KeyedFoldState<Key, NewOut>>();
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
             if snapshot_id.is_some() {

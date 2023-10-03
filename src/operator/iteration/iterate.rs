@@ -399,7 +399,7 @@ impl<Out: ExchangeData, State: ExchangeData + Sync> Operator<Out> for Iterate<Ou
 
         self.state.setup(metadata);
 
-        if let Some(pb) = &metadata.persistency_builder {
+        if let Some(pb) = metadata.persistency_builder {
             let p_service = pb.generate_persistency_service::<IterateState<Out, State>>();
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
             if let Some(snap_id) = snapshot_id {

@@ -43,7 +43,7 @@ pub struct ExecutionMetadata<'a> {
     /// The batching mode to use inside this block.
     pub batch_mode: BatchMode,
     /// Persistency for saving the state
-    pub(crate) persistency_builder: Option<PersistencyBuilder>,
+    pub(crate) persistency_builder: Option<&'a PersistencyBuilder>,
 }
 
 /// Information about a block in the job graph.
@@ -221,7 +221,7 @@ impl Scheduler {
                 prev: self.network.prev(coord),
                 network: &mut self.network,
                 batch_mode: block_info.batch_mode,
-                persistency_builder: self.persistency_builder.clone(),
+                persistency_builder: self.persistency_builder.as_ref(),
             };
             let (handle, structure) = init_fn(&mut metadata);
             join.push(handle);
@@ -333,6 +333,8 @@ impl Scheduler {
                                 .collect_vec()
                         );
                     }
+                    // Stop state_saver
+                    self.persistency_builder.as_mut().unwrap().stop_actual_sender();
                 }
 
             let profiler_results = wait_profiler();

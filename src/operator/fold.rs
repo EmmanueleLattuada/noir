@@ -114,7 +114,7 @@ where
         self.prev.setup(metadata);
 
         self.operator_coord.from_coord(metadata.coord);
-        if let Some(pb) = &metadata.persistency_builder{
+        if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<FoldState<NewOut>>();
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
             if snapshot_id.is_some() {
@@ -286,16 +286,18 @@ mod tests {
             replica_id: 1,
             operator_id: 1,
         };
-        let pers_builder = PersistencyBuilder::new(Some(persistency_config_unit_tests()));
+        let mut pers_builder = PersistencyBuilder::new(Some(persistency_config_unit_tests()));
         fold.persistency_service = Some(pers_builder.generate_persistency_service());
 
         assert_eq!(fold.next(), StreamElement::Snapshot(SnapshotId::new(1)));
-        fold.persistency_service.as_mut().unwrap().flush_state_saver();
+        pers_builder.flush_state_saver();
+        fold.persistency_service = Some(pers_builder.generate_persistency_service());
         let state: Option<FoldState<i32>> = fold.persistency_service.as_mut().unwrap().get_state(fold.operator_coord, SnapshotId::new(1));
         assert_eq!(state.unwrap().accumulator.unwrap(), 3);
 
         assert_eq!(fold.next(), StreamElement::Snapshot(SnapshotId::new(2)));
-        fold.persistency_service.as_mut().unwrap().flush_state_saver();
+        pers_builder.flush_state_saver();
+        fold.persistency_service = Some(pers_builder.generate_persistency_service());
         let state: Option<FoldState<i32>> = fold.persistency_service.as_mut().unwrap().get_state(fold.operator_coord, SnapshotId::new(2));
         assert_eq!(state.unwrap().accumulator.unwrap(), 10);
 

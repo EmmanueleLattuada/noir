@@ -65,7 +65,7 @@ where
 
         self.operator_coord.from_coord(metadata.coord);
 
-        if let Some(pb) = &metadata.persistency_builder{
+        if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<Option<Vec<Out>>>();
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
             if snapshot_id.is_some() {
@@ -179,19 +179,21 @@ mod tests {
             replica_id: 2,
             operator_id: 2,
         };
-        let pers_builder = PersistencyBuilder::new(Some(persistency_config_unit_tests()));
+        let mut pers_builder = PersistencyBuilder::new(Some(persistency_config_unit_tests()));
         collect.persistency_service = Some(pers_builder.generate_persistency_service());
 
         collect.next();
         collect.next();
         assert_eq!(collect.next(), StreamElement::Snapshot(SnapshotId::new(1)));
-        collect.persistency_service.as_mut().unwrap().flush_state_saver();
+        pers_builder.flush_state_saver();
+        collect.persistency_service = Some(pers_builder.generate_persistency_service());
         let state: Option<Option<Vec<i32>>> = collect.persistency_service.as_mut().unwrap().get_state(collect.operator_coord, SnapshotId::new(1));
         assert_eq!(state.unwrap().unwrap(), [1, 2]);
         collect.next();
         collect.next();
         assert_eq!(collect.next(), StreamElement::Snapshot(SnapshotId::new(2)));
-        collect.persistency_service.as_mut().unwrap().flush_state_saver();
+        pers_builder.flush_state_saver();
+        collect.persistency_service = Some(pers_builder.generate_persistency_service());
         let state: Option<Option<Vec<i32>>> = collect.persistency_service.as_mut().unwrap().get_state(collect.operator_coord, SnapshotId::new(2));
         assert_eq!(state.unwrap().unwrap(), [1, 2, 3, 4]);
 

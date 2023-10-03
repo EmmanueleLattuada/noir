@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{time::Duration, marker::PhantomData};
 
 use crate::{network::OperatorCoord, operator::{SnapshotId, ExchangeData}};
 
@@ -13,6 +13,7 @@ pub struct PersistencyService<State: ExchangeData> {
     restart_from: Option<SnapshotId>,
     pub(crate) snapshot_frequency_by_item: Option<u64>,
     pub(crate) snapshot_frequency_by_time: Option<Duration>,
+    _state : PhantomData<State>,
 }
 
 impl <State:ExchangeData> Clone for PersistencyService<State> {
@@ -20,31 +21,25 @@ impl <State:ExchangeData> Clone for PersistencyService<State> {
     fn clone(&self) -> Self {
         Self {
             handler: self.handler.clone(),
-            state_saver: StateSaver::new(self.handler.clone(), self.snapshot_frequency_by_time),
+            state_saver: self.state_saver.clone(),
             restart_from: self.restart_from.clone(),
             snapshot_frequency_by_item: self.snapshot_frequency_by_item.clone(),
             snapshot_frequency_by_time: self.snapshot_frequency_by_time.clone(),
+            _state: PhantomData::clone(&self._state),
         }
-    }
-}
-
-// This is used to stop state_saver
-// TODO: explicit call of stop_actual_sender()
-impl <State: ExchangeData> Drop for PersistencyService<State>{
-    fn drop(&mut self) {
-        self.state_saver.stop_actual_sender();
     }
 }
 
 impl<State:ExchangeData> PersistencyService<State> {
     /// Create a new persistencyService from given configuration
-    pub (crate) fn new(handler: RedisHandler, restart_from: Option<SnapshotId>, snapshot_frequency_by_item: Option<u64>, snapshot_frequency_by_time: Option<Duration>) -> Self{       
+    pub (crate) fn new(handler: RedisHandler, state_saver: StateSaver<State>, restart_from: Option<SnapshotId>, snapshot_frequency_by_item: Option<u64>, snapshot_frequency_by_time: Option<Duration>) -> Self{       
         return Self { 
             handler: handler.clone(), 
-            state_saver: StateSaver::new(handler, snapshot_frequency_by_time),
+            state_saver,
             restart_from,
             snapshot_frequency_by_item,
             snapshot_frequency_by_time,
+            _state: PhantomData::default(),
         }              
     }
     
@@ -146,14 +141,5 @@ impl<State:ExchangeData> PersistencyService<State> {
     #[inline(never)]
     pub (crate) fn delete_state(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId) {
         self.handler.delete_state(op_coord, snapshot_id);
-    }
-
-    /// Blocking function that stops until all previously saved states are actually persisted.
-    /// This will close the old state saver and create a new one.
-    /// It should be used only for tests
-    #[allow(dead_code)]
-    pub (crate) fn flush_state_saver(&mut self) {
-        self.state_saver.stop_actual_sender();
-        self.state_saver = StateSaver::new(self.handler.clone(), self.snapshot_frequency_by_time);
     }
 }

@@ -127,6 +127,7 @@ pub(crate) struct BinaryStartReceiver<OutL: ExchangeData, OutR: ExchangeData> {
     right: SideReceiver<OutR, BinaryElement<OutL, OutR>>,
     first_message: bool,
 
+    persistency_active: bool,
     on_going_snapshots: HashMap<SnapshotId, (BinaryReceiverState<OutL, OutR>, HashSet<Coord>)>,
     persisted_message_queue_left: VecDeque<NetworkMessage<OutL>>,
     persisted_message_queue_right: VecDeque<NetworkMessage<OutR>>,
@@ -152,6 +153,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
             left: SideReceiver::new(left_block_id, left_cache),
             right: SideReceiver::new(right_block_id, right_cache),
             first_message: false,
+            persistency_active: false,
             on_going_snapshots: HashMap::new(),
             persisted_message_queue_left: VecDeque::new(),
             persisted_message_queue_right: VecDeque::new(),
@@ -213,14 +215,16 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
                         to_return.extend(to_cache);
                         to_cache = Vec::new();
 
-                        // put previous msgs in all partial snapshot that have sender in the set
-                        let last_msgs = NetworkMessage::new_batch(to_persist, sender);
-                        if last_msgs.num_items() > 0 {
-                            self.add_left_item_to_snapshot(last_msgs);
+                        if self.persistency_active {
+                            // put previous msgs in all partial snapshot that have sender in the set
+                            let last_msgs = NetworkMessage::new_batch(to_persist, sender);
+                            if last_msgs.num_items() > 0 {
+                                self.add_left_item_to_snapshot(last_msgs);
+                            }
+                            to_persist = Vec::new();
+                            // Process Terminate
+                            self.process_terminate(sender);
                         }
-                        to_persist = Vec::new();
-                        // Process Terminate
-                        self.process_terminate(sender);
                     }
                 }
                 StreamElement::Snapshot(snapshot_id) => {
@@ -265,10 +269,12 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
         }
         // extend to_return with to_cache
         to_return.extend(to_cache);
-        // put previous msgs in all partial snapshot that have sender in the set
-        let last_msgs = NetworkMessage::new_batch(to_persist, sender);
-        if last_msgs.num_items() > 0 {
-            self.add_left_item_to_snapshot(last_msgs);
+        if self.persistency_active {
+            // put previous msgs in all partial snapshot that have sender in the set
+            let last_msgs = NetworkMessage::new_batch(to_persist, sender);
+            if last_msgs.num_items() > 0 {
+                self.add_left_item_to_snapshot(last_msgs);
+            }
         }
         // return batch
         NetworkMessage::new_batch(to_return, sender)
@@ -320,14 +326,16 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
                         to_return.extend(to_cache);
                         to_cache = Vec::new();
 
-                        // put previous msgs in all partial snapshot that have sender in the set
-                        let last_msgs = NetworkMessage::new_batch(to_persist, sender);
-                        if last_msgs.num_items() > 0 {
-                            self.add_right_item_to_snapshot(last_msgs);
+                        if self.persistency_active {
+                            // put previous msgs in all partial snapshot that have sender in the set
+                            let last_msgs = NetworkMessage::new_batch(to_persist, sender);
+                            if last_msgs.num_items() > 0 {
+                                self.add_right_item_to_snapshot(last_msgs);
+                            }
+                            to_persist = Vec::new();
+                            // Process Terminate
+                            self.process_terminate(sender);
                         }
-                        to_persist = Vec::new();
-                        // Process Terminate
-                        self.process_terminate(sender);
                     }
                 }
                 StreamElement::Snapshot(snapshot_id) => {
@@ -372,11 +380,14 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
         }
         // extend to_return with to_cache
         to_return.extend(to_cache);
-        // put previous msgs in all partial snapshot that have sender in the set
-        let last_msgs = NetworkMessage::new_batch(to_persist, sender);
-        if last_msgs.num_items() > 0 {
-            self.add_right_item_to_snapshot(last_msgs);
-        }        // return batch
+        if self.persistency_active {
+            // put previous msgs in all partial snapshot that have sender in the set
+            let last_msgs = NetworkMessage::new_batch(to_persist, sender);
+            if last_msgs.num_items() > 0 {
+                self.add_right_item_to_snapshot(last_msgs);
+            }
+        }        
+        // return batch
         NetworkMessage::new_batch(to_return, sender)
     }
 
@@ -634,6 +645,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> StartReceiver<BinaryElement<OutL, O
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.left.setup(metadata);
         self.right.setup(metadata);
+        self.persistency_active = metadata.persistency_builder.is_some();
     }
 
     fn prev_replicas(&self) -> Vec<Coord> {
@@ -776,9 +788,10 @@ mod tests {
         );
        
         let mut metadata = t.metadata();
-        metadata.persistency_builder = Some(PersistencyBuilder::new(Some(
+        let mut p_builder = PersistencyBuilder::new(Some(
             persistency_config_unit_tests()
-        )));
+        ));
+        metadata.persistency_builder = Some(&p_builder);
         start_block.setup(&mut metadata);
 
         start_block.operator_coord.operator_id = 110;
@@ -881,7 +894,8 @@ mod tests {
             message_queue: VecDeque::new(),
         };
 
-        start_block.persistency_service.as_mut().unwrap().flush_state_saver();
+        p_builder.flush_state_saver();
+        start_block.persistency_service = Some(p_builder.generate_persistency_service());
         let retrived_state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = start_block.persistency_service.as_mut().unwrap().get_state(start_block.operator_coord, SnapshotId::new(1)).unwrap();
 
         assert_eq!(state.missing_flush_and_restart, retrived_state.missing_flush_and_restart);
@@ -928,9 +942,10 @@ mod tests {
         );
        
         let mut metadata = t.metadata();
-        metadata.persistency_builder = Some(PersistencyBuilder::new(Some(
+        let mut p_builder = PersistencyBuilder::new(Some(
             persistency_config_unit_tests()
-        )));
+        ));
+        metadata.persistency_builder = Some(&p_builder);
         start_block.setup(&mut metadata);
 
         start_block.operator_coord.operator_id = 111;
@@ -1064,7 +1079,8 @@ mod tests {
             message_queue: VecDeque::new(),
         };
 
-        start_block.persistency_service.as_mut().unwrap().flush_state_saver();
+        p_builder.flush_state_saver();
+        start_block.persistency_service = Some(p_builder.generate_persistency_service());
         let retrived_state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = start_block.persistency_service.as_mut().unwrap().get_state(start_block.operator_coord, SnapshotId::new(1)).unwrap();
 
         assert_eq!(state.message_queue, retrived_state.message_queue);
@@ -1127,7 +1143,8 @@ mod tests {
             message_queue: VecDeque::new(),
         };
 
-        start_block.persistency_service.as_mut().unwrap().flush_state_saver();
+        p_builder.flush_state_saver();
+        start_block.persistency_service = Some(p_builder.generate_persistency_service());
         let retrived_state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = start_block.persistency_service.as_mut().unwrap().get_state(start_block.operator_coord, SnapshotId::new(2)).unwrap();
 
         assert_eq!(state.message_queue, retrived_state.message_queue);
@@ -1166,9 +1183,10 @@ mod tests {
         );
        
         let mut metadata = t.metadata();
-        metadata.persistency_builder = Some(PersistencyBuilder::new(Some(
+        let mut p_builder = PersistencyBuilder::new(Some(
             persistency_config_unit_tests()
-        )));
+        ));
+        metadata.persistency_builder = Some(&p_builder);
         start_block.setup(&mut metadata);
 
         start_block.operator_coord.operator_id = 112;
@@ -1260,7 +1278,8 @@ mod tests {
             message_queue: VecDeque::new(),
         };
 
-        start_block.persistency_service.as_mut().unwrap().flush_state_saver();
+        p_builder.flush_state_saver();
+        start_block.persistency_service = Some(p_builder.generate_persistency_service());
         let retrived_state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = start_block.persistency_service.as_mut().unwrap().get_state(start_block.operator_coord, SnapshotId::new(2)).unwrap();
 
         assert_eq!(state.message_queue, retrived_state.message_queue);
@@ -1289,7 +1308,8 @@ mod tests {
         assert_eq!(StreamElement::Item(BinaryElement::Left(1)), start_block.next());
         
         
-        start_block.persistency_service.as_mut().unwrap().flush_state_saver();
+        p_builder.flush_state_saver();
+        start_block.persistency_service = Some(p_builder.generate_persistency_service());
         let retrived_state: StartState<BinaryElement<i32, i32>, BinaryStartReceiver<i32, i32>> = start_block.persistency_service.as_mut().unwrap().get_state(start_block.operator_coord, SnapshotId::new(3)).unwrap();
         
         let left_side: SideReceiverState<BinaryElement<i32, i32>> = SideReceiverState{

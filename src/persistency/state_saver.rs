@@ -1,13 +1,13 @@
-use std::{thread::JoinHandle, time::Duration};
+use std::{thread::JoinHandle, marker::PhantomData};
 
 
 use crate::{channel::{Sender, bounded}, channel::Receiver, operator::{ExchangeData, SnapshotId}, network::OperatorCoord};
 
-use super::{redis_handler::RedisHandler, PersistencyServices};
+use super::{redis_handler::RedisHandler, PersistencyServices, serialize_data};
 
 const CHANNEL_SIZE: usize = 30;
-const SLEEPING_TIME: Duration = Duration::from_millis(5);
 
+#[derive(Clone, Debug)]
 pub(crate) enum PersistencyMessage<State> {
     State(OperatorCoord, SnapshotId, State),
     TerminatedState(OperatorCoord, State),
@@ -15,26 +15,53 @@ pub(crate) enum PersistencyMessage<State> {
 }
 
 
-pub(crate) struct StateSaver<State: ExchangeData>{
-    sender: Sender<PersistencyMessage<State>>,
-    actual_saver: Option<JoinHandle<()>>,
+#[derive(Clone)]
+pub(crate) struct StateSaver<State>{
+    sender: Sender<PersistencyMessage<Vec<u8>>>,
+    _state: PhantomData<State>,
 }
 
 
-impl <S: ExchangeData> std::fmt::Debug for StateSaver<S> {
+impl<S: ExchangeData> std::fmt::Debug for StateSaver<S> {
     fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
          todo!()
     }
 }
 
-impl<State:ExchangeData> StateSaver<State> {
-    pub(super) fn new(handler: RedisHandler, snap_freq: Option<Duration>) -> Self {
+impl<State: ExchangeData> StateSaver<State> {
+    /// Send state to actual sender
+    pub(crate) fn save(&self, op_coord: OperatorCoord, snap_id: SnapshotId, state: State) {
+        // Serialize the state
+        let state_buf = serialize_data(state);
+        // Send to actual state saver
+        self.sender.send(PersistencyMessage::State(op_coord, snap_id, state_buf)).unwrap();
+        // TODO: handle errors
+    }
+
+    /// Send terminated state to actual sender
+    pub(crate) fn save_terminated_state(&self, op_coord: OperatorCoord, state: State) {
+        // Serialize the state
+        let state_buf = serialize_data(state);
+        // Send to actual state saver
+        self.sender.send(PersistencyMessage::TerminatedState(op_coord, state_buf)).unwrap();
+        // TODO: handle errors
+    }
+}
+
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub(crate) struct StateSaverHandler{
+    sender: Sender<PersistencyMessage<Vec<u8>>>,
+    actual_saver: Option<JoinHandle<()>>,
+}
+
+impl StateSaverHandler {
+    pub(super) fn new(handler: RedisHandler) -> Self {
         // generate channel
         let (tx, rx) = bounded(CHANNEL_SIZE);
         let saver = ActualSaver {
             recv: rx,
             handler,
-            snap_freq,
         };
         // generate and deploy the actual saver
         let handle = std::thread::Builder::new()
@@ -50,16 +77,12 @@ impl<State:ExchangeData> StateSaver<State> {
 
     }
 
-    /// Send state to actual sender
-    pub(crate) fn save(&self, op_coord: OperatorCoord, snap_id: SnapshotId, state: State) {
-        self.sender.send(PersistencyMessage::State(op_coord, snap_id, state)).unwrap();
-        // TODO: handle errors
-    }
-
-    /// Send terminated state to actual sender
-    pub(crate) fn save_terminated_state(&self, op_coord: OperatorCoord, state: State) {
-        self.sender.send(PersistencyMessage::TerminatedState(op_coord, state)).unwrap();
-        // TODO: handle errors
+    /// Get state saver 
+    pub(crate) fn get_state_saver<State>(&self) -> StateSaver<State> {
+        StateSaver { 
+            sender: self.sender.clone(),
+            _state: PhantomData::default(),
+        }
     }
 
     ///Close channel then wait for state saver thread to terminate
@@ -71,15 +94,13 @@ impl<State:ExchangeData> StateSaver<State> {
     }
 }
 
-struct ActualSaver<State:ExchangeData>{
-    recv: Receiver<PersistencyMessage<State>>,
+struct ActualSaver{
+    recv: Receiver<PersistencyMessage<Vec<u8>>>,
     handler: RedisHandler,
-    #[allow(dead_code)]
-    snap_freq: Option<Duration>,
 }
 
-// Sleep and read from the channel
-fn do_work<State: ExchangeData>(saver: ActualSaver<State>) {
+// Read from the channel and process messages
+fn do_work(saver: ActualSaver) {
     loop {
         // Try to recv
         let recv = saver.recv.recv();
@@ -111,8 +132,5 @@ fn do_work<State: ExchangeData>(saver: ActualSaver<State>) {
                 break
             }
         }
-        // Sleep
-        std::thread::sleep(SLEEPING_TIME);
-        // TODO: better sleeping timing
     }
 }

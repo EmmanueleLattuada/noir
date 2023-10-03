@@ -101,7 +101,7 @@ where
         self.prev.setup(metadata);
 
         self.operator_coord.from_coord(metadata.coord);
-        if let Some(pb) = &metadata.persistency_builder{
+        if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<HashMap<Key, State, BuildHasherDefault<WyHash>>>();
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
             if snapshot_id.is_some() {
@@ -307,20 +307,22 @@ mod tests {
             replica_id: 2,
             operator_id: 1,
         };
-        let pers_builder = PersistencyBuilder::new(Some(persistency_config_unit_tests()));
+        let mut pers_builder = PersistencyBuilder::new(Some(persistency_config_unit_tests()));
         rich_map_persistent.persistency_service = Some(pers_builder.generate_persistency_service());
 
         assert_eq!(rich_map_persistent.next(), StreamElement::Item((1, 1)));
         assert_eq!(rich_map_persistent.next(), StreamElement::Item((1, 3)));
         assert_eq!(rich_map_persistent.next(), StreamElement::Snapshot(SnapshotId::new(1)));
-        rich_map_persistent.persistency_service.as_mut().unwrap().flush_state_saver();
+        pers_builder.flush_state_saver();
+        rich_map_persistent.persistency_service = Some(pers_builder.generate_persistency_service());
         let state: Option<HashMap<i32, i32, crate::block::GroupHasherBuilder>> = rich_map_persistent.persistency_service.as_mut().unwrap().get_state(rich_map_persistent.operator_coord, SnapshotId::new(1));
         assert_eq!(state.unwrap().get_mut(&1).unwrap().clone(), 3);
 
         assert_eq!(rich_map_persistent.next(), StreamElement::Item((1, 6)));
         assert_eq!(rich_map_persistent.next(), StreamElement::Item((1, 10)));
         assert_eq!(rich_map_persistent.next(), StreamElement::Snapshot(SnapshotId::new(2)));
-        rich_map_persistent.persistency_service.as_mut().unwrap().flush_state_saver();
+        pers_builder.flush_state_saver();
+        rich_map_persistent.persistency_service = Some(pers_builder.generate_persistency_service());
         let state: Option<HashMap<i32, i32, crate::block::GroupHasherBuilder>> = rich_map_persistent.persistency_service.as_mut().unwrap().get_state(rich_map_persistent.operator_coord, SnapshotId::new(2));
         assert_eq!(state.unwrap().get_mut(&1).unwrap().clone(), 10);
 
@@ -356,13 +358,14 @@ mod tests {
             replica_id: 2,
             operator_id: 2,
         };
-        let pers_builder = PersistencyBuilder::new(Some(persistency_config_unit_tests()));
+        let mut pers_builder = PersistencyBuilder::new(Some(persistency_config_unit_tests()));
         rich_map_persistent.persistency_service = Some(pers_builder.generate_persistency_service());
 
         assert_eq!(rich_map_persistent.next(), StreamElement::Item((1, 1)));
         assert_eq!(rich_map_persistent.next(), StreamElement::Item((2, 2)));
         assert_eq!(rich_map_persistent.next(), StreamElement::Snapshot(SnapshotId::new(1)));
-        rich_map_persistent.persistency_service.as_mut().unwrap().flush_state_saver();
+        pers_builder.flush_state_saver();
+        rich_map_persistent.persistency_service = Some(pers_builder.generate_persistency_service());
         let state: Option<HashMap<i32, i32, crate::block::GroupHasherBuilder>> = rich_map_persistent.persistency_service.as_mut().unwrap().get_state(rich_map_persistent.operator_coord, SnapshotId::new(1));
         assert_eq!(state.clone().unwrap().get_mut(&1).unwrap().clone(), 1);
         assert_eq!(state.unwrap().get_mut(&2).unwrap().clone(), 2);
@@ -370,7 +373,8 @@ mod tests {
         assert_eq!(rich_map_persistent.next(), StreamElement::Item((1, 4)));
         assert_eq!(rich_map_persistent.next(), StreamElement::Item((2, 6)));
         assert_eq!(rich_map_persistent.next(), StreamElement::Snapshot(SnapshotId::new(2)));
-        rich_map_persistent.persistency_service.as_mut().unwrap().flush_state_saver();
+        pers_builder.flush_state_saver();
+        rich_map_persistent.persistency_service = Some(pers_builder.generate_persistency_service());
         let state: Option<HashMap<i32, i32, crate::block::GroupHasherBuilder>> = rich_map_persistent.persistency_service.as_mut().unwrap().get_state(rich_map_persistent.operator_coord, SnapshotId::new(2));
         assert_eq!(state.clone().unwrap().get_mut(&1).unwrap().clone(), 4);
         assert_eq!(state.unwrap().get_mut(&2).unwrap().clone(), 6);

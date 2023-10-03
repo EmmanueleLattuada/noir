@@ -81,8 +81,8 @@ fn serialize_data<D: ExchangeData>(data: D) -> Vec<u8> {
 }
 
 pub(crate) trait PersistencyServices {  
-    /// Method to save the state of the operator
-    fn save_state<State: ExchangeData>(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId, state: State);
+    /// Method to save the state of the operator. State must be serialized
+    fn save_state(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId, state: Vec<u8>);
     /// Method to save a void state, used for operators with no state, is necessary to be able to get last valid snapshot a posteriori
     fn save_void_state(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId);
     /// Method to get the state of the operator
@@ -135,48 +135,50 @@ mod tests {
         state1.values.push(2);
         state1.values.push(3);
 
-        let pers_builder = PersistencyBuilder::new(Some(
+        let mut pers_builder = PersistencyBuilder::new(Some(
             persistency_config_unit_tests()
         ));
-        let mut pers_handler: PersistencyService<FakeState> = pers_builder.generate_persistency_service();
-        pers_handler.save_state(op_coord1, SnapshotId::new(1), state1.clone());
-        pers_handler.flush_state_saver();        
-        let retrived_state: FakeState = pers_handler.get_state(op_coord1, SnapshotId::new(1)).unwrap();
+        let mut pers_services: PersistencyService<FakeState> = pers_builder.generate_persistency_service();
+        pers_services.save_state(op_coord1, SnapshotId::new(1), state1.clone());
+        pers_builder.flush_state_saver();  
+        pers_services = pers_builder.generate_persistency_service();      
+        let retrived_state: FakeState = pers_services.get_state(op_coord1, SnapshotId::new(1)).unwrap();
         assert_eq!(state1, retrived_state);
 
         let mut state2 = state1.clone();
         state2.values.push(4);
 
-        pers_handler.save_state(op_coord1, SnapshotId::new(2), state2.clone());
-        pers_handler.flush_state_saver();
-        let retrived_state: FakeState = pers_handler.get_state(op_coord1, SnapshotId::new(2)).unwrap();
+        pers_services.save_state(op_coord1, SnapshotId::new(2), state2.clone());
+        pers_builder.flush_state_saver();  
+        pers_services = pers_builder.generate_persistency_service(); 
+        let retrived_state: FakeState = pers_services.get_state(op_coord1, SnapshotId::new(2)).unwrap();
         assert_ne!(state1, retrived_state);
         assert_eq!(state2, retrived_state);
 
-        let retrived_state: Option<FakeState> = pers_handler.get_state(op_coord1, SnapshotId::new(3));
+        let retrived_state: Option<FakeState> = pers_services.get_state(op_coord1, SnapshotId::new(3));
         assert_eq!(None, retrived_state);
 
-        let last = pers_handler.get_last_snapshot(op_coord1).unwrap();
+        let last = pers_services.get_last_snapshot(op_coord1).unwrap();
         assert_eq!(SnapshotId::new(2), last);
 
         // Clean
-        pers_handler.delete_state(op_coord1, SnapshotId::new(1));
-        let retrived_state: Option<FakeState> = pers_handler.get_state(op_coord1, SnapshotId::new(1));
+        pers_services.delete_state(op_coord1, SnapshotId::new(1));
+        let retrived_state: Option<FakeState> = pers_services.get_state(op_coord1, SnapshotId::new(1));
         assert_eq!(None, retrived_state);
-        let last = pers_handler.get_last_snapshot(op_coord1).unwrap();
+        let last = pers_services.get_last_snapshot(op_coord1).unwrap();
         assert_eq!(SnapshotId::new(2), last);
 
-        pers_handler.delete_state(op_coord1, SnapshotId::new(2));
-        let retrived_state: Option<FakeState> = pers_handler.get_state(op_coord1, SnapshotId::new(2));
+        pers_services.delete_state(op_coord1, SnapshotId::new(2));
+        let retrived_state: Option<FakeState> = pers_services.get_state(op_coord1, SnapshotId::new(2));
         assert_eq!(None, retrived_state);
-        let last = pers_handler.get_last_snapshot(op_coord1);
+        let last = pers_services.get_last_snapshot(op_coord1);
         assert_eq!(None, last);
 
         // Clean already cleaned state
-        pers_handler.delete_state(op_coord1, SnapshotId::new(2));
-        let retrived_state: Option<FakeState> = pers_handler.get_state(op_coord1, SnapshotId::new(2));
+        pers_services.delete_state(op_coord1, SnapshotId::new(2));
+        let retrived_state: Option<FakeState> = pers_services.get_state(op_coord1, SnapshotId::new(2));
         assert_eq!(None, retrived_state);
-        let last = pers_handler.get_last_snapshot(op_coord1);
+        let last = pers_services.get_last_snapshot(op_coord1);
         assert_eq!(None, last);
 
     }    
@@ -195,30 +197,30 @@ mod tests {
         let pers_builder = PersistencyBuilder::new(Some(
             persistency_config_unit_tests()
         ));
-        let pers_handler: PersistencyService<FakeState> = pers_builder.generate_persistency_service();
-        pers_handler.save_void_state(op_coord1, SnapshotId::new(1));
-        pers_handler.save_void_state(op_coord1, SnapshotId::new(2));
-        let retrived_state: Option<FakeState> = pers_handler.get_state(op_coord1, SnapshotId::new(3));
+        let pers_services: PersistencyService<FakeState> = pers_builder.generate_persistency_service();
+        pers_services.save_void_state(op_coord1, SnapshotId::new(1));
+        pers_services.save_void_state(op_coord1, SnapshotId::new(2));
+        let retrived_state: Option<FakeState> = pers_services.get_state(op_coord1, SnapshotId::new(3));
         assert_eq!(None, retrived_state);
 
         // Clean
-        pers_handler.delete_state(op_coord1, SnapshotId::new(1));
-        let retrived_state: Option<FakeState> = pers_handler.get_state(op_coord1, SnapshotId::new(1));
+        pers_services.delete_state(op_coord1, SnapshotId::new(1));
+        let retrived_state: Option<FakeState> = pers_services.get_state(op_coord1, SnapshotId::new(1));
         assert_eq!(None, retrived_state);
-        let last = pers_handler.get_last_snapshot(op_coord1).unwrap();
+        let last = pers_services.get_last_snapshot(op_coord1).unwrap();
         assert_eq!(SnapshotId::new(2), last);
 
-        pers_handler.delete_state(op_coord1, SnapshotId::new(2));
-        let retrived_state: Option<FakeState> = pers_handler.get_state(op_coord1, SnapshotId::new(2));
+        pers_services.delete_state(op_coord1, SnapshotId::new(2));
+        let retrived_state: Option<FakeState> = pers_services.get_state(op_coord1, SnapshotId::new(2));
         assert_eq!(None, retrived_state);
-        let last = pers_handler.get_last_snapshot(op_coord1);
+        let last = pers_services.get_last_snapshot(op_coord1);
         assert_eq!(None, last);
 
-        pers_handler.save_void_state(op_coord1, SnapshotId::new(1));
-        let last = pers_handler.get_last_snapshot(op_coord1).unwrap();
+        pers_services.save_void_state(op_coord1, SnapshotId::new(1));
+        let last = pers_services.get_last_snapshot(op_coord1).unwrap();
         assert_eq!(SnapshotId::new(1), last);
-        pers_handler.delete_state(op_coord1, SnapshotId::new(1));
-        let last = pers_handler.get_last_snapshot(op_coord1);
+        pers_services.delete_state(op_coord1, SnapshotId::new(1));
+        let last = pers_services.get_last_snapshot(op_coord1);
         assert_eq!(None, last);
 
     }
@@ -234,75 +236,44 @@ mod tests {
             operator_id: 3,
         };
 
-        let pers_builder = PersistencyBuilder::new(Some(
+        let mut pers_builder = PersistencyBuilder::new(Some(
             persistency_config_unit_tests()
         ));
-        let mut pers_handler: PersistencyService<u32> = pers_builder.generate_persistency_service();
+        let mut pers_services: PersistencyService<u32> = pers_builder.generate_persistency_service();
         // Snap_id = 0
-        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_handler.save_state(op_coord1, SnapshotId::new(0), 100)));
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_services.save_state(op_coord1, SnapshotId::new(0), 100)));
         assert!(result.is_err());
 
         // Snap_id = 10
-        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_handler.save_void_state(op_coord1, SnapshotId::new(10))));
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_services.save_void_state(op_coord1, SnapshotId::new(10))));
         assert!(result.is_err());
 
-        pers_handler.save_state(op_coord1, SnapshotId::new(1), 101);
-        pers_handler.save_state(op_coord1, SnapshotId::new(2), 102);
-        pers_handler.save_state(op_coord1, SnapshotId::new(3), 103);
-        pers_handler.flush_state_saver();
+        pers_services.save_state(op_coord1, SnapshotId::new(1), 101);
+        pers_services.save_state(op_coord1, SnapshotId::new(2), 102);
+        pers_services.save_state(op_coord1, SnapshotId::new(3), 103);
+        pers_builder.flush_state_saver();  
+        pers_services = pers_builder.generate_persistency_service();
 
         // Snap_id = 1
-        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_handler.save_void_state(op_coord1, SnapshotId::new(1))));
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_services.save_void_state(op_coord1, SnapshotId::new(1))));
         assert!(result.is_err());
 
         // Snap_id = 2
-        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_handler.save_void_state(op_coord1, SnapshotId::new(2))));
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_services.save_void_state(op_coord1, SnapshotId::new(2))));
         assert!(result.is_err());
 
         // Snap_id = 3
-        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_handler.save_void_state(op_coord1, SnapshotId::new(3))));
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_services.save_void_state(op_coord1, SnapshotId::new(3))));
         assert!(result.is_err());
 
         // Clean
-        pers_handler.delete_state(op_coord1, SnapshotId::new(1));
-        pers_handler.delete_state(op_coord1, SnapshotId::new(2));
-        pers_handler.delete_state(op_coord1, SnapshotId::new(3));
-
-
+        pers_services.delete_state(op_coord1, SnapshotId::new(1));
+        pers_services.delete_state(op_coord1, SnapshotId::new(2));
+        pers_services.delete_state(op_coord1, SnapshotId::new(3));
 
     }
 
-    /*
-    #[ignore]
-    #[test]
-    #[serial]
-    fn test_no_persistency() {
-        let op_coord1 = OperatorCoord {
-            block_id: 1,
-            host_id: 1,
-            replica_id: 1,
-            operator_id: 4
-        };
-
-        let pers_handler: PersistencyService<u32> = PersistencyService::new(None);
-        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_handler.save_state(op_coord1, SnapshotId::new(1), 100)));
-        assert!(result.is_err());
-
-        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_handler.save_void_state(op_coord1, SnapshotId::new(1))));
-        assert!(result.is_err());
-
-        let result: Result<Option<u32>, Box<dyn std::any::Any + Send>> = std::panic::catch_unwind(AssertUnwindSafe(|| pers_handler.get_state(op_coord1, SnapshotId::new(1))));
-        assert!(result.is_err());
-
-        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_handler.get_last_snapshot(op_coord1)));
-        assert!(result.is_err());
-
-        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_handler.delete_state(op_coord1, SnapshotId::new(1))));
-        assert!(result.is_err());
-
-    }*/
-
-
+   
     #[test]
     #[serial]
     fn test_compute_last_complete_snapshot(){
@@ -328,48 +299,48 @@ mod tests {
         let mut pers_builder = PersistencyBuilder::new(Some(
             persistency_config_unit_tests()
         ));
-        let mut pers_handler: PersistencyService<bool> = pers_builder.generate_persistency_service();
-        assert_eq!(pers_handler.restart_from_snapshot(op_coord1), None);
+        let mut pers_services: PersistencyService<bool> = pers_builder.generate_persistency_service();
+        assert_eq!(pers_services.restart_from_snapshot(op_coord1), None);
         pers_builder.compute_last_complete_snapshot(vec![op_coord1, op_coord2, op_coord3]);
-        pers_handler = pers_builder.generate_persistency_service();
-        assert_eq!(pers_handler.restart_from_snapshot(op_coord1), None);
+        pers_services = pers_builder.generate_persistency_service();
+        assert_eq!(pers_services.restart_from_snapshot(op_coord1), None);
 
         let fake_state = true;
-        pers_handler.save_state(op_coord1, SnapshotId::new(1), fake_state);
-        pers_handler.save_state(op_coord2, SnapshotId::new(1), fake_state);
-        pers_handler.flush_state_saver();
+        pers_services.save_state(op_coord1, SnapshotId::new(1), fake_state);
+        pers_services.save_state(op_coord2, SnapshotId::new(1), fake_state);
+        pers_builder.flush_state_saver();  
         pers_builder.compute_last_complete_snapshot(vec![op_coord1, op_coord2, op_coord3]);
-        pers_handler = pers_builder.generate_persistency_service();
-        assert_eq!(pers_handler.restart_from_snapshot(op_coord1), None);
+        pers_services = pers_builder.generate_persistency_service();
+        assert_eq!(pers_services.restart_from_snapshot(op_coord1), None);
 
-        pers_handler.save_state(op_coord3, SnapshotId::new(1), fake_state);
-        pers_handler.flush_state_saver();
+        pers_services.save_state(op_coord3, SnapshotId::new(1), fake_state);
+        pers_builder.flush_state_saver();  
         pers_builder.compute_last_complete_snapshot(vec![op_coord1, op_coord2, op_coord3]);
-        pers_handler = pers_builder.generate_persistency_service();
-        assert_eq!(pers_handler.restart_from_snapshot(op_coord1), Some(SnapshotId::new(1)));
+        pers_services = pers_builder.generate_persistency_service();
+        assert_eq!(pers_services.restart_from_snapshot(op_coord1), Some(SnapshotId::new(1)));
 
-        pers_handler.save_state(op_coord1, SnapshotId::new(2), fake_state);
-        pers_handler.save_state(op_coord3, SnapshotId::new(2), fake_state);
-        pers_handler.flush_state_saver();
+        pers_services.save_state(op_coord1, SnapshotId::new(2), fake_state);
+        pers_services.save_state(op_coord3, SnapshotId::new(2), fake_state);
+        pers_builder.flush_state_saver();  
         pers_builder.compute_last_complete_snapshot(vec![op_coord1, op_coord2, op_coord3]);
-        pers_handler = pers_builder.generate_persistency_service();
-        assert_eq!(pers_handler.restart_from_snapshot(op_coord1), Some(SnapshotId::new(1)));
+        pers_services = pers_builder.generate_persistency_service();
+        assert_eq!(pers_services.restart_from_snapshot(op_coord1), Some(SnapshotId::new(1)));
 
-        pers_handler.save_state(op_coord1, SnapshotId::new(2), fake_state);
-        pers_handler.save_state(op_coord2, SnapshotId::new(2), fake_state);
-        pers_handler.flush_state_saver();
+        pers_services.save_state(op_coord1, SnapshotId::new(2), fake_state);
+        pers_services.save_state(op_coord2, SnapshotId::new(2), fake_state);
+        pers_builder.flush_state_saver();  
         pers_builder.compute_last_complete_snapshot(vec![op_coord1, op_coord2, op_coord3]);
-        pers_handler = pers_builder.generate_persistency_service();
-        assert_eq!(pers_handler.restart_from_snapshot(op_coord1), Some(SnapshotId::new(2)));
+        pers_services = pers_builder.generate_persistency_service();
+        assert_eq!(pers_services.restart_from_snapshot(op_coord1), Some(SnapshotId::new(2)));
 
         // Clean
-        pers_handler.delete_state(op_coord1, SnapshotId::new(1));
-        pers_handler.delete_state(op_coord2, SnapshotId::new(1));
-        pers_handler.delete_state(op_coord3, SnapshotId::new(1));
+        pers_services.delete_state(op_coord1, SnapshotId::new(1));
+        pers_services.delete_state(op_coord2, SnapshotId::new(1));
+        pers_services.delete_state(op_coord3, SnapshotId::new(1));
         // Clean
-        pers_handler.delete_state(op_coord1, SnapshotId::new(2));
-        pers_handler.delete_state(op_coord2, SnapshotId::new(2));
-        pers_handler.delete_state(op_coord3, SnapshotId::new(2));
+        pers_services.delete_state(op_coord1, SnapshotId::new(2));
+        pers_services.delete_state(op_coord2, SnapshotId::new(2));
+        pers_services.delete_state(op_coord3, SnapshotId::new(2));
 
     }
 

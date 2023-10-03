@@ -1,21 +1,15 @@
 // This will generate persistency_service object to be cloned 
 // and passed to all operators and the state_saver object
 
-// find_snapshot, compute last snap
-
-// generate persistency service obj and state_saver obj
-
-// delete all
-
 use std::time::Duration;
 use crate::{network::OperatorCoord, operator::{SnapshotId, ExchangeData}, config::PersistencyConfig};
 
-use super::{PersistencyServices, redis_handler::RedisHandler, persistency_service::PersistencyService};
+use super::{PersistencyServices, redis_handler::RedisHandler, persistency_service::PersistencyService, state_saver::StateSaverHandler};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug)]
 pub struct PersistencyBuilder {
     handler: RedisHandler,
-    active: bool,
+    state_saver_handler: StateSaverHandler,
     restart_from: Option<SnapshotId>,
     snapshot_frequency_by_item: Option<u64>,
     snapshot_frequency_by_time: Option<Duration>,
@@ -26,26 +20,17 @@ impl PersistencyBuilder {
     pub (crate) fn new(conf: Option<PersistencyConfig>) -> Self{
         if let Some(config) = conf{
             let handler = RedisHandler::new(config.server_addr.clone());
+            let state_saver_handler = StateSaverHandler::new(handler.clone());
             return Self { 
                 handler, 
-                active: true,
+                state_saver_handler,
                 restart_from: None,
                 snapshot_frequency_by_item: config.snapshot_frequency_by_item,
                 snapshot_frequency_by_time: config.snapshot_frequency_by_time,
             }
         } else {
-            return Self { 
-                handler: RedisHandler::default(),
-                active: false,
-                restart_from: None,
-                snapshot_frequency_by_item: None,
-                snapshot_frequency_by_time: None,
-            }
+            panic!("Please provide persistency configuration");
         }        
-    }
-
-    pub (crate) fn is_active(&self) -> bool {
-        self.active
     }
 
     /// Call this method to restart from specified snapshot or from the last one.
@@ -72,10 +57,6 @@ impl PersistencyBuilder {
 
     /// Method to compute the last complete snapshot.
     pub (super) fn compute_last_complete_snapshot(&mut self, operators: Vec<OperatorCoord>) {
-        if !self.is_active() {
-            panic!("Persistency is not active");
-        }
-        
         let mut op_iter = operators.clone().into_iter();
         let last_snap = self.handler.get_last_snapshot(op_iter.next().unwrap_or_else(||
             panic!("No operators provided")
@@ -168,16 +149,27 @@ impl PersistencyBuilder {
     /// Method to generate persistency service object. 
     /// This object can be cloned and passed to all operators
     pub(crate) fn generate_persistency_service<State: ExchangeData>(&self) -> PersistencyService<State> {
-        if !self.is_active() {
-            // TODO Fix this
-            panic!("Persistency not active");
-        } else {
-            PersistencyService::new(
-                self.handler.clone(), 
-                self.restart_from.clone(), 
-                self.snapshot_frequency_by_item, 
-                self.snapshot_frequency_by_time
-            )
-        }
+        PersistencyService::new(
+            self.handler.clone(), 
+            self.state_saver_handler.get_state_saver(),
+            self.restart_from.clone(), 
+            self.snapshot_frequency_by_item, 
+            self.snapshot_frequency_by_time
+        )
+    }
+
+    /// Method to stop actual sender. Send a special termination message then wait 
+    /// that all states have been persisted
+    pub (crate) fn stop_actual_sender(&mut self){
+        self.state_saver_handler.stop_actual_sender();
+    }
+
+    /// Blocking function that stops until all previously saved states are actually persisted.
+    /// This will close the old state saver and create a new one.
+    /// It should be used only for tests
+    #[allow(dead_code)]
+    pub (crate) fn flush_state_saver(&mut self) {
+        self.state_saver_handler.stop_actual_sender();
+        self.state_saver_handler = StateSaverHandler::new(self.handler.clone());
     }
 }
