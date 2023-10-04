@@ -149,7 +149,7 @@ pub(crate) mod stream;
 pub(crate) mod test;
 pub(crate) mod worker;
 
-pub(crate) mod persistency;
+pub mod persistency;
 
 pub type CoordUInt = u64;
 

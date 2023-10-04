@@ -299,3 +299,40 @@ impl PersistencyServices for RedisHandler{
         log::debug!("Deleted state for operator: {op_coord}, at snapshot id: {snapshot_id}\n",);
     }
 }
+
+/// Function for tests and benchmarks
+/// Try to get the number of persisted snapshots then flush all redis db
+/// it does NOT work with iterative computations
+pub fn get_max_snapshot_id_and_flushall(server_addr: String) -> u64 {
+    let handler = RedisHandler::new(server_addr);
+    let mut result = 0;
+    let mut op_coord = OperatorCoord {
+        block_id: 0,
+        host_id: 0,
+        replica_id: 0,     
+        operator_id: 0,  
+    };
+    // Find the last snapshot of the last block
+    loop {
+        let opt_snap_id = handler.get_last_snapshot(op_coord.clone());
+        if let Some(snap_id) = opt_snap_id {
+            if snap_id.id() > result {
+                result = snap_id.id();
+            }
+            op_coord.block_id = op_coord.block_id + 1;
+        } else {
+            break;
+        }
+    }
+    // Clear all db
+    // Prepare connection
+    let mut conn = handler.conn_pool
+        .as_ref()
+        .unwrap()
+        .get()
+        .unwrap_or_else(|e|
+            panic!("Redis connection error: {e:?}")
+        );
+    redis::cmd("FLUSHALL").query::<String>(&mut *conn).unwrap();
+    result
+}

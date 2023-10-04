@@ -197,12 +197,13 @@ fn wordcount_persistency_bench(c: &mut Criterion) {
     macro_rules! bench_wc {
         ($q:expr, $n:expr, $p:ident) => {{
             g.bench_with_input(BenchmarkId::new(format!("{}-snap-t", $q), $n), &$n, |b, _| {
+                let mut num_of_snap = HashMap::new();
                 b.iter(|| {
                     let mut config = EnvironmentConfig::local(4);
                     config.add_persistency(PersistencyConfig { 
                         server_addr: String::from("redis://127.0.0.1"), 
                         try_restart: false, 
-                        clean_on_exit: true, 
+                        clean_on_exit: false, 
                         restart_from: None, 
                         snapshot_frequency_by_item: None,
                         snapshot_frequency_by_time: None,
@@ -210,15 +211,19 @@ fn wordcount_persistency_bench(c: &mut Criterion) {
                     let mut env = StreamEnvironment::new(config);
                     run_wc(&mut env, $q, $p);
                     env.execute_blocking();
-                })
+                    let max_snap = noir::persistency::redis_handler::get_max_snapshot_id_and_flushall(String::from("redis://127.0.0.1"));
+                    *num_of_snap.entry(max_snap).or_insert(0) += 1;
+                });
+                println!("{:?}", num_of_snap)
             });
             g.bench_with_input(BenchmarkId::new(format!("{}-snap-100", $q), $n), &$n, |b, _| {
+                let mut num_of_snap = HashMap::new();
                 b.iter(|| {
                     let mut config = EnvironmentConfig::local(4);
                     config.add_persistency(PersistencyConfig { 
                         server_addr: String::from("redis://127.0.0.1"), 
                         try_restart: false, 
-                        clean_on_exit: true, 
+                        clean_on_exit: false, 
                         restart_from: None, 
                         snapshot_frequency_by_item: Some(($n/(4*100)) as u64),  // 4 replicas
                         snapshot_frequency_by_time: None,
@@ -229,7 +234,10 @@ fn wordcount_persistency_bench(c: &mut Criterion) {
                     let mut env = StreamEnvironment::new(config);
                     run_wc(&mut env, $q, $p);
                     env.execute_blocking();
-                })
+                    let max_snap = noir::persistency::redis_handler::get_max_snapshot_id_and_flushall(String::from("redis://127.0.0.1"));
+                    *num_of_snap.entry(max_snap).or_insert(0) += 1;
+                });
+                println!("{:?}", num_of_snap)
             });            
             g.bench_with_input(
                 BenchmarkId::new(format!("{}-remote-snap-t", $q), $n),
@@ -245,12 +253,16 @@ fn wordcount_persistency_bench(c: &mut Criterion) {
                         snapshot_frequency_by_time: None,
 
                     };
+                    let mut num_of_snap = HashMap::new();
                     b.iter(|| {
                         let p = pathb.clone();
                         remote_loopback_deploy(5, 4, Some(pers_conf.clone()), move |mut env| {
                             run_wc(&mut env, $q, &p);
                         });
-                    })
+                        let max_snap = noir::persistency::redis_handler::get_max_snapshot_id_and_flushall(String::from("redis://127.0.0.1"));
+                        *num_of_snap.entry(max_snap).or_insert(0) += 1;
+                    });
+                    println!("{:?}", num_of_snap)
                 },
             );
             g.bench_with_input(
@@ -269,12 +281,16 @@ fn wordcount_persistency_bench(c: &mut Criterion) {
                         //snapshot_frequency_by_time: Some(std::time::Duration::from_millis($n/1000)),
 
                     };
+                    let mut num_of_snap = HashMap::new();
                     b.iter(|| {
                         let p = pathb.clone();
                         remote_loopback_deploy(5, 4, Some(pers_conf.clone()), move |mut env| {
                             run_wc(&mut env, $q, &p);
                         });
-                    })
+                        let max_snap = noir::persistency::redis_handler::get_max_snapshot_id_and_flushall(String::from("redis://127.0.0.1"));
+                        *num_of_snap.entry(max_snap).or_insert(0) += 1;
+                    });
+                    println!("{:?}", num_of_snap)
                 },
             );
         }};

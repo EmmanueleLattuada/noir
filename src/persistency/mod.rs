@@ -6,7 +6,7 @@ use crate::{network::OperatorCoord, operator::{SnapshotId, ExchangeData}};
 pub mod builder;
 pub mod persistency_service;
 pub mod state_saver;
-mod redis_handler;
+pub mod redis_handler;
 
 /// Serializer
 static SERIALIZER: Lazy<DefaultOptions> = Lazy::new(bincode::DefaultOptions::new);
