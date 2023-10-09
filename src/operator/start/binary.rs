@@ -205,12 +205,6 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
                     if !self.left.cached {
                         to_cache.push(el.map(BinaryElement::Left));
                     
-                        // if needed cache prev msgs
-                        if self.left.cached && to_cache.len() > 0 {
-                            let last_msgs = NetworkMessage::new_batch(to_cache.clone(), sender);
-                            self.left.cache.push(last_msgs);
-                            self.left.cache_pointer = self.left.cache.len();
-                        }
                         // extend to_return with to_cache
                         to_return.extend(to_cache);
                         to_cache = Vec::new();
@@ -316,12 +310,6 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
                     // Terminate should not be cached
                     if !self.right.cached {
                         to_cache.push(el.map(BinaryElement::Right));
-                        // if needed cache prev msgs
-                        if self.right.cached && to_cache.len() > 0 {
-                            let last_msgs = NetworkMessage::new_batch(to_cache.clone(), sender);
-                            self.right.cache.push(last_msgs);
-                            self.right.cache_pointer = self.right.cache.len();
-                        }
                         // extend to_return with to_cache
                         to_return.extend(to_cache);
                         to_cache = Vec::new();
@@ -710,26 +698,25 @@ impl<OutL: ExchangeData, OutR: ExchangeData> StartReceiver<BinaryElement<OutL, O
         true
     }
 
-    fn set_state(&mut self, receiver_state: Option<Self::ReceiverState>) {
-        let state = receiver_state.unwrap();
-        self.first_message = state.first_message;
-        self.should_flush_cached_side = state.should_flush_cached_side;
-        self.left.missing_flush_and_restart = state.left.missing_flush_and_restart as usize;
-        //self.left.missing_terminate = state.left.missing_terminate as usize;
-        self.left.cached = state.left.cached;
-        self.left.cache = state.left.cache;
-        self.left.cache_full = state.left.cache_full;
-        self.left.cache_pointer = state.left.cache_pointer as usize;
-        self.right.missing_flush_and_restart = state.right.missing_flush_and_restart as usize;
-        //self.right.missing_terminate = state.right.missing_terminate as usize;
-        self.right.cached = state.right.cached;
-        self.right.cache = state.right.cache;
-        self.right.cache_full = state.right.cache_full;
-        self.right.cache_pointer = state.right.cache_pointer as usize;
+    fn set_state(&mut self, receiver_state: Self::ReceiverState) {
+        self.first_message = receiver_state.first_message;
+        self.should_flush_cached_side = receiver_state.should_flush_cached_side;
+        self.left.missing_flush_and_restart = receiver_state.left.missing_flush_and_restart as usize;
+        //self.left.missing_terminate = receiver_state.left.missing_terminate as usize;
+        self.left.cached = receiver_state.left.cached;
+        self.left.cache = receiver_state.left.cache;
+        self.left.cache_full = receiver_state.left.cache_full;
+        self.left.cache_pointer = receiver_state.left.cache_pointer as usize;
+        self.right.missing_flush_and_restart = receiver_state.right.missing_flush_and_restart as usize;
+        //self.right.missing_terminate = receiver_state.right.missing_terminate as usize;
+        self.right.cached = receiver_state.right.cached;
+        self.right.cache = receiver_state.right.cache;
+        self.right.cache_full = receiver_state.right.cache_full;
+        self.right.cache_pointer = receiver_state.right.cache_pointer as usize;
         // set persisted left msg queue
-        self.persisted_message_queue_left = state.persisted_message_queue_left;
+        self.persisted_message_queue_left = receiver_state.persisted_message_queue_left;
         // set persissted right msg queue
-        self.persisted_message_queue_right = state.persisted_message_queue_right;
+        self.persisted_message_queue_right = receiver_state.persisted_message_queue_right;
     }
 }
 

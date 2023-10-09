@@ -87,12 +87,15 @@ impl<Out: Data + core::fmt::Debug> Operator<Out> for ChannelSource<Out> {
                 self.terminated = snap_id.terminate();
                 self.snapshot_generator.restart_from(snap_id);
             }
-            if let Some(snap_freq) = p_service.snapshot_frequency_by_item {
-                self.snapshot_generator.set_item_interval(snap_freq);
+            if !metadata.contains_cached_stream {
+                if let Some(snap_freq) = p_service.snapshot_frequency_by_item {
+                    self.snapshot_generator.set_item_interval(snap_freq);
+                }
+                if let Some(snap_freq) = p_service.snapshot_frequency_by_time {
+                    self.snapshot_generator.set_time_interval(snap_freq);
+                }
             }
-            if let Some(snap_freq) = p_service.snapshot_frequency_by_time {
-                self.snapshot_generator.set_time_interval(snap_freq);
-            }
+            // TODO: snapshot alignment for iterations with cached streams
             self.persistency_service = Some(p_service);
         }
     }

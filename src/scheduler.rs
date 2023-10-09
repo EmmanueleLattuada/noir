@@ -44,6 +44,7 @@ pub struct ExecutionMetadata<'a> {
     pub batch_mode: BatchMode,
     /// Persistency for saving the state
     pub(crate) persistency_builder: Option<&'a PersistencyBuilder>,
+    pub(crate) contains_cached_stream: bool,
 }
 
 /// Information about a block in the job graph.
@@ -82,6 +83,8 @@ pub(crate) struct Scheduler {
     persistency_builder: Option<PersistencyBuilder>,
     /// List with coordinates of all operators in the network
     operators_coordinates: Vec<OperatorCoord>,
+    /// True if the steam contains an iteration with a cached stream, used for persistency
+    contains_cached_stream: bool,
 }
 
 impl Scheduler {
@@ -99,8 +102,13 @@ impl Scheduler {
             network: NetworkTopology::new(config.clone()),
             config,
             persistency_builder: pers_builder,
-            operators_coordinates: Default::default()
+            operators_coordinates: Default::default(),
+            contains_cached_stream: false
         }
+    }
+
+    pub(crate) fn contains_cached_stream(&mut self) {
+        self.contains_cached_stream = true;
     }
 
     /// Register a new block inside the scheduler.
@@ -222,6 +230,7 @@ impl Scheduler {
                 network: &mut self.network,
                 batch_mode: block_info.batch_mode,
                 persistency_builder: self.persistency_builder.as_ref(),
+                contains_cached_stream: self.contains_cached_stream,
             };
             let (handle, structure) = init_fn(&mut metadata);
             join.push(handle);

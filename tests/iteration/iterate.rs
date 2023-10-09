@@ -111,25 +111,20 @@ fn test_iterate_side_input() {
 
     TestHelper::local_remote_env(body);
 
-    // TODO: fix side inputs
-    /*
     let snap_freq = Some(1);
 
     let execution_list = vec![
         // Complete execution
         TestHelper::persistency_config_test(false, false, None, snap_freq),
-        // Restart from snapshot 1
+        // Restart from snapshot 1, during iterations
         TestHelper::persistency_config_test(true, false, Some(1), snap_freq),
-        // Restart from snapshot 2
+        // Restart from snapshot 2, this should be a Terminate snapshot
         TestHelper::persistency_config_test(true, false, Some(2), snap_freq),
-        // Restart from snapshot 5
-        TestHelper::persistency_config_test(true, false, Some(5), snap_freq),
         // Restart from last snapshot, all operators have terminated
         TestHelper::persistency_config_test(true, true, None, snap_freq),
     ];
 
-    TestHelper::local_remote_env_with_persistency(body, execution_list);
-    */
+    TestHelper::local_remote_env_with_persistency(body, execution_list); 
 }
 
 #[test]

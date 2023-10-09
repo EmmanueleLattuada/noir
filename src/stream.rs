@@ -197,9 +197,15 @@ where
                 panic!("Side inputs are supported only if one of the streams is coming from outside any iteration");
             }
             if iter_ctx_1.is_empty() {
+                // cached side
+                let mut env = env.lock();
+                env.scheduler_mut().contains_cached_stream();               
                 // self is the side input, cache it
                 (b2.iteration_ctx.clone(), true, false)
             } else {
+                // cached side
+                let mut env = env.lock();
+                env.scheduler_mut().contains_cached_stream(); 
                 // oth is the side input, cache it
                 (b1.iteration_ctx.clone(), false, true)
             }

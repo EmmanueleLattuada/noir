@@ -83,7 +83,7 @@ impl<Out: ExchangeData> StartReceiver<Out> for SimpleStartReceiver<Out> {
     fn keep_msg_queue(&self) -> bool {
         false
     }
-    fn set_state(&mut self, _receiver_state: Option<Self::ReceiverState>) {}
+    fn set_state(&mut self, _receiver_state: Self::ReceiverState) {}
 }
 
 impl<Out: ExchangeData> Clone for SimpleStartReceiver<Out> {

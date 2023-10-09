@@ -5,7 +5,7 @@ use serde::{Serialize, Deserialize};
 use crate::block::{BlockStructure, OperatorKind, OperatorStructure, Replication};
 use crate::network::OperatorCoord;
 use crate::operator::source::Source;
-use crate::operator::{Data, Operator, StreamElement};
+use crate::operator::{Data, Operator, StreamElement, SnapshotId};
 use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::Stream;
@@ -27,7 +27,7 @@ where
     last_index: Option<u64>,
     snapshot_generator: SnapshotGenerator,
     persistency_service: Option<PersistencyService<IteratorSourceState>>,
-
+    snapshot_before_flush: bool,
     operator_coord: OperatorCoord,
 }
 
@@ -67,6 +67,7 @@ where
             last_index: None,
             snapshot_generator: SnapshotGenerator::new(),
             persistency_service: None,
+            snapshot_before_flush: false,
             // This is the first operator in the chain so operator_id = 0
             // Other fields will be set inside setup method
             operator_coord: OperatorCoord::new(0, 0, 0, 0),
@@ -96,6 +97,16 @@ where
         self.operator_coord.from_coord(metadata.coord);
         if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<IteratorSourceState>();
+            if !metadata.contains_cached_stream {
+                if let Some(snap_freq) = p_service.snapshot_frequency_by_item {
+                    self.snapshot_generator.set_item_interval(snap_freq);
+                }
+                if let Some(snap_freq) = p_service.snapshot_frequency_by_time {
+                    self.snapshot_generator.set_time_interval(snap_freq);
+                }
+            } else {
+                self.snapshot_before_flush = true;
+            }
             let snapshot_id =p_service.restart_from_snapshot(self.operator_coord);
             if let Some(snap_id) = snapshot_id {
                 // Get and resume the persisted state
@@ -109,13 +120,11 @@ where
                 } else {
                     panic!("No persisted state founded for op: {0} and snapshot id: {snap_id:?}", self.operator_coord);
                 } 
+                if self.snapshot_before_flush && snap_id.id() == 1{
+                    // Don't send twice the "snapshot before flush"
+                    self.snapshot_before_flush = false;
+                }
                 self.snapshot_generator.restart_from(snap_id);
-            }
-            if let Some(snap_freq) = p_service.snapshot_frequency_by_item {
-                self.snapshot_generator.set_item_interval(snap_freq);
-            }
-            if let Some(snap_freq) = p_service.snapshot_frequency_by_time {
-                self.snapshot_generator.set_time_interval(snap_freq);
             }
             self.persistency_service = Some(p_service);
         }
@@ -157,8 +166,19 @@ where
                 StreamElement::Item(t) 
             }
             None => {
-                self.terminated = true;
-                StreamElement::FlushAndRestart
+                if self.snapshot_before_flush {
+                    self.snapshot_before_flush = false;
+                    // Save state and forward snapshot with id 1, this is used 
+                    // to sync iteration snapshot in presence of cached streams
+                    let state = IteratorSourceState{
+                        last_index: self.last_index,
+                    };
+                    self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, SnapshotId::new(1), state);
+                    StreamElement::Snapshot(SnapshotId::new(1))
+                } else {
+                    self.terminated = true;
+                    StreamElement::FlushAndRestart
+                }
             }
         }
     }

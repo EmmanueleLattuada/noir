@@ -131,8 +131,8 @@ impl<T: ExchangeData> FakeNetworkTopology<T> {
             prev: self.prev.clone(),
             network: &mut self.topology,
             batch_mode: BatchMode::adaptive(100, Duration::from_millis(100)),
-            // TODO: review this
             persistency_builder: Default::default(),
+            contains_cached_stream: false,
         }
     }
 

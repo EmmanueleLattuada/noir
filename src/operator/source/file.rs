@@ -11,6 +11,7 @@ use serde::Serialize;
 use crate::block::Replication;
 use crate::block::{BlockStructure, OperatorKind, OperatorStructure};
 use crate::network::OperatorCoord;
+use crate::operator::SnapshotId;
 use crate::operator::source::Source;
 use crate::operator::{Operator, StreamElement};
 use crate::persistency::persistency_service::PersistencyService;
@@ -33,6 +34,7 @@ pub struct FileSource {
     terminated: bool,
     operator_coord: OperatorCoord,
     snapshot_generator: SnapshotGenerator,
+    snapshot_before_flush: bool,
     persistency_service: Option<PersistencyService<FileSourceState>>,
 }
 
@@ -75,6 +77,7 @@ impl FileSource {
             // Other fields will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, 0),
             snapshot_generator: SnapshotGenerator::new(),
+            snapshot_before_flush: false,
             persistency_service: None,
         }
     }
@@ -100,6 +103,16 @@ impl Operator<String> for FileSource {
         let mut last_position = None;
         if let Some(pb) = metadata.persistency_builder {
             let p_service =pb.generate_persistency_service::<FileSourceState>();
+            if !metadata.contains_cached_stream {
+                if let Some(snap_freq) = p_service.snapshot_frequency_by_item {
+                    self.snapshot_generator.set_item_interval(snap_freq);
+                }
+                if let Some(snap_freq) = p_service.snapshot_frequency_by_time {
+                    self.snapshot_generator.set_time_interval(snap_freq);
+                }
+            } else {
+                self.snapshot_before_flush = true;
+            }
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
             if let Some(snap_id) = snapshot_id {
                 // Get the persisted state
@@ -110,13 +123,11 @@ impl Operator<String> for FileSource {
                 } else {
                     panic!("No persisted state founded for op: {0}", self.operator_coord);
                 } 
+                if self.snapshot_before_flush && snap_id.id() == 1{
+                    // Don't send twice the "snapshot before flush"
+                    self.snapshot_before_flush = false;
+                }
                 self.snapshot_generator.restart_from(snap_id);
-            }
-            if let Some(snap_freq) = p_service.snapshot_frequency_by_item {
-                self.snapshot_generator.set_item_interval(snap_freq);
-            }
-            if let Some(snap_freq) = p_service.snapshot_frequency_by_time {
-                self.snapshot_generator.set_time_interval(snap_freq);
             }
             self.persistency_service = Some(p_service);
         }
@@ -205,8 +216,19 @@ impl Operator<String> for FileSource {
                 Err(e) => panic!("Error while reading file: {e:?}",),
             }
         } else {
-            self.terminated = true;
-            StreamElement::FlushAndRestart
+            if self.snapshot_before_flush {
+                self.snapshot_before_flush = false;
+                // Save state and forward snapshot with id 1, this is used 
+                // to sync iteration snapshot in presence of cached streams
+                let state = FileSourceState{
+                    current: self.current as u64,
+                };
+                self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, SnapshotId::new(1), state);
+                StreamElement::Snapshot(SnapshotId::new(1))
+            } else {
+                self.terminated = true;
+                StreamElement::FlushAndRestart
+            }
         };
 
         element
@@ -240,6 +262,7 @@ impl Clone for FileSource {
             operator_coord: OperatorCoord::new(0, 0, 0, 0),
             snapshot_generator: self.snapshot_generator.clone(),
             persistency_service: self.persistency_service.clone(),
+            snapshot_before_flush: self.snapshot_before_flush,
         }
     }
 }

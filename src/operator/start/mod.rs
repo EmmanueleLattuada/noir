@@ -55,7 +55,7 @@ pub(crate) trait StartReceiver<Out>: Clone {
     /// True if receiver keep snapshot message queue, false if not
     fn keep_msg_queue(&self) -> bool;
     /// Set the state of the receiver
-    fn set_state(&mut self, receiver_state: Option<Self::ReceiverState>);
+    fn set_state(&mut self, receiver_state: Self::ReceiverState);
 }
 
 pub(crate) type BinaryStartOperator<OutL, OutR> =
@@ -368,7 +368,9 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Operator<
                     self.missing_flush_and_restart = state.missing_flush_and_restart as usize;
                     self.wait_for_state = state.wait_for_state;
                     self.watermark_frontier = state.watermark_forntier;
-                    self.receiver.set_state(state.receiver_state);
+                    if let Some(recv_state) = state.receiver_state {
+                        self.receiver.set_state(recv_state);
+                    }
                     self.persisted_message_queue = state.message_queue; 
                     // Set state gen to 2 because if we are in iteration Replay/Iterate 
                     // needs to lock and unlock the state to restore it to saved one
