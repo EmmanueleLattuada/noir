@@ -5,7 +5,6 @@ use std::marker::PhantomData;
 use crate::block::{BlockStructure, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::{Data, DataKey, Operator, StreamElement, Timestamp};
-use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 
 #[derive(Derivative)]
@@ -21,7 +20,6 @@ where
 {
     prev: PreviousOperators,
     operator_coord: OperatorCoord,
-    persistency_service: Option<PersistencyService<()>>,
     f: F,
     // used to store elements that have not been returned by next() yet
     // buffer: VecDeque<StreamElement<NewOut>>,
@@ -50,7 +48,6 @@ where
         Self {
             prev: self.prev.clone(),
             operator_coord: self.operator_coord,
-            persistency_service: self.persistency_service.clone(),
             f: self.f.clone(),
             frontiter: None,
             #[cfg(feature = "timestamp")]
@@ -96,7 +93,6 @@ where
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0,0,0,op_id),
-            persistency_service: None,
             f,
             frontiter: None,
             #[cfg(feature = "timestamp")]
@@ -119,13 +115,7 @@ where
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
-
         self.operator_coord.from_coord(metadata.coord);
-        if let Some(pb) = metadata.persistency_builder{
-            let p_service = pb.generate_persistency_service::<()>();
-            p_service.restart_from_snapshot(self.operator_coord);
-            self.persistency_service = Some(p_service);
-        }
     }
 
     fn next(&mut self) -> StreamElement<Out> {
@@ -160,20 +150,9 @@ where
                 }
                 StreamElement::Watermark(ts) => return StreamElement::Watermark(ts),
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
-                StreamElement::Terminate => {
-                    if self.persistency_service.is_some() {
-                        // Save void terminated state                            
-                        self.persistency_service.as_mut().unwrap().save_terminated_void_state(self.operator_coord);
-                    }
-                    return StreamElement::Terminate
-                }
+                StreamElement::Terminate => return StreamElement::Terminate,
                 StreamElement::FlushAndRestart => return StreamElement::FlushAndRestart,
-                StreamElement::Snapshot(snap_id) => {
-                    // Save void state and forward snapshot marker
-                    // No state because when a snapshot marker arrives frontiter and timestamp are None 
-                    self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snap_id.clone());
-                    return StreamElement::Snapshot(snap_id);
-                }
+                StreamElement::Snapshot(snap_id) => return StreamElement::Snapshot(snap_id),
             }
         }
     }
@@ -189,6 +168,11 @@ where
 
     fn get_op_id(&self) ->OperatorId {
         self.operator_coord.operator_id
+    }
+
+    fn get_stateful_operators(&self) -> Vec<OperatorId> {
+        // This operator is stateless
+        self.prev.get_stateful_operators()
     }
 }
 
@@ -206,7 +190,6 @@ where
 {
     prev: PreviousOperators,
     operator_coord: OperatorCoord,
-    persistency_service: Option<PersistencyService<()>>,
     f: F,
     // used to store elements that have not been returned by next() yet
     // buffer: VecDeque<StreamElement<NewOut>>,
@@ -236,7 +219,6 @@ where
         Self {
             prev: self.prev.clone(),
             operator_coord: self.operator_coord,
-            persistency_service: self.persistency_service.clone(),
             f: self.f.clone(),
             frontiter: None,
             timestamp: self.timestamp,
@@ -286,7 +268,6 @@ where
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0,0,0,op_id),
-            persistency_service: None,
             f,
             frontiter: None,
             timestamp: None,
@@ -310,13 +291,7 @@ where
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
-
         self.operator_coord.from_coord(metadata.coord);
-        if let Some(pb) = &metadata.persistency_builder{
-            let p_service = pb.generate_persistency_service::<()>();
-            p_service.restart_from_snapshot(self.operator_coord);
-            self.persistency_service = Some(p_service);
-        }
     }
 
     #[inline]
@@ -354,20 +329,9 @@ where
                 }
                 StreamElement::Watermark(ts) => return StreamElement::Watermark(ts),
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
-                StreamElement::Terminate => {
-                    if self.persistency_service.is_some() {
-                        // Save void terminated state                            
-                        self.persistency_service.as_mut().unwrap().save_terminated_void_state(self.operator_coord);
-                    }
-                    return StreamElement::Terminate
-                }
+                StreamElement::Terminate => return StreamElement::Terminate,
                 StreamElement::FlushAndRestart => return StreamElement::FlushAndRestart,
-                StreamElement::Snapshot(snap_id) => {
-                    // Save void state and forward snapshot marker
-                    // No state because when a snapshot marker arrives frontiter and timestamp are None 
-                    self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snap_id.clone());
-                    return StreamElement::Snapshot(snap_id);
-                }
+                StreamElement::Snapshot(snap_id) => return StreamElement::Snapshot(snap_id),
             }
         }
     }
@@ -383,6 +347,11 @@ where
 
     fn get_op_id(&self) -> OperatorId {
         self.operator_coord.operator_id
+    }
+
+    fn get_stateful_operators(&self) -> Vec<OperatorId> {
+        // This operator is stateless
+        self.prev.get_stateful_operators()
     }
 }
 

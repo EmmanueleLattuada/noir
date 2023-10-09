@@ -353,6 +353,13 @@ where
     fn get_op_id(&self) -> OperatorId {
         self.operator_coord.operator_id
     }
+
+    fn get_stateful_operators(&self) -> Vec<OperatorId> {
+        let mut res = Vec::new();
+        // This operator is stateful
+        res.push(self.operator_coord.operator_id);
+        res
+    }
 }
 
 impl<Source> Clone for ParallelIteratorSource<Source>

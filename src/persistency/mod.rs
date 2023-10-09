@@ -183,47 +183,6 @@ mod tests {
 
     }    
  
-    
-    #[test]
-    #[serial]
-    fn test_save_void_state() {
-        let op_coord1 = OperatorCoord {
-            block_id: 1,
-            host_id: 1,
-            replica_id: 1,
-            operator_id: 2,
-        };
-
-        let pers_builder = PersistencyBuilder::new(Some(
-            persistency_config_unit_tests()
-        ));
-        let pers_services: PersistencyService<FakeState> = pers_builder.generate_persistency_service();
-        pers_services.save_void_state(op_coord1, SnapshotId::new(1));
-        pers_services.save_void_state(op_coord1, SnapshotId::new(2));
-        let retrived_state: Option<FakeState> = pers_services.get_state(op_coord1, SnapshotId::new(3));
-        assert_eq!(None, retrived_state);
-
-        // Clean
-        pers_services.delete_state(op_coord1, SnapshotId::new(1));
-        let retrived_state: Option<FakeState> = pers_services.get_state(op_coord1, SnapshotId::new(1));
-        assert_eq!(None, retrived_state);
-        let last = pers_services.get_last_snapshot(op_coord1).unwrap();
-        assert_eq!(SnapshotId::new(2), last);
-
-        pers_services.delete_state(op_coord1, SnapshotId::new(2));
-        let retrived_state: Option<FakeState> = pers_services.get_state(op_coord1, SnapshotId::new(2));
-        assert_eq!(None, retrived_state);
-        let last = pers_services.get_last_snapshot(op_coord1);
-        assert_eq!(None, last);
-
-        pers_services.save_void_state(op_coord1, SnapshotId::new(1));
-        let last = pers_services.get_last_snapshot(op_coord1).unwrap();
-        assert_eq!(SnapshotId::new(1), last);
-        pers_services.delete_state(op_coord1, SnapshotId::new(1));
-        let last = pers_services.get_last_snapshot(op_coord1);
-        assert_eq!(None, last);
-
-    }
 
     #[ignore]
     #[test]
@@ -245,7 +204,7 @@ mod tests {
         assert!(result.is_err());
 
         // Snap_id = 10
-        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_services.save_void_state(op_coord1, SnapshotId::new(10))));
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_services.save_state(op_coord1, SnapshotId::new(10), 100)));
         assert!(result.is_err());
 
         pers_services.save_state(op_coord1, SnapshotId::new(1), 101);
@@ -255,15 +214,15 @@ mod tests {
         pers_services = pers_builder.generate_persistency_service();
 
         // Snap_id = 1
-        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_services.save_void_state(op_coord1, SnapshotId::new(1))));
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_services.save_state(op_coord1, SnapshotId::new(1), 100)));
         assert!(result.is_err());
 
         // Snap_id = 2
-        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_services.save_void_state(op_coord1, SnapshotId::new(2))));
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_services.save_state(op_coord1, SnapshotId::new(2), 100)));
         assert!(result.is_err());
 
         // Snap_id = 3
-        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_services.save_void_state(op_coord1, SnapshotId::new(3))));
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| pers_services.save_state(op_coord1, SnapshotId::new(3), 100)));
         assert!(result.is_err());
 
         // Clean

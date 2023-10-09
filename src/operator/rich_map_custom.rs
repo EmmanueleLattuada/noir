@@ -82,10 +82,7 @@ where
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
-
-        self.operator_coord.block_id = metadata.coord.block_id;
-        self.operator_coord.host_id = metadata.coord.host_id;
-        self.operator_coord.replica_id = metadata.coord.replica_id;
+        self.operator_coord.from_coord(metadata.coord);
     }
 
     fn next(&mut self) -> StreamElement<NewOut> {
@@ -104,5 +101,10 @@ where
 
     fn get_op_id(&self) -> OperatorId {
         self.operator_coord.operator_id
+    }
+
+    fn get_stateful_operators(&self) -> Vec<OperatorId> {
+        // This operator is stateless
+        self.prev.get_stateful_operators()
     }
 }

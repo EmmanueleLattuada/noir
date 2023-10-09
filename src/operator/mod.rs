@@ -149,7 +149,6 @@ impl SnapshotId {
         self.terminate
     }
 
-    // TODO: test this
     pub (crate) fn check_next(&self, next: Self) -> bool {
         if self.snapshot_id == next.snapshot_id {
             //check each stack lev
@@ -197,7 +196,6 @@ impl SnapshotId {
         }
     }
 
-    // TODO: test this
     pub (crate) fn next_iter(&self, iteration_stack_level: usize) -> Self {
         if iteration_stack_level < 1 {
             panic!("Iteration level must be greater than 0");
@@ -210,14 +208,6 @@ impl SnapshotId {
                 terminate: self.terminate,
                 iteration_stack: it_stack,
             };
-        /*} else if self.iteration_stack.len() == iteration_stack_level - 1 {
-            let mut it_stack = self.iteration_stack.clone();
-            it_stack.push(1);
-            return Self {
-                snapshot_id: self.snapshot_id,
-                terminate: self.terminate,
-                iteration_stack: it_stack,
-            };*/
         } else {
             let mut it_stack = self.iteration_stack.clone();
             while it_stack.len() < iteration_stack_level {
@@ -266,31 +256,6 @@ impl PartialOrd for SnapshotId {
         return Some(res);
     }
 }
-// TODO:    simple add --> id = id + 1
-//          iter add --> add 1 to specified stack level
-/*
-impl Add<u64> for SnapshotId {
-    type Output = Self;
-    fn add(self, other: u64) -> Self {
-        Self {
-            snapshot_id: self.snapshot_id + other,
-            terminate: self.terminate,
-            iteration_stack: self.iteration_stack.clone(),
-        }
-    }
-}*/
-
-/*
-impl Sub<u64> for SnapshotId {
-    type Output = Self;
-    fn sub(self, other: u64) -> Self {
-        Self {
-            snapshot_id: self.snapshot_id - other,
-            terminate: self.terminate,
-            iteration_stack: self.iteration_stack.clone(),
-        }
-    }
-}*/
 
 /// An element of the stream. This is what enters and exits from the operators.
 ///
@@ -353,6 +318,9 @@ pub trait Operator<Out: Data>: Clone + Send + Display {
 
     /// Return the operator id: this identifies the operator inside the chain
     fn get_op_id(&self) -> OperatorId;
+
+    /// Return a list with id of all stateful operators inside the chain
+    fn get_stateful_operators(&self) -> Vec<OperatorId>;
 }
 
 impl<Out> StreamElement<Out> {

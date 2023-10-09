@@ -136,10 +136,10 @@ where
     fn snapshot_procedures(&mut self, message: &StreamElement<Out>) {
         match message {
             StreamElement::Snapshot(snap_id) => {
-                self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snap_id.clone());
+                self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snap_id.clone(), ());
             }
             StreamElement::Terminate => {                        
-                self.persistency_service.as_mut().unwrap().save_terminated_void_state(self.operator_coord);
+                self.persistency_service.as_mut().unwrap().save_terminated_state(self.operator_coord, ());
             }
             _ => {}
         }
@@ -285,6 +285,13 @@ where
 
     fn get_op_id(&self) -> OperatorId {
         self.operator_coord.operator_id
+    }
+
+    fn get_stateful_operators(&self) -> Vec<OperatorId> {
+        let mut res = self.prev.get_stateful_operators();
+        // This operator is stateful
+        res.push(self.operator_coord.operator_id);
+        res
     }
 }
 

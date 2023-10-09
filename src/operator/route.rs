@@ -1,6 +1,5 @@
 use crate::block::NextStrategy;
 use crate::operator::{ExchangeData, Operator};
-use crate::persistency::persistency_service::PersistencyService;
 use crate::stream::Stream;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
@@ -105,7 +104,6 @@ where
     prev: OperatorChain,
 
     operator_coord: OperatorCoord,
-    persistency_service: Option<PersistencyService<()>>,
     next_strategy: NextStrategy<Out, IndexFn>,
     batch_mode: BatchMode,
     #[derivative(Debug = "ignore", Clone(clone_with = "clone_default"))]
@@ -147,7 +145,6 @@ where
             
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
-            persistency_service: None,
             next_strategy,
             batch_mode,
             endpoints: Default::default(),
@@ -221,11 +218,6 @@ where
         self.setup_endpoints();
 
         self.operator_coord.from_coord(metadata.coord);
-        if let Some(pb) = metadata.persistency_builder{
-            let p_service = pb.generate_persistency_service::<()>();
-            p_service.restart_from_snapshot(self.operator_coord);
-            self.persistency_service = Some(p_service);
-        }
     }
 
     fn next(&mut self) -> StreamElement<()> {
@@ -238,7 +230,8 @@ where
         match &message {
             // Broadcast messages
             StreamElement::Watermark(_)
-            | StreamElement::FlushAndRestart => {
+            | StreamElement::FlushAndRestart
+            | StreamElement::Snapshot(_) => {
                 for e in self.endpoints.iter() {
                     for &sender_idx in e.block_senders.indexes.iter() {
                         let sender = &mut self.senders[sender_idx];
@@ -250,10 +243,6 @@ where
                 if self.terminated {
                     // Just return Terminate to exit
                     return StreamElement::Terminate
-                }
-                if self.persistency_service.is_some() {
-                    // Save void terminated state
-                    self.persistency_service.as_mut().unwrap().save_terminated_void_state(self.operator_coord);
                 }
                 // Broadcast message
                 for e in self.endpoints.iter() {
@@ -282,16 +271,6 @@ where
                 }
             }
             StreamElement::FlushBatch => {}
-            StreamElement::Snapshot(snap_id) => {
-                // Save void state and broaadcast marker
-                self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snap_id.clone());
-                for e in self.endpoints.iter() {
-                    for &sender_idx in e.block_senders.indexes.iter() {
-                        let sender = &mut self.senders[sender_idx];
-                        sender.1.enqueue(message.clone());
-                    }
-                }
-            }
         };
 
         // Flushing messages
@@ -334,6 +313,11 @@ where
 
     fn get_op_id(&self) -> OperatorId {
        self.operator_coord.operator_id
+    }
+
+    fn get_stateful_operators(&self) -> Vec<OperatorId> {
+        // This operator is stateless
+        self.prev.get_stateful_operators()
     }
 }
 

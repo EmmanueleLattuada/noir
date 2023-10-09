@@ -84,26 +84,6 @@ impl<State:ExchangeData> PersistencyService<State> {
         }*/
     }
 
-    /// Similar to save_terminated_state
-    /// This will get the last saved snapshot id, then save state with 
-    /// a terminated snapshot id with id = last snapshot id + 1.
-    /// In case there are no saved snapshots the id is set to one.
-    /// If the operator has already saved a terminated state this function does nothing.
-    /// Call this before forward StreamElement::Terminate.
-    #[inline(never)]
-    pub (crate) fn save_terminated_void_state(&self, op_coord: OperatorCoord) {
-        let opt_last_snapshot_id = self.handler.get_last_snapshot(op_coord);
-        if let Some(last_snapshot_id) = opt_last_snapshot_id {
-            if !last_snapshot_id.terminate() {
-                let terminal_snap_id = SnapshotId::new_terminate(last_snapshot_id.id() + 1);
-                self.handler.save_void_state(op_coord, terminal_snap_id);
-            }
-        } else {
-            // Save with id = 1
-            let terminal_snap_id = SnapshotId::new_terminate(1);
-            self.handler.save_void_state(op_coord, terminal_snap_id);
-        }
-    }
 
     #[inline(never)]
     pub (crate) fn save_state(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId, state: State) {
@@ -119,17 +99,7 @@ impl<State:ExchangeData> PersistencyService<State> {
          */
         self.state_saver.save(op_coord, snapshot_id, state)
     }
-    #[inline(never)]
-    pub (crate) fn save_void_state(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId) {
-        if snapshot_id.id() == 0 {
-            panic!("Passed snap_id: {snapshot_id:?}.\nSnapshot id must start from 1");
-        }
-        let last_snapshot = self.get_last_snapshot(op_coord);
-        if !((snapshot_id.id() == 1 && last_snapshot.is_none()) || last_snapshot.clone().unwrap_or(SnapshotId::new(0)).check_next(snapshot_id.clone())) {
-            panic!("Passed snap_id: {snapshot_id:?}.\n Last saved snap_id: {last_snapshot:?}.\n  Op_coord: {op_coord:?}.\n Snapshot id must be a sequence with step 1 starting from 1");
-        }
-        self.handler.save_void_state(op_coord, snapshot_id);
-    }
+
     #[inline(never)]
     pub (crate) fn get_last_snapshot(&self, op_coord: OperatorCoord) -> Option<SnapshotId> {
         self.handler.get_last_snapshot(op_coord)

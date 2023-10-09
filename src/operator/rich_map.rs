@@ -5,7 +5,6 @@ use std::marker::PhantomData;
 use crate::block::{BlockStructure, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::{Data, DataKey, Operator, StreamElement};
-use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 
 #[derive(Debug)]
@@ -16,7 +15,6 @@ where
 {
     prev: OperatorChain,
     operator_coord: OperatorCoord,
-    persistency_service: Option<PersistencyService<()>>,
     maps_fn: HashMap<Key, F, crate::block::GroupHasherBuilder>,
     init_map: F,
     _out: PhantomData<Out>,
@@ -33,7 +31,6 @@ where
         Self {
             prev: self.prev.clone(),
             operator_coord: self.operator_coord,
-            persistency_service: self.persistency_service.clone(),
             maps_fn: self.maps_fn.clone(),
             init_map: self.init_map.clone(),
             _out: self._out,
@@ -72,25 +69,11 @@ where
             
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
-            persistency_service: None,
 
             maps_fn: Default::default(),
             init_map: f,
             _out: Default::default(),
             _new_out: Default::default(),
-        }
-    }
-
-    /// Save state accordingly to the given message
-    fn snapshot_procedures(&mut self, message: &StreamElement<(Key, Out)>) {
-        match message {
-            StreamElement::Snapshot(snap_id) => {
-                self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snap_id.clone());
-            }
-            StreamElement::Terminate => {                
-                self.persistency_service.as_mut().unwrap().save_terminated_void_state(self.operator_coord);
-            }
-            _ => {}
         }
     }
 }
@@ -103,21 +86,12 @@ where
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
-
         self.operator_coord.from_coord(metadata.coord);
-        if let Some(pb) = metadata.persistency_builder{
-            let p_service = pb.generate_persistency_service::<()>();
-            p_service.restart_from_snapshot(self.operator_coord);
-            self.persistency_service = Some(p_service);
-        }
     }
 
     #[inline]
     fn next(&mut self) -> StreamElement<(Key, NewOut)> {
         let element = self.prev.next();
-        if self.persistency_service.is_some(){
-            self.snapshot_procedures(&element);
-        }
         if matches!(element, StreamElement::FlushAndRestart) {
             // self.maps_fn.clear();
         }
@@ -146,5 +120,10 @@ where
 
     fn get_op_id(&self) -> OperatorId {
         self.operator_coord.operator_id
+    }
+
+    fn get_stateful_operators(&self) -> Vec<OperatorId> {
+        // This operator is stateless
+        self.prev.get_stateful_operators()
     }
 }

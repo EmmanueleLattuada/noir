@@ -493,6 +493,13 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
     fn get_op_id(&self) -> OperatorId {
         self.operator_coord.operator_id
     }
+
+    fn get_stateful_operators(&self) -> Vec<OperatorId> {
+        let mut res = Vec::new();
+        // This operator is stateful
+        res.push(self.operator_coord.operator_id);
+        res
+    }
 }
 
 impl<Out: Data + for<'a> Deserialize<'a>> Clone for CsvSource<Out> {

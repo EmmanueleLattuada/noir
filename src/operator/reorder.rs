@@ -206,6 +206,13 @@ where
     fn get_op_id(&self) -> OperatorId {
         self.operator_coord.operator_id
     }
+
+    fn get_stateful_operators(&self) -> Vec<OperatorId> {
+        let mut res = self.prev.get_stateful_operators();
+        // This operator is stateful
+        res.push(self.operator_coord.operator_id);
+        res
+    }
 }
 
 #[cfg(test)]

@@ -77,6 +77,10 @@ impl<Out: Data> Operator<Out> for FakeOperator<Out> {
     fn get_op_id(&self) -> OperatorId {
         0
     }
+
+    fn get_stateful_operators(&self) -> Vec<OperatorId> {
+        Vec::new()
+    }
 }
 
 impl<Out: Data> Source<Out> for FakeOperator<Out> {

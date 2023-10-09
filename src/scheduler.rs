@@ -60,8 +60,8 @@ struct SchedulerBlockInfo {
     batch_mode: BatchMode,
     /// Whether this block has `NextStrategy::OnlyOne`.
     is_only_one_strategy: bool,
-    /// This is the operator id of the last operator in the block
-    last_operator_id: u64,
+    /// List with operators id of all stateful operators in the block
+    stateful_op: Vec<OperatorId>,
 }
 
 /// The `Scheduler` is the entity that keeps track of all the blocks of the job graph and when the
@@ -164,29 +164,29 @@ impl Scheduler {
     // Compute and add operators coordinates of given block to operators_coordinates
     // If persistency is not configured, this is skipped
     fn compute_coordinates(&mut self, info: SchedulerBlockInfo, block_id: BlockId){
-        let num_of_op = info.last_operator_id + 1;
-            let num_of_hosts = match &self.config.runtime {
-                ExecutionRuntime::Remote(conf) => {
-                    conf.hosts.len() as u64
-                }
-                ExecutionRuntime::Local(_) => {
-                    1
-                }
-            };
-            for host in 0..num_of_hosts{
-                let host_replicas = info.replicas(host);
-                for coord in host_replicas {
-                    for op_id in 0..num_of_op {
-                        let op_coord = OperatorCoord { 
-                            block_id, 
-                            host_id: host, 
-                            replica_id: coord.replica_id, 
-                            operator_id: op_id, 
-                        };
-                        self.operators_coordinates.push(op_coord)
-                    }
+        let stateful_ops = info.stateful_op.clone();
+        let num_of_hosts = match &self.config.runtime {
+            ExecutionRuntime::Remote(conf) => {
+                conf.hosts.len() as u64
+            }
+            ExecutionRuntime::Local(_) => {
+                1
+            }
+        };
+        for host in 0..num_of_hosts{
+            let host_replicas = info.replicas(host);
+            for coord in host_replicas {
+                for op_id in &stateful_ops {
+                    let op_coord = OperatorCoord { 
+                        block_id, 
+                        host_id: host, 
+                        replica_id: coord.replica_id, 
+                        operator_id: *op_id, 
+                    };
+                    self.operators_coordinates.push(op_coord)
                 }
             }
+        }
     }
 
     /// Connect a pair of blocks inside the job graph.
@@ -458,7 +458,7 @@ impl Scheduler {
             global_ids: global_ids.into_iter().collect(),
             batch_mode: block.batch_mode,
             is_only_one_strategy: block.is_only_one_strategy,
-            last_operator_id: block.operators.get_op_id(),
+            stateful_op: block.operators.get_stateful_operators(),
         }
     }
 
@@ -529,7 +529,7 @@ impl Scheduler {
             global_ids,
             batch_mode: block.batch_mode,
             is_only_one_strategy: block.is_only_one_strategy,
-            last_operator_id: block.operators.get_op_id(),
+            stateful_op: block.operators.get_stateful_operators(),
         }
     }
 }

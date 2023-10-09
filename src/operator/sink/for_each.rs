@@ -5,7 +5,6 @@ use crate::block::{BlockStructure, OperatorKind, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::sink::Sink;
 use crate::operator::{Data, DataKey, Operator, StreamElement};
-use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::stream::{KeyedStream, Stream};
 
@@ -18,7 +17,6 @@ where
 {
     prev: PreviousOperators,
     operator_coord: OperatorCoord,
-    persistency_service: Option<PersistencyService<()>>,
     #[derivative(Debug = "ignore")]
     f: F,
     _out: PhantomData<Out>,
@@ -35,7 +33,6 @@ where
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
-            persistency_service: None,
             f,
             _out: PhantomData,
         }
@@ -59,13 +56,7 @@ where
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
-
         self.operator_coord.from_coord(metadata.coord);
-        if let Some(pb) = metadata.persistency_builder{
-            let p_service = pb.generate_persistency_service::<()>();
-            p_service.restart_from_snapshot(self.operator_coord);
-            self.persistency_service = Some(p_service);
-        }
     }
 
     fn next(&mut self) -> StreamElement<()> {
@@ -75,20 +66,10 @@ where
                     (self.f)(t);
                 }
                 StreamElement::Watermark(w) => return StreamElement::Watermark(w),
-                StreamElement::Terminate => {
-                    if self.persistency_service.is_some() {
-                        // Save void terminated state
-                        self.persistency_service.as_mut().unwrap().save_terminated_void_state(self.operator_coord);
-                    }
-                    return StreamElement::Terminate; 
-                }
+                StreamElement::Terminate => return StreamElement::Terminate,
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
                 StreamElement::FlushAndRestart => return StreamElement::FlushAndRestart,
-                StreamElement::Snapshot(snap_id) => {
-                    // No state is keeped: this can only provide at-least-one semantic
-                    self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snap_id.clone());
-                    return StreamElement::Snapshot(snap_id);
-                }
+                StreamElement::Snapshot(snap_id) => return StreamElement::Snapshot(snap_id),
             }
         }
     }
@@ -103,6 +84,11 @@ where
 
     fn get_op_id(&self) -> OperatorId {
         self.operator_coord.operator_id
+    }
+
+    fn get_stateful_operators(&self) -> Vec<OperatorId> {
+        // This operator is stateless
+        self.prev.get_stateful_operators()
     }
 }
 

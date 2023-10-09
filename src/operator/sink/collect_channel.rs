@@ -4,7 +4,6 @@ use crate::block::{BlockStructure, OperatorKind, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::sink::Sink;
 use crate::operator::{ExchangeData, Operator, StreamElement};
-use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 
 #[cfg(feature = "crossbeam")]
@@ -19,7 +18,6 @@ where
 {
     prev: PreviousOperators,
     operator_coord: OperatorCoord,
-    persistency_service: Option<PersistencyService<()>>,
     tx: Option<Sender<Out>>,
 }
 
@@ -33,7 +31,6 @@ where
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
-            persistency_service: None,
             tx: Some(tx)
         }
     }
@@ -55,14 +52,7 @@ where
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
-
         self.operator_coord.from_coord(metadata.coord);
-
-        if let Some(pb) = metadata.persistency_builder{
-            let p_service = pb.generate_persistency_service::<()>();
-            p_service.restart_from_snapshot(self.operator_coord);
-            self.persistency_service = Some(p_service);
-        }
     }
 
     fn next(&mut self) -> StreamElement<()> {
@@ -74,16 +64,11 @@ where
             StreamElement::Watermark(w) => StreamElement::Watermark(w),
             StreamElement::Terminate => {
                 self.tx = None;
-                if self.persistency_service.is_some() {
-                    // Save terminated state
-                    self.persistency_service.as_mut().unwrap().save_terminated_void_state(self.operator_coord);
-                }
                 StreamElement::Terminate
             }
             StreamElement::FlushBatch => StreamElement::FlushBatch,
             StreamElement::FlushAndRestart => StreamElement::FlushAndRestart,
             StreamElement::Snapshot(snap_id) => {
-                self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snap_id.clone());
                 StreamElement::Snapshot(snap_id)
             }
         }
@@ -99,6 +84,11 @@ where
 
     fn get_op_id(&self) -> OperatorId {
         self.operator_coord.operator_id
+    }
+
+    fn get_stateful_operators(&self) -> Vec<OperatorId> {
+        // This operator is stateless
+        self.prev.get_stateful_operators()
     }
 }
 

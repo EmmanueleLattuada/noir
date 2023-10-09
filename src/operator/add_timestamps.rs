@@ -150,6 +150,13 @@ where
     fn get_op_id(&self) -> OperatorId {
         self.operator_coord.operator_id
     }
+
+    fn get_stateful_operators(&self) -> Vec<OperatorId> {
+        let mut res = self.prev.get_stateful_operators();
+        // This operator is stateful
+        res.push(self.operator_coord.operator_id);
+        res
+    }
 }
 
 #[derive(Clone)]
@@ -159,7 +166,7 @@ where
 {
     prev: OperatorChain,
     operator_coord: OperatorCoord,
-    persistency_service: Option<PersistencyService<()>>,
+    //persistency_service: Option<PersistencyService<()>>,
     _out: PhantomData<Out>,
 }
 
@@ -180,7 +187,7 @@ where
         let op_id = prev.get_op_id() + 1;
         Self {
             prev,
-            persistency_service: None,
+            //persistency_service: None,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
             _out: Default::default(),
@@ -196,11 +203,11 @@ where
         self.prev.setup(metadata);
 
         self.operator_coord.from_coord(metadata.coord);
-        if let Some(pb) = &metadata.persistency_builder {
+        /*if let Some(pb) = &metadata.persistency_builder {
             let p_service = pb.generate_persistency_service::<()>();
             p_service.restart_from_snapshot(self.operator_coord);
             self.persistency_service = Some(p_service);
-        }
+        }*/
     }
 
     #[inline]
@@ -211,14 +218,14 @@ where
                 StreamElement::Timestamped(item, _) => return StreamElement::Item(item),
                 StreamElement::Snapshot(snapshot_id) => {
                     // Save void state and forward snapshot marker
-                    self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snapshot_id.clone());
+                    //self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snapshot_id.clone());
                     return StreamElement::Snapshot(snapshot_id)
                 }
                 StreamElement::Terminate => {
-                    if self.persistency_service.is_some(){
+                    /*if self.persistency_service.is_some(){
                         // Save void terminated state
                         self.persistency_service.as_mut().unwrap().save_terminated_void_state(self.operator_coord);
-                    }
+                    }*/
                     return StreamElement::Terminate
                 }
                 el => return el,
@@ -237,6 +244,11 @@ where
 
     fn get_op_id(&self) -> OperatorId {
         self.operator_coord.operator_id
+    }
+
+    fn get_stateful_operators(&self) -> Vec<OperatorId> {
+        // This operator is stateless
+        self.prev.get_stateful_operators()
     }
 }
 

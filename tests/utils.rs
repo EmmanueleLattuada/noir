@@ -96,6 +96,11 @@ impl<Out: Data, PreviousOperator: Operator<Out>> Operator<Out>
     fn get_op_id(&self) -> CoordUInt {
         0
     }
+
+    fn get_stateful_operators(&self) -> Vec<u64> {
+        // This operator is stateless
+        self.prev.get_stateful_operators()
+    }
 }
 
 /// Helper functions for running the integration tests.

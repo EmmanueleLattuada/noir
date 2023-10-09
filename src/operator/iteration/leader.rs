@@ -393,6 +393,15 @@ where
     fn get_op_id(&self) -> OperatorId {
         self.operator_coord.operator_id
     }
+
+    fn get_stateful_operators(&self) -> Vec<OperatorId> {
+        // This operator is stateful
+        let mut res = Vec::new();
+        // It will have a Start with op_id = 0 
+        res.push(0);
+        res.push(self.operator_coord.operator_id);
+        res
+    }
 }
 
 impl<DeltaUpdate: ExchangeData, State: ExchangeData, Global, LoopCond> Source<State>

@@ -105,7 +105,7 @@ impl<Out: Data + core::fmt::Debug> Operator<Out> for ChannelSource<Out> {
             if self.terminated {
                 if self.persistency_service.is_some(){
                     // Save terminated state
-                    self.persistency_service.as_mut().unwrap().save_terminated_void_state(self.operator_coord);
+                    self.persistency_service.as_mut().unwrap().save_terminated_state(self.operator_coord, ());
                 } 
                 return StreamElement::Terminate;
             }
@@ -115,7 +115,7 @@ impl<Out: Data + core::fmt::Debug> Operator<Out> for ChannelSource<Out> {
                 if snapshot.is_some() {
                     let snapshot_id = snapshot.unwrap();
                     // Save void state (this operator is stateless) and forward snapshot marker
-                    self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snapshot_id.clone());
+                    self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id.clone(), ());
                     return StreamElement::Snapshot(snapshot_id);
                 }
             }
@@ -169,6 +169,13 @@ impl<Out: Data + core::fmt::Debug> Operator<Out> for ChannelSource<Out> {
 
     fn get_op_id(&self) -> OperatorId {
         self.operator_coord.operator_id
+    }
+
+    fn get_stateful_operators(&self) -> Vec<OperatorId> {
+        let mut res = Vec::new();
+        // This operator is stateful
+        res.push(self.operator_coord.operator_id);
+        res
     }
 }
 
