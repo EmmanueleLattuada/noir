@@ -195,7 +195,6 @@ impl<
         let state = JoinLocalHashState{
             left: self.left.clone(),
             right: self.right.clone(),
-            buffer: self.buffer.clone(),
         };
         self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id, state);
     }
@@ -204,7 +203,6 @@ impl<
         let state = JoinLocalHashState{
             left: self.left.clone(),
             right: self.right.clone(),
-            buffer: self.buffer.clone(),
         };
         self.persistency_service.as_mut().unwrap().save_terminated_state(self.operator_coord, state);
     }
@@ -214,7 +212,6 @@ impl<
 struct JoinLocalHashState<Key: DataKey, Out1, Out2> {
     left: SideHashMap<Key, Out1>,
     right: SideHashMap<Key, Out2>,
-    buffer: VecDeque<(Key, OuterJoinTuple<Out1, Out2>)>,
 }
 
 
@@ -242,7 +239,6 @@ impl<
                 if let Some(state) = opt_state {
                     self.left = state.left;
                     self.right = state.right;
-                    self.buffer = state.buffer;
                 } else {
                     panic!("No persisted state founded for op: {0}", self.operator_coord);
                 } 

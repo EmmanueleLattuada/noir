@@ -28,7 +28,6 @@ impl<A> Slot<A> {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SessionWindowManagerState<AS>{
-    gap: Duration,
     w: Option<SlotState<AS>>,
 }
 
@@ -89,7 +88,6 @@ where
             None => None
         };
         SessionWindowManagerState {
-            gap: self.gap.clone(),
             w,
         }
     }
@@ -98,7 +96,6 @@ where
     /// calculating the elapsed time to the snapshot and the elapsed time from
     /// the snapshot and now
     fn set_state(&mut self, state: Self::ManagerState) {
-        self.gap = state.gap.clone();
         self.w = match state.w.clone() {
             Some(slot) => {
                 // Unwrap should always succeed, maybe remove default and panic

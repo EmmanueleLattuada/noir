@@ -6,7 +6,6 @@ use crate::block::{
 };
 use crate::network::{ReceiverEndpoint, OperatorCoord};
 use crate::operator::{ExchangeData, KeyerFn, Operator, StreamElement};
-use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{BlockId, ExecutionMetadata, OperatorId};
 
 /// The list with the interesting senders of a single block.
@@ -38,8 +37,6 @@ where
     senders: Vec<(ReceiverEndpoint, Batcher<Out>)>,
     feedback_id: Option<BlockId>,
     ignore_block_ids: Vec<BlockId>,
-    persistency_service: Option<PersistencyService<()>>,
-    terminated: bool,
     feedback_pending_snapshots: VecDeque<StreamElement<Out>>,
 }
 
@@ -78,8 +75,6 @@ where
             senders: Default::default(),
             feedback_id: None,
             ignore_block_ids: Default::default(),
-            persistency_service: None,
-            terminated: false,
             feedback_pending_snapshots: VecDeque::default(),
         }
     }
@@ -131,19 +126,6 @@ where
     pub(crate) fn ignore_destination(&mut self, block_id: BlockId) {
         self.ignore_block_ids.push(block_id);
     }
-
-    /// Save state accordingly to the given message
-    fn snapshot_procedures(&mut self, message: &StreamElement<Out>) {
-        match message {
-            StreamElement::Snapshot(snap_id) => {
-                self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snap_id.clone(), ());
-            }
-            StreamElement::Terminate => {                        
-                self.persistency_service.as_mut().unwrap().save_terminated_state(self.operator_coord, ());
-            }
-            _ => {}
-        }
-    }
 }
 
 impl<Out: ExchangeData, OperatorChain, IndexFn> Operator<()> for End<Out, OperatorChain, IndexFn>
@@ -172,24 +154,11 @@ where
             self.next_strategy.set_replica(groupbyreplica_index);
         }
 
-        if let Some(pb) = metadata.persistency_builder{
-            let p_service = pb.generate_persistency_service::<()>();
-            let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
-            if let Some(snap_id) = snapshot_id {
-                if snap_id.terminate() {
-                    self.terminated = true;
-                }
-            }
-            self.persistency_service = Some(p_service);
-        }
     }
 
     fn next(&mut self) -> StreamElement<()> {
         let message = self.prev.next();
         let to_return = message.take();
-        if self.persistency_service.is_some(){
-            self.snapshot_procedures(&message);
-        }
         match &message {
             // Broadcast messages
             StreamElement::Watermark(_)
@@ -288,10 +257,8 @@ where
     }
 
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
-        let mut res = self.prev.get_stateful_operators();
-        // This operator is stateful
-        res.push(self.operator_coord.operator_id);
-        res
+        // This operator is stateless
+        self.prev.get_stateful_operators()
     }
 }
 

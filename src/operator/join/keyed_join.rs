@@ -190,7 +190,6 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> JoinKeyedOut
         let state = JoinKeyedOuterState{
             left: self.left.clone(),
             right: self.right.clone(),
-            buffer: self.buffer.clone(),
         };
         self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id, state);        
     }
@@ -199,7 +198,6 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> JoinKeyedOut
         let state = JoinKeyedOuterState{
             left: self.left.clone(),
             right: self.right.clone(),
-            buffer: self.buffer.clone(),
         };
         self.persistency_service.as_mut().unwrap().save_terminated_state(self.operator_coord, state);
     }
@@ -224,7 +222,6 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> Display
 struct JoinKeyedOuterState<K: DataKey, V1, V2> {    
     left: SideHashMap<K, V1>,
     right: SideHashMap<K, V2>,
-    buffer: VecDeque<(K, OuterJoinTuple<V1, V2>)>,
 }
 
 impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
@@ -244,7 +241,6 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
                 if let Some(state) = opt_state {
                     self.left = state.left;
                     self.right = state.right;
-                    self.buffer = state.buffer;
                 } else {
                     panic!("No persisted state founded for op: {0}", self.operator_coord);
                 } 
@@ -418,7 +414,6 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
             right: self.right.clone(),
             left_ended: self.left_ended,
             right_ended: self.right_ended,
-            buffer: self.buffer.clone(),
         };
         self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id, state);
     }
@@ -429,7 +424,6 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
             right: self.right.clone(),
             left_ended: self.left_ended,
             right_ended: self.right_ended,
-            buffer: self.buffer.clone(),
         };
         self.persistency_service.as_mut().unwrap().save_terminated_state(self.operator_coord, state);
     }
@@ -441,7 +435,6 @@ struct JoinKeyedInnerState<K: DataKey, V1, V2> {
     right: HashMap<K, Vec<V2>, crate::block::CoordHasherBuilder>,
     left_ended: bool,
     right_ended: bool,
-    buffer: VecDeque<(K, InnerJoinTuple<V1, V2>)>,
 }
 
 impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeData + Debug>
@@ -463,7 +456,6 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
                     self.right_ended = state.right_ended;
                     self.left = state.left;
                     self.right = state.right;
-                    self.buffer = state.buffer;
                 } else {
                     panic!("No persisted state founded for op: {0}", self.operator_coord);
                 } 

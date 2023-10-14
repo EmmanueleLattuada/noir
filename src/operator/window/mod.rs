@@ -148,7 +148,7 @@ where
     /// Operator coordinate
     operator_coord: OperatorCoord,
     /// Persistency service
-    persistency_service: Option<PersistencyService<WindowOperatorState<Key, Out, W::ManagerState>>>,
+    persistency_service: Option<PersistencyService<WindowOperatorState<Key, W::ManagerState>>>,
     /// The name of the actual operator that this one abstracts.
     ///
     /// It is used only for tracing purposes.
@@ -179,9 +179,8 @@ where
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub (crate) struct WindowOperatorState<Key: DataKey, Out, ManagerState> {
+pub (crate) struct WindowOperatorState<Key: DataKey, ManagerState> {
     manager: KeyedWindowManagerState<Key, ManagerState>,
-    output_buffer: VecDeque<StreamElement<(Key, Out)>>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -204,13 +203,12 @@ where
 
         self.operator_coord.from_coord(metadata.coord);
         if let Some(pb) = metadata.persistency_builder{
-            let p_service = pb.generate_persistency_service::<WindowOperatorState<Key, Out, W::ManagerState>>();
+            let p_service = pb.generate_persistency_service::<WindowOperatorState<Key, W::ManagerState>>();
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
             if snapshot_id.is_some() {
                 // Get and resume the persisted state
-                let opt_state: Option<WindowOperatorState<Key, Out, W::ManagerState>> = p_service.get_state(self.operator_coord, snapshot_id.unwrap());
+                let opt_state: Option<WindowOperatorState<Key, W::ManagerState>> = p_service.get_state(self.operator_coord, snapshot_id.unwrap());
                 if let Some(state) = opt_state {
-                    self.output_buffer = state.output_buffer;                
                     state.manager.windows
                         .iter()
                         .for_each(|(key, manager_state)| {
@@ -349,7 +347,6 @@ where
         };
         let state = WindowOperatorState {
             manager: manager_state,
-            output_buffer: self.output_buffer.clone(),
         };
         self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id, state);
     }
@@ -366,7 +363,6 @@ where
         };
         let state = WindowOperatorState {
             manager: manager_state,
-            output_buffer: self.output_buffer.clone(),
         };
         self.persistency_service.as_mut().unwrap().save_terminated_state(self.operator_coord, state);
     }

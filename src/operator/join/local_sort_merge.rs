@@ -169,7 +169,6 @@ impl<
             right_ended: self.right_ended,
             left: self.left.clone(),
             right: self.right.clone(),
-            buffer: self.buffer.clone(),
             last_left_key: self.last_left_key.clone(),
         };
         self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id, state);
@@ -181,7 +180,6 @@ impl<
             right_ended: self.right_ended,
             left: self.left.clone(),
             right: self.right.clone(),
-            buffer: self.buffer.clone(),
             last_left_key: self.last_left_key.clone(),
         };
         self.persistency_service.as_mut().unwrap().save_terminated_state(self.operator_coord, state);
@@ -195,7 +193,6 @@ struct JoinLocalSortMergeState<Key: DataKey, Out1, Out2> {
     right_ended: bool,
     left: Vec<(Key, Out1)>,
     right: Vec<(Key, Out2)>,
-    buffer: VecDeque<(Key, OuterJoinTuple<Out1, Out2>)>,
     last_left_key: Option<Key>,
 }
 
@@ -226,7 +223,6 @@ impl<
                     self.right_ended = state.right_ended;
                     self.left = state.left;
                     self.right = state.right;
-                    self.buffer = state.buffer;
                     self.last_left_key = state.last_left_key;
                 } else {
                     panic!("No persisted state founded for op: {0}", self.operator_coord);

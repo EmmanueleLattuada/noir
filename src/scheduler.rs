@@ -331,8 +331,10 @@ impl Scheduler {
 
             self.network.stop_and_wait();
 
-            // If set, clean all persisted snapshots (each host clean its own operators)
             if let Some(persistency_conf) = self.config.persistency_configuration{
+                    // Stop state_saver
+                    self.persistency_builder.as_mut().unwrap().stop_actual_sender();
+                    // If set, clean all persisted snapshots (each host clean its own operators)
                     if persistency_conf.clean_on_exit {
                         let this_host = self.config.host_id.unwrap();
                         self.persistency_builder.as_mut().unwrap().clean_persisted_state(
@@ -342,8 +344,6 @@ impl Scheduler {
                                 .collect_vec()
                         );
                     }
-                    // Stop state_saver
-                    self.persistency_builder.as_mut().unwrap().stop_actual_sender();
                 }
 
             let profiler_results = wait_profiler();

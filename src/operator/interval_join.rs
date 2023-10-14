@@ -152,7 +152,6 @@ where
         let state = IntervalJoinState {
             left: self.left.clone(),
             right: self.right.clone(),
-            buffer: self.buffer.clone(),
             last_seen: self.last_seen,
             received_restart: self.received_restart,
         };
@@ -163,7 +162,6 @@ where
         let state = IntervalJoinState {
             left: self.left.clone(),
             right: self.right.clone(),
-            buffer: self.buffer.clone(),
             last_seen: self.last_seen,
             received_restart: self.received_restart,
         };
@@ -178,8 +176,6 @@ struct IntervalJoinState<K: Hash + Eq, O, O2> {
     left: VecDeque<(Timestamp, (K, O))>,
     /// Elements of the right side that might still be matched.
     right: HashMap<K, VecDeque<(Timestamp, O2)>, crate::block::GroupHasherBuilder>,
-    /// Elements ready to be sent downstream.
-    buffer: VecDeque<(Timestamp, OutputElement<K, O, O2>)>,
     /// Timestamp of the last element (item or watermark).
     last_seen: Timestamp,
     /// Whether the operator has received a `FlushAndRestart` message.
@@ -208,7 +204,6 @@ where
                 if let Some(state) = opt_state {
                     self.left = state.left;
                     self.right = state.right;
-                    self.buffer = state.buffer;
                     self.last_seen = state.last_seen;
                     self.received_restart = state.received_restart;
                 } else {
