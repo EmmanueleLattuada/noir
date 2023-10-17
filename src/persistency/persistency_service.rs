@@ -1,5 +1,7 @@
 use std::{time::Duration, marker::PhantomData};
 
+use hashbrown::HashMap;
+
 use crate::{network::OperatorCoord, operator::{SnapshotId, ExchangeData}};
 
 use super::{PersistencyServices, redis_handler::RedisHandler, state_saver::StateSaver};
@@ -10,7 +12,8 @@ use super::{PersistencyServices, redis_handler::RedisHandler, state_saver::State
 pub struct PersistencyService<State: ExchangeData> {
     handler: RedisHandler,
     state_saver: StateSaver<State>, 
-    restart_from: Option<SnapshotId>,
+    restart_from_id: Option<SnapshotId>,
+    restart_from_stack: HashMap<u64, Vec<u64>>,
     pub(crate) snapshot_frequency_by_item: Option<u64>,
     pub(crate) snapshot_frequency_by_time: Option<Duration>,
     _state : PhantomData<State>,
@@ -22,7 +25,8 @@ impl <State:ExchangeData> Clone for PersistencyService<State> {
         Self {
             handler: self.handler.clone(),
             state_saver: self.state_saver.clone(),
-            restart_from: self.restart_from.clone(),
+            restart_from_id: self.restart_from_id.clone(),
+            restart_from_stack: self.restart_from_stack.clone(),
             snapshot_frequency_by_item: self.snapshot_frequency_by_item.clone(),
             snapshot_frequency_by_time: self.snapshot_frequency_by_time.clone(),
             _state: PhantomData::clone(&self._state),
@@ -32,23 +36,38 @@ impl <State:ExchangeData> Clone for PersistencyService<State> {
 
 impl<State:ExchangeData> PersistencyService<State> {
     /// Create a new persistencyService from given configuration
-    pub (crate) fn new(handler: RedisHandler, state_saver: StateSaver<State>, restart_from: Option<SnapshotId>, snapshot_frequency_by_item: Option<u64>, snapshot_frequency_by_time: Option<Duration>) -> Self{       
-        return Self { 
-            handler: handler.clone(), 
-            state_saver,
-            restart_from,
-            snapshot_frequency_by_item,
-            snapshot_frequency_by_time,
-            _state: PhantomData::default(),
-        }              
+    pub (crate) fn new(
+        handler: RedisHandler, 
+        state_saver: StateSaver<State>, 
+        restart_from_id: Option<SnapshotId>, 
+        restart_from_stack: HashMap<u64, Vec<u64>>,
+        snapshot_frequency_by_item: Option<u64>, 
+        snapshot_frequency_by_time: Option<Duration>
+        ) -> Self{       
+            return Self { 
+                handler: handler.clone(), 
+                state_saver,
+                restart_from_id,
+                restart_from_stack,
+                snapshot_frequency_by_item,
+                snapshot_frequency_by_time,
+                _state: PhantomData::default(),
+            }              
     }
     
     /// Return last complete snapshot. Use find_snapshot() first to compute it.
     /// Remove all partial snapshotd with id > self.restart_from
     #[inline(never)]
     pub (crate) fn restart_from_snapshot(&self, op_coord: OperatorCoord) -> Option<SnapshotId> {
-        if let Some(snap_id) = self.restart_from.clone() {
+        if let Some(mut snap_id) = self.restart_from_id.clone() {
             let mut last_snap = self.get_last_snapshot(op_coord).unwrap();
+            // Try to recover the iteration stack, if any
+            let iteration_index = last_snap.iteration_index;
+            if let Some(iter_index) = iteration_index {
+                if let Some(iter_stack) = self.restart_from_stack.get(&iter_index) {
+                    snap_id.iteration_stack = iter_stack.clone();
+                }
+            }
             if !(last_snap <= snap_id && last_snap.terminate()) {
                 while last_snap > snap_id {
                     self.delete_state(op_coord, last_snap);

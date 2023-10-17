@@ -202,8 +202,12 @@ where
                             snap_id.clone(), 
                             state,
                         );
-                    // remove the last 0 in the ire stack before exit the iterator
+                    // remove the last 0 in the iter stack before exit the iterator
                     snap_id.iteration_stack.pop();
+                    // if it is at level 1, remove the iteration index
+                    if self.iter_stack_level == 1 {
+                        snap_id.iteration_index = None;
+                    }
                     // return marker
                     return Some(StreamElement::Snapshot(snap_id));
                     
@@ -259,7 +263,7 @@ where
         // at this point the id of the block with IterationEnd must be known
         let feedback_block_id = self.feedback_block_id.load(Ordering::Acquire) as BlockId;
         // get the receiver for the delta updates
-        let mut delta_update_receiver = Start::single(feedback_block_id, None, self.iter_stack_level);
+        let mut delta_update_receiver = Start::single(feedback_block_id, None);
         delta_update_receiver.setup(metadata);
         self.num_receivers = delta_update_receiver.receiver().prev_replicas().len();
         self.state_update_receiver = Some(delta_update_receiver);

@@ -82,6 +82,8 @@ pub struct Iterate<Out: ExchangeData, State: ExchangeData> {
     recovered_state: Option<State>,
     /// Level of this iterator
     iter_stack_level: usize,
+    /// Index of this iteration loop
+    iter_index: u64,
     should_flush: bool,
 }
 
@@ -102,6 +104,7 @@ impl<Out: ExchangeData, State: ExchangeData> Iterate<Out, State> {
         output_block_id: Arc<AtomicUsize>,
         state_lock: Arc<IterationStateLock>,
         iter_stack_level: usize,
+        iter_index: u64,
     ) -> Self {
         Self {
             // these fields will be set inside the `setup` method
@@ -124,6 +127,7 @@ impl<Out: ExchangeData, State: ExchangeData> Iterate<Out, State> {
             pending_snapshot: None,
             recovered_state: None,
             iter_stack_level,
+            iter_index,
             should_flush: false,
         }
     }
@@ -141,23 +145,23 @@ impl<Out: ExchangeData, State: ExchangeData> Iterate<Out, State> {
             }
             StreamElement::Snapshot(snapshot_id) => {
                 // This snapshot comes from outside
-                // input stash don't need to be saved, previus operators will send again same data
+                // input stash doesn't need to be saved, previus operators will send again same data
                 // content should be empty
                 // feedback should be saved we snapshot token arrive from that channel
 
-                // fix snapshot id: iter_stack should be of the same lenght of this iteration level
+                // fix snapshot id
+                // iter_stack should be of the same lenght of this iteration level
                 let mut snap_id = snapshot_id.clone();
                 while snap_id.iteration_stack.len() < self.iter_stack_level {
                     // put 0 at each missing level
                     snap_id.iteration_stack.push(0);
-                }       
+                } 
+                // set iteration index
+                let external_iter_index = snap_id.iteration_index;
+                snap_id.iteration_index = Some(self.iter_index);
                 // Check if its already in the map
                 if let Some(mut state) = self.on_going_snapshots.remove(&snap_id){
                     // Complete and save this snapshot
-
-                    assert!(state.content.len() == 0);
-                    assert!(self.content.len() == 0);
-
                     state.input_finished = self.input_finished;
                     self.persistency_service
                         .as_mut()
@@ -179,7 +183,9 @@ impl<Out: ExchangeData, State: ExchangeData> Iterate<Out, State> {
                 }
                 // Send the snapshot token also to output block
                 let mut snap_id_out = snap_id.clone();
+                // fix iter_stack and iter_index of snapshot id
                 snap_id_out.iteration_stack.pop();
+                snap_id_out.iteration_index = external_iter_index;
                 let message = NetworkMessage::new_single(StreamElement::Snapshot(snap_id_out), self.operator_coord.get_coord());
                 self.output_sender.as_ref().unwrap().send(message).unwrap();
                 return Some(StreamElement::Snapshot(snap_id)); 
@@ -660,8 +666,18 @@ where
         let shared_feedback_end_block_id = Arc::new(AtomicUsize::new(0));
         let shared_output_block_id = Arc::new(AtomicUsize::new(0));
 
-         // Compute iteration stack level
-         let iter_stack_level = self.block.iteration_ctx().len() + 1;
+        // Compute iteration stack level
+        let iter_stack_level = self.block.iteration_ctx().len() + 1;
+        let iter_index;
+        if iter_stack_level == 1 {
+            // New iteration loop not nested: give it a new index
+            let mut env = env.lock();
+            env.scheduler_mut().iterative_operators_counter += 1;
+            iter_index = env.scheduler_mut().iterative_operators_counter;
+        } else {
+            // Nested loop: take the index of the external loop
+            iter_index = self.block.iteration_index.unwrap();
+        }
 
         // prepare the stream with the IterationLeader block, this will provide the state output
         let mut leader_stream = StreamEnvironmentInner::stream(
@@ -687,13 +703,13 @@ where
         let mut input_block = None;
         let mut allign_block = None;
 
-        // Add block to allign snapshots tokens if this is not a nested iteration
-        // and if persistency is configured (to avoid unnecessary overhead)
-        let persistency = {
-            let env = env.lock();
-            env.config.persistency_configuration.is_some()
+        // Add block to allign snapshots tokens if required by
+        // persistency configuration
+        let (persistency, isa) = {
+            let mut env = env.lock();
+            (env.config.persistency_configuration.is_some(), env.scheduler_mut().iterations_snapshot_alignment)
         };
-        if self.block.iteration_ctx().len() == 0 && persistency {
+        if self.block.iteration_ctx().len() == 0 && persistency && !isa {
             // Add allignment block
             let input_stream = self.split_block(
                 End::new, 
@@ -734,6 +750,7 @@ where
             shared_output_block_id.clone(),
             state_lock.clone(),
             iter_stack_level,
+            iter_index,
         );
 
         let mut iter_start = Stream {
@@ -742,6 +759,7 @@ where
                 iter_source,
                 batch_mode,
                 iter_ctx,
+                Some(iter_index),
             ),
             env: env.clone(),
         };
@@ -756,7 +774,6 @@ where
             Start::single(
                 iterate_block_id,
                 iter_start.block.iteration_ctx.last().cloned(),
-                iter_stack_level - 1,
             ),
         );
         let output_block_id = output.block.id;
@@ -785,7 +802,7 @@ where
         // First split of the body: the data will be reduced into delta updates
         let state_update_end = StreamEnvironmentInner::stream(
             env.clone(),
-            Start::single(body.block.id, Some(state_lock), iter_stack_level),
+            Start::single(body.block.id, Some(state_lock)),
         )
         .key_by(|_| ())
         .fold(StateUpdate::default(), local_fold)

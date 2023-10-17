@@ -377,6 +377,7 @@ fn nexmark_persistency_bench(c: &mut Criterion) {
                         restart_from: None, 
                         snapshot_frequency_by_item: None,
                         snapshot_frequency_by_time: None,
+                        iterations_snapshot_alignment: false,
                     });
                     let mut env = StreamEnvironment::new(config);
                     run_query(&mut env, $q, *size);
@@ -393,6 +394,7 @@ fn nexmark_persistency_bench(c: &mut Criterion) {
                         restart_from: None, 
                         snapshot_frequency_by_item: Some((*size/(4*100)) as u64),
                         snapshot_frequency_by_time: None,
+                        iterations_snapshot_alignment: false,
                     });
                     let mut env = StreamEnvironment::new(config);
                     run_query(&mut env, $q, *size);
@@ -410,7 +412,7 @@ fn nexmark_persistency_bench(c: &mut Criterion) {
                         restart_from: None, 
                         snapshot_frequency_by_item: None,
                         snapshot_frequency_by_time: None,
-
+                        iterations_snapshot_alignment: false,
                     };
                     b.iter(|| {
                         remote_loopback_deploy(5, 4, Some(pers_conf.clone()), move |mut env| {
@@ -432,6 +434,7 @@ fn nexmark_persistency_bench(c: &mut Criterion) {
                         snapshot_frequency_by_time: None,
                         //snapshot_frequency_by_item: None,
                         //snapshot_frequency_by_time: Some(std::time::Duration::from_millis($n/1000)),
+                        iterations_snapshot_alignment: false,
 
                     };
                     b.iter(|| {

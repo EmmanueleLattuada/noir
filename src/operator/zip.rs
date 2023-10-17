@@ -45,6 +45,7 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Zip<Out1, Out2> {
         right_cache: bool,
         state_lock: Option<Arc<IterationStateLock>>,
         iter_stack_level: usize,
+        iteration_index: Option<u64>,
     ) -> Self {
         Self {
             prev: Start::multiple(
@@ -53,7 +54,8 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Zip<Out1, Out2> {
                 left_cache,
                 right_cache,
                 state_lock,
-                iter_stack_level
+                iter_stack_level,
+                iteration_index
             ),
             // Since previous operator is the first in the chain, this will have op_id 1
             // Other fields will be set in setup method
@@ -222,7 +224,7 @@ mod tests {
         let (coord_l, sender_l) = t.senders_mut()[0].pop().unwrap();
         let (coord_r, sender_r) = t.senders_mut()[1].pop().unwrap();
 
-        let mut zip = Zip::<i32, i32>::new(coord_l.block_id, coord_r.block_id, false, false, None, 0);
+        let mut zip = Zip::<i32, i32>::new(coord_l.block_id, coord_r.block_id, false, false, None, 0, None);
         zip.setup(&mut t.metadata());
 
         let send = |sender: &NetworkSender<i32>, from: Coord, data: Vec<StreamElement<i32>>| {

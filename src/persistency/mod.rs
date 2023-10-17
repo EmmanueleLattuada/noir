@@ -83,14 +83,12 @@ fn serialize_data<D: ExchangeData>(data: D) -> Vec<u8> {
 pub(crate) trait PersistencyServices {  
     /// Method to save the state of the operator. State must be serialized
     fn save_state(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId, state: Vec<u8>);
-    /// Method to save a void state, used for operators with no state, is necessary to be able to get last valid snapshot a posteriori
-    fn save_void_state(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId);
     /// Method to get the state of the operator
     fn get_state<State: ExchangeData>(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId) -> Option<State>;
     /// Method to get the id of the last snapshot done by specified operator
     fn get_last_snapshot(&self, op_coord: OperatorCoord) -> Option<SnapshotId>;
     /// Method to get the iter_stack of the last snapshot with specified index done by specified operator
-    fn get_last_snapshot_with_index(&self, op_coord: OperatorCoord, snapshot_index: u64) -> Option<Vec<u64>>;
+    fn get_last_iter_stack(&self, op_coord: OperatorCoord, snapshot_index: u64) -> Option<Vec<u64>>;
     /// Method to remove the state associated to specified operator and snapshot id
     fn delete_state(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId);
 }

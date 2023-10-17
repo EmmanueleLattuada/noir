@@ -87,7 +87,7 @@ impl<Out: Data + core::fmt::Debug> Operator<Out> for ChannelSource<Out> {
                 self.terminated = snap_id.terminate();
                 self.snapshot_generator.restart_from(snap_id);
             }
-            if !metadata.contains_cached_stream {
+            if !metadata.iterations_snapshot_alignment {
                 if let Some(snap_freq) = p_service.snapshot_frequency_by_item {
                     self.snapshot_generator.set_item_interval(snap_freq);
                 }

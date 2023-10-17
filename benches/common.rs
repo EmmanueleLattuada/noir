@@ -16,6 +16,8 @@ pub const DURATION: Duration = Duration::from_secs(30);
 static NONCE: AtomicU16 = AtomicU16::new(1);
 const PORT_BASE: u16 = 9090;
 
+pub const REDIS_BENCH_CONFIGURATION: &str ="redis://127.0.0.1";
+
 pub fn remote_loopback_deploy(
     num_hosts: CoordUInt,
     cores_per_host: CoordUInt,

@@ -123,6 +123,7 @@ where
         // Clone parameters for new block
         let batch_mode = block.batch_mode;
         let iteration_ctx = block.iteration_ctx.clone();
+        let iteration_index = block.iteration_index;
         // Add end operator
         let mut block =
             block.add_operator(|prev| get_end_operator(prev, next_strategy.clone(), batch_mode));
@@ -132,8 +133,8 @@ where
         let mut env_lock = env.lock();
         let prev_id = env_lock.close_block(block);
         // Create new block
-        let source = Start::single(prev_id, iteration_ctx.last().cloned(), iteration_ctx.len());
-        let new_block = env_lock.new_block(source, batch_mode, iteration_ctx);
+        let source = Start::single(prev_id, iteration_ctx.last().cloned());
+        let new_block = env_lock.new_block(source, batch_mode, iteration_ctx, iteration_index);
         // Connect blocks
         env_lock.connect_blocks::<I>(prev_id, new_block.id);
 
@@ -170,7 +171,7 @@ where
         Op2: Operator<I2> + 'static,
         O: Data,
         S: Operator<O> + Source<O>,
-        Fs: FnOnce(BlockId, BlockId, bool, bool, Option<Arc<IterationStateLock>>, usize) -> S,
+        Fs: FnOnce(BlockId, BlockId, bool, bool, Option<Arc<IterationStateLock>>, usize, Option<u64>) -> S,
     {
         let Stream { block: b1, env } = self;
         let Stream { block: b2, .. } = oth;
@@ -190,24 +191,23 @@ where
 
         let iter_ctx_1 = b1.iteration_ctx();
         let iter_ctx_2 = b2.iteration_ctx();
-        let (iteration_ctx, left_cache, right_cache) = if iter_ctx_1 == iter_ctx_2 {
-            (b1.iteration_ctx.clone(), false, false)
+        let (iteration_ctx, left_cache, right_cache, iteration_index) = if iter_ctx_1 == iter_ctx_2 {
+            assert_eq!(b1.iteration_index, b2.iteration_index);
+            (b1.iteration_ctx.clone(), false, false, b1.iteration_index)
         } else {
             if !iter_ctx_1.is_empty() && !iter_ctx_2.is_empty() {
                 panic!("Side inputs are supported only if one of the streams is coming from outside any iteration");
             }
-            if iter_ctx_1.is_empty() {
-                // cached side
-                let mut env = env.lock();
-                env.scheduler_mut().contains_cached_stream();               
+            let mut env = env.lock();
+            if env.config.persistency_configuration.is_some() && !env.scheduler_mut().iterations_snapshot_alignment {
+                panic!("In case of side inputs, the paramenter iterations_snapshot_alignment of PersistencyConfig must be set to true");
+            }  
+            if iter_ctx_1.is_empty() {          
                 // self is the side input, cache it
-                (b2.iteration_ctx.clone(), true, false)
+                (b2.iteration_ctx.clone(), true, false, b2.iteration_index)
             } else {
-                // cached side
-                let mut env = env.lock();
-                env.scheduler_mut().contains_cached_stream(); 
                 // oth is the side input, cache it
-                (b1.iteration_ctx.clone(), false, true)
+                (b1.iteration_ctx.clone(), false, true, b1.iteration_index)
             }
         };
 
@@ -232,9 +232,10 @@ where
             right_cache,
             iteration_ctx.last().cloned(),
             iteration_ctx.len(),
+            iteration_index,
         );
 
-        let mut new_block = env_lock.new_block(source, batch_mode, iteration_ctx);
+        let mut new_block = env_lock.new_block(source, batch_mode, iteration_ctx, iteration_index);
         let id_new = new_block.id;
 
         env_lock.connect_blocks::<I>(id_1, id_new);

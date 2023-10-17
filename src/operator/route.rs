@@ -60,13 +60,15 @@ impl<Out: ExchangeData, OperatorChain: Operator<Out> + 'static> RouterBuilder<Ou
         let batch_mode = self.stream.block.batch_mode;
         let block_id = self.stream.block.id;
         let iteration_context = self.stream.block.iteration_ctx.clone();
+        let iteration_index = self.stream.block.iteration_index;
 
         let mut new_blocks = (0..self.routes.len())
             .map(|_| {
                 env.new_block(
-                    Start::single(block_id, iteration_context.last().cloned(), iteration_context.len()),
+                    Start::single(block_id, iteration_context.last().cloned()),
                     batch_mode,
                     iteration_context.clone(),
+                    iteration_index,
                 )
             })
             .collect::<Vec<_>>();

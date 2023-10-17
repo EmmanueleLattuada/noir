@@ -115,7 +115,6 @@ pub(crate) struct Start<Out: ExchangeData, Receiver: StartReceiver<Out> + Send +
     wait_for_state: bool,
     state_lock: Option<Arc<IterationStateLock>>,
     state_generation: usize,
-    iteration_stack_level: usize,
 }
 
 impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send> Display for Start<Out, Receiver> {
@@ -129,9 +128,8 @@ impl<Out: ExchangeData> Start<Out, SimpleStartReceiver<Out>> {
     pub(crate) fn single(
         previous_block_id: BlockId,
         state_lock: Option<Arc<IterationStateLock>>,
-        iteration_stack_level: usize,
     ) -> SimpleStartOperator<Out> {
-        Start::new(SimpleStartReceiver::new(previous_block_id), state_lock, iteration_stack_level)
+        Start::new(SimpleStartReceiver::new(previous_block_id), state_lock)
     }
 }
 
@@ -146,6 +144,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData>
         right_cache: bool,
         state_lock: Option<Arc<IterationStateLock>>,
         iteration_stack_level: usize,
+        iteration_index: Option<u64>
     ) -> BinaryStartOperator<OutL, OutR> {
         Start::new(
             BinaryStartReceiver::new(
@@ -154,15 +153,15 @@ impl<OutL: ExchangeData, OutR: ExchangeData>
                 left_cache,
                 right_cache,
                 iteration_stack_level,
+                iteration_index,
             ),
             state_lock,
-            iteration_stack_level,
         )
     }
 }
 
 impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out, Receiver> {
-    fn new(receiver: Receiver, state_lock: Option<Arc<IterationStateLock>>, iteration_stack_level: usize) -> Self {
+    fn new(receiver: Receiver, state_lock: Option<Arc<IterationStateLock>>) -> Self {
         Self {
             max_delay: Default::default(),
 
@@ -189,7 +188,6 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
             wait_for_state: Default::default(),
             state_lock,
             state_generation: Default::default(),
-            iteration_stack_level,
         }
     }
 
@@ -493,12 +491,7 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Operator<
                                 } 
                                 continue;
                             }
-                            StreamElement::Snapshot(mut snapshot_id) => {
-                                // Set the iteration stack accordingly to iteration stack level
-                                while snapshot_id.iteration_stack.len() < self.iteration_stack_level {
-                                    // put 0 at each missing level
-                                    snapshot_id.iteration_stack.push(0);
-                                }
+                            StreamElement::Snapshot(snapshot_id) => {
                                 let to_forward = self.process_snapshot(snapshot_id.clone(), sender);
                                 if to_forward.is_none() {
                                     continue;
@@ -603,7 +596,7 @@ mod tests {
         let (from2, sender2) = t.senders_mut()[0].pop().unwrap();
 
         let mut start_block =
-            Start::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None, 0);
+            Start::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None);
         start_block.setup(&mut t.metadata());
 
         sender1
@@ -643,7 +636,7 @@ mod tests {
         let (from2, sender2) = t.senders_mut()[0].pop().unwrap();
 
         let mut start_block =
-            Start::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None, 0);
+            Start::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None);
         start_block.setup(&mut t.metadata());
 
         sender1
@@ -698,6 +691,7 @@ mod tests {
             false,
             None,
             0,
+            None,
         );
         start_block.setup(&mut t.metadata());
 
@@ -769,6 +763,7 @@ mod tests {
             false,
             None,
             0,
+            None,
         );
         start_block.setup(&mut t.metadata());
 
@@ -851,6 +846,7 @@ mod tests {
             true,
             None,
             0,
+            None,
         );
         start_block.setup(&mut t.metadata());
 
@@ -905,7 +901,7 @@ mod tests {
         let (from2, sender2) = t.senders_mut()[0].pop().unwrap();
 
         let mut start_block =
-            Start::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None, 0);
+            Start::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None);
 
         let mut metadata = t.metadata();
         let mut p_builder = PersistencyBuilder::new(Some(
@@ -983,7 +979,7 @@ mod tests {
         let (from2, sender2) = t.senders_mut()[0].pop().unwrap();
 
         let mut start_block =
-            Start::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None, 0);
+            Start::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None);
 
         let mut metadata = t.metadata();
         let mut p_builder = PersistencyBuilder::new(Some(
@@ -1091,7 +1087,7 @@ mod tests {
         let (from2, sender2) = t.senders_mut()[0].pop().unwrap();
 
         let mut start_block =
-            Start::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None, 0);
+            Start::<i32, _>::single(sender1.receiver_endpoint.prev_block_id, None);
 
         let mut metadata = t.metadata();
         let mut p_builder = PersistencyBuilder::new(Some(

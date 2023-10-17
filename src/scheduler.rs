@@ -44,7 +44,7 @@ pub struct ExecutionMetadata<'a> {
     pub batch_mode: BatchMode,
     /// Persistency for saving the state
     pub(crate) persistency_builder: Option<&'a PersistencyBuilder>,
-    pub(crate) contains_cached_stream: bool,
+    pub(crate) iterations_snapshot_alignment: bool,
 }
 
 /// Information about a block in the job graph.
@@ -83,16 +83,21 @@ pub(crate) struct Scheduler {
     persistency_builder: Option<PersistencyBuilder>,
     /// List with coordinates of all operators in the network
     operators_coordinates: Vec<OperatorCoord>,
-    /// True if the steam contains an iteration with a cached stream, used for persistency
-    contains_cached_stream: bool,
+    /// If true, sources of the stream will produce just 1 Snapshot token before FlushAndRestart
+    /// If false, in case of iterations the snapshot alignment is done with a special block
+    pub(crate) iterations_snapshot_alignment: bool,
+    /// Keep track of the number of iterative operators (not the nested ones)
+    pub(crate) iterative_operators_counter: u64,
 }
 
 impl Scheduler {
     pub fn new(config: EnvironmentConfig) -> Self {
         let pers_conf = config.persistency_configuration.clone();
         let mut pers_builder = None;
-        if pers_conf.is_some(){
-            pers_builder = Some(PersistencyBuilder::new(pers_conf));
+        let mut isa = false;
+        if let Some(p_conf) = pers_conf{
+            pers_builder = Some(PersistencyBuilder::new(Some(p_conf.clone())));
+            isa = p_conf.iterations_snapshot_alignment;
         }
         Self {
             next_blocks: Default::default(),
@@ -103,13 +108,11 @@ impl Scheduler {
             config,
             persistency_builder: pers_builder,
             operators_coordinates: Default::default(),
-            contains_cached_stream: false
+            iterations_snapshot_alignment: isa,
+            iterative_operators_counter: 0,
         }
     }
 
-    pub(crate) fn contains_cached_stream(&mut self) {
-        self.contains_cached_stream = true;
-    }
 
     /// Register a new block inside the scheduler.
     ///
@@ -230,7 +233,7 @@ impl Scheduler {
                 network: &mut self.network,
                 batch_mode: block_info.batch_mode,
                 persistency_builder: self.persistency_builder.as_ref(),
-                contains_cached_stream: self.contains_cached_stream,
+                iterations_snapshot_alignment: self.iterations_snapshot_alignment,
             };
             let (handle, structure) = init_fn(&mut metadata);
             join.push(handle);

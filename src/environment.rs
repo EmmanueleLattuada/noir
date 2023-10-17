@@ -183,7 +183,7 @@ impl StreamEnvironmentInner {
         }
 
         let source_replication = source.replication();
-        let mut block = env.new_block(source, Default::default(), Default::default());
+        let mut block = env.new_block(source, Default::default(), Default::default(), None);
 
         block.scheduler_requirements.replication(source_replication);
         drop(env);
@@ -195,11 +195,12 @@ impl StreamEnvironmentInner {
         source: S,
         batch_mode: BatchMode,
         iteration_ctx: Vec<Arc<IterationStateLock>>,
+        iteration_index: Option<u64>,
     ) -> Block<Out, S> {
         let new_id = self.new_block_id();
         let parallelism = source.replication();
         info!("new block (b{new_id:02}), replication {parallelism:?}",);
-        Block::new(new_id, source, batch_mode, iteration_ctx)
+        Block::new(new_id, source, batch_mode, iteration_ctx, iteration_index)
     }
 
     pub(crate) fn close_block<Out: Data, Op: Operator<Out> + 'static>(

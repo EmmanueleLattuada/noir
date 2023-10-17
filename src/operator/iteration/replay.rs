@@ -51,6 +51,8 @@ pub struct Replay<Out: ExchangeData, State: ExchangeData>
     recovered_state: Option<State>,
     /// Level of this iterator
     iter_stack_level: usize,
+    /// Index of this iteration loop
+    iter_index: u64,
 
     should_flush: bool,
 }
@@ -83,7 +85,8 @@ impl<Out: ExchangeData, State: ExchangeData> Replay<Out, State>
         state_ref: IterationStateHandle<State>,
         leader_block_id: BlockId,
         state_lock: Arc<IterationStateLock>,
-        iter_stack_level: usize
+        iter_stack_level: usize,
+        iter_index: u64
     ) -> Self {
         let op_id = prev.get_op_id() + 1;
         Self {
@@ -100,6 +103,7 @@ impl<Out: ExchangeData, State: ExchangeData> Replay<Out, State>
             pending_snapshot: None,
             recovered_state: None,
             iter_stack_level,
+            iter_index,
             should_flush: false,
         }
     }
@@ -134,11 +138,14 @@ impl<Out: ExchangeData, State: ExchangeData> Replay<Out, State>
 
             // forward snapshot marker but do not put in the queue
             StreamElement::Snapshot(mut snap_id) => {
-                //fix snapshot id: iter_stack should be of the same lenght of this iteration level
+                // fix snapshot id
+                // iter_stack should be of the same lenght of this iteration level
                 while snap_id.iteration_stack.len() < self.iter_stack_level {
                     // put 0 at each missing level
                     snap_id.iteration_stack.push(0);
-                }
+                } 
+                // set iteration index
+                snap_id.iteration_index = Some(self.iter_index);
                 //save state
                 let state = ReplayState {
                     state: self.state.state_ref.get().clone(),
@@ -428,6 +435,16 @@ where
 
         // Compute iteration stack level
         let iter_stack_level = self.block.iteration_ctx().len() + 1;
+        let iter_index;
+        if iter_stack_level == 1 {
+            // New iteration loop not nested: give it a new index
+            let mut env = env.lock();
+            env.scheduler_mut().iterative_operators_counter += 1;
+            iter_index = env.scheduler_mut().iterative_operators_counter;
+        } else {
+            // Nested loop: take the index of the external loop
+            iter_index = self.block.iteration_index.unwrap();
+        }
         
         let leader = IterationLeader::new(
             initial_state,
@@ -456,13 +473,13 @@ where
         let mut input_block = None;
         let mut allign_block = None;
 
-        // Add block to allign snapshots tokens if this is not a nested iteration
-        // and if persistency is configured (to avoid unnecessary overhead)
-        let persistency = {
-            let env = env.lock();
-            env.config.persistency_configuration.is_some()
+        // Add block to allign snapshots tokens if required by
+        // persistency configuration
+        let (persistency, isa) = {
+            let mut env = env.lock();
+            (env.config.persistency_configuration.is_some(), env.scheduler_mut().iterations_snapshot_alignment)
         };
-        if self.block.iteration_ctx().len() == 0 && persistency {
+        if self.block.iteration_ctx().len() == 0 && persistency && !isa {
             // Add allignment block
             let input_stream = self.split_block(
                 End::new, 
@@ -495,7 +512,6 @@ where
         let replay_source = Start::single(
             input_block_id,
             iter_ctx.last().cloned(),
-            iter_ctx.len(),
         );
 
         let rep_start = Stream {
@@ -504,12 +520,13 @@ where
                 replay_source,
                 batch_mode,
                 iter_ctx,
+                Some(iter_index),
             ),
             env: env.clone(),
         };       
         
         let mut iter_start =
-            rep_start.add_operator(|prev| Replay::new(prev, state, leader_block_id, state_lock.clone(), iter_stack_level));
+            rep_start.add_operator(|prev| Replay::new(prev, state, leader_block_id, state_lock.clone(), iter_stack_level, iter_index));
         let replay_block_id = iter_start.block.id;
 
         // save the stack of the iteration for checking the stream returned by the body

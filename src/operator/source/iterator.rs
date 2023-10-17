@@ -97,7 +97,7 @@ where
         self.operator_coord.from_coord(metadata.coord);
         if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<IteratorSourceState>();
-            if !metadata.contains_cached_stream {
+            if !metadata.iterations_snapshot_alignment {
                 if let Some(snap_freq) = p_service.snapshot_frequency_by_item {
                     self.snapshot_generator.set_item_interval(snap_freq);
                 }

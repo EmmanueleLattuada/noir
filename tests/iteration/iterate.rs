@@ -289,13 +289,140 @@ fn test_iterate_snapshot_not_alligned() {
 
     let execution_list = vec![
         // Complete execution
+        TestHelper::persistency_config_test_no_isa(false, false, None, snap_freq),
+        // Restart from snapshot 1
+        TestHelper::persistency_config_test_no_isa(true, false, Some(1), snap_freq),
+        // Restart from snapshot 2
+        TestHelper::persistency_config_test_no_isa(true, false, Some(2), snap_freq),
+        // Restart from snapshot 5
+        TestHelper::persistency_config_test_no_isa(true, false, Some(5), snap_freq),
+        // Restart from last snapshot, all operators have terminated
+        TestHelper::persistency_config_test_no_isa(true, true, None, snap_freq),
+    ];
+
+    TestHelper::local_remote_env_with_persistency(body, execution_list);
+}
+
+#[test]
+#[serial]
+fn test_iterate_sequential_flows() {
+    let body = |mut env: StreamEnvironment| {
+        let n = 3;
+        let n_iter1 = 3;
+        let n_iter2 = 5;
+        let s = env.stream(IteratorSource::new(0..n)).shuffle();
+         let (state1, items1) = s.iterate(
+            n_iter1, 
+            0,
+            |s, _state| s.map(|n| n + 10),
+            |delta: &mut i32, n| *delta += n,
+            |state, delta| *state += delta,
+            |_state| true,
+        );
+        let state1 = state1.collect_vec();
+        let (state2, items2) = items1.iterate(
+            n_iter2, 
+            0,
+            |s, _state| s.map(|n| n + 10),
+            |delta: &mut i32, n| *delta += n,
+            |state, delta| *state += delta,
+            |_state| true,
+        );
+        let state2 = state2.collect_vec();
+        let items2 = items2.collect_vec();
+        env.execute_blocking();
+       
+        if let Some(s1) = state1.get() {
+            assert_eq!(s1, vec![10 + 11 + 12 + 20 + 21 + 22 + 30 + 31 + 32]);
+        }
+        if let Some(s2) = state2.get() {
+            assert_eq!(s2, vec![40 + 41 + 42 + 50 + 51 + 52 + 60 + 61 + 62 + 70 + 71 + 72 + 80 + 81 + 82]);
+        }
+        if let Some(mut res) = items2.get() {
+            res.sort();
+            assert_eq!(res, vec![80, 81, 82]);
+        }
+    };
+
+    TestHelper::local_remote_env(body);
+
+    let snap_freq = Some(1);
+
+    let execution_list = vec![
+        // Complete execution
         TestHelper::persistency_config_test(false, false, None, snap_freq),
         // Restart from snapshot 1
         TestHelper::persistency_config_test(true, false, Some(1), snap_freq),
         // Restart from snapshot 2
         TestHelper::persistency_config_test(true, false, Some(2), snap_freq),
-        // Restart from snapshot 5
-        TestHelper::persistency_config_test(true, false, Some(5), snap_freq),
+        // Restart from last snapshot, all operators have terminated
+        TestHelper::persistency_config_test(true, true, None, snap_freq),
+    ];
+
+    TestHelper::local_remote_env_with_persistency(body, execution_list);
+}
+
+
+
+#[test]
+#[serial]
+fn test_iterate_parallel_flows() {
+    let body = |mut env: StreamEnvironment| {
+        let n = 3;
+        let n_iter1 = 3;
+        let n_iter2 = 5;
+        let s = env.stream(IteratorSource::new(0..n)).shuffle();
+         let (state1, items1) = s.iterate(
+            n_iter1, 
+            0,
+            |s, _state| s.map(|n| n + 10),
+            |delta: &mut i32, n| *delta += n,
+            |state, delta| *state += delta,
+            |_state| true,
+        );
+        let state1 = state1.collect_vec();
+        let items1 = items1.collect_vec();
+
+        let s = env.stream(IteratorSource::new(0..n)).shuffle();
+         let (state2, items2) = s.iterate(
+            n_iter2, 
+            0,
+            |s, _state| s.map(|n| n + 10),
+            |delta: &mut i32, n| *delta += n,
+            |state, delta| *state += delta,
+            |_state| true,
+        );
+        let state2 = state2.collect_vec();
+        let items2 = items2.collect_vec();
+        env.execute_blocking();
+       
+        if let Some(s1) = state1.get() {
+            assert_eq!(s1, vec![10 + 11 + 12 + 20 + 21 + 22 + 30 + 31 + 32]);
+        }
+        if let Some(mut res1) = items1.get() {
+            res1.sort();
+            assert_eq!(res1, vec![30, 31, 32]);
+        }
+        if let Some(s2) = state2.get() {
+            assert_eq!(s2, vec![10 + 11 + 12 + 20 + 21 + 22 + 30 + 31 + 32 + 40 + 41 + 42 + 50 + 51 + 52]);
+        }
+        if let Some(mut res2) = items2.get() {
+            res2.sort();
+            assert_eq!(res2, vec![50, 51, 52]);
+        }
+    };
+
+    TestHelper::local_remote_env(body);
+
+    let snap_freq = Some(1);
+
+    let execution_list = vec![
+        // Complete execution
+        TestHelper::persistency_config_test(false, false, None, snap_freq),
+        // Restart from snapshot 1
+        TestHelper::persistency_config_test(true, false, Some(1), snap_freq),
+        // Restart from snapshot 2
+        TestHelper::persistency_config_test(true, false, Some(2), snap_freq),
         // Restart from last snapshot, all operators have terminated
         TestHelper::persistency_config_test(true, true, None, snap_freq),
     ];

@@ -125,6 +125,7 @@ pub struct SnapshotId {
     snapshot_id: u64,
     terminate: bool,
     pub(crate) iteration_stack: Vec<u64>,
+    pub(crate) iteration_index: Option<u64>,
 }
 impl SnapshotId {
     pub (crate) fn new(snapshot_id: u64) -> Self {
@@ -132,6 +133,7 @@ impl SnapshotId {
             snapshot_id,
             terminate: false,
             iteration_stack: Vec::default(),
+            iteration_index: None,
         }
     }
     pub (crate) fn new_terminate(snapshot_id: u64) -> Self {
@@ -139,6 +141,7 @@ impl SnapshotId {
             snapshot_id,
             terminate: true,
             iteration_stack: Vec::default(),
+            iteration_index: None,
         }
     }
     pub (crate) fn id(&self) -> u64 {
@@ -150,6 +153,9 @@ impl SnapshotId {
     }
 
     pub (crate) fn check_next(&self, next: Self) -> bool {
+        if self.iteration_index != next.iteration_index {
+            return false;
+        }
         if self.snapshot_id == next.snapshot_id {
             //check each stack lev
             let mut i = 0;
@@ -193,6 +199,7 @@ impl SnapshotId {
             snapshot_id: self.snapshot_id + 1,
             terminate: self.terminate,
             iteration_stack: self.iteration_stack.clone(),
+            iteration_index: self.iteration_index,
         }
     }
 
@@ -207,6 +214,7 @@ impl SnapshotId {
                 snapshot_id: self.snapshot_id,
                 terminate: self.terminate,
                 iteration_stack: it_stack,
+                iteration_index: self.iteration_index,
             };
         } else {
             let mut it_stack = self.iteration_stack.clone();
@@ -218,6 +226,7 @@ impl SnapshotId {
                 snapshot_id: self.snapshot_id,
                 terminate: self.terminate,
                 iteration_stack: it_stack,
+                iteration_index: self.iteration_index,
             };
         }
     }

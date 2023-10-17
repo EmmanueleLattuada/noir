@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 use std::io::{BufWriter, Write};
 use std::path::Path;
-use std::sync::Arc;
+//use std::sync::Arc;
+use std::time::Duration;
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use criterion::{BenchmarkId, Throughput};
@@ -188,6 +189,18 @@ fn run_wc(env: &mut StreamEnvironment, q: &str, path: &Path) {
     }
 }
 
+fn persistency_config_bench(snapshot_frequency_by_item: Option<u64>, snapshot_frequency_by_time: Option<Duration>) -> PersistencyConfig {
+    PersistencyConfig { 
+        server_addr: String::from(REDIS_BENCH_CONFIGURATION), 
+        try_restart: false, 
+        clean_on_exit: false, 
+        restart_from: None,
+        snapshot_frequency_by_item,
+        snapshot_frequency_by_time,
+        iterations_snapshot_alignment: false,
+    }
+}
+
 fn wordcount_persistency_bench(c: &mut Criterion) {
     let mut g = c.benchmark_group("wordcount_persistency");
     g.sample_size(SAMPLES);
@@ -195,120 +208,79 @@ fn wordcount_persistency_bench(c: &mut Criterion) {
     g.measurement_time(DURATION);
 
     macro_rules! bench_wc {
-        ($q:expr, $n:expr, $p:ident) => {{
-            g.bench_with_input(BenchmarkId::new(format!("{}-snap-t", $q), $n), &$n, |b, _| {
-                let mut num_of_snap = HashMap::new();
+        ($q:expr, $n:expr, $p:ident, $name:expr, $p_conf:expr) => {{
+            g.bench_with_input(BenchmarkId::new(format!("{}-snap-{}", $q, $name), $n), &$n, |b, _| {
+                let mut num_of_snap_avg = 0;
+                let mut iter = 0;
                 b.iter(|| {
                     let mut config = EnvironmentConfig::local(4);
-                    config.add_persistency(PersistencyConfig { 
-                        server_addr: String::from("redis://127.0.0.1"), 
-                        try_restart: false, 
-                        clean_on_exit: false, 
-                        restart_from: None, 
-                        snapshot_frequency_by_item: None,
-                        snapshot_frequency_by_time: None,
-                    });
+                    config.add_persistency($p_conf);
                     let mut env = StreamEnvironment::new(config);
                     run_wc(&mut env, $q, $p);
                     env.execute_blocking();
-                    let max_snap = noir::persistency::redis_handler::get_max_snapshot_id_and_flushall(String::from("redis://127.0.0.1"));
-                    *num_of_snap.entry(max_snap).or_insert(0) += 1;
+                    let max_snap = noir::persistency::redis_handler::get_max_snapshot_id_and_flushall( String::from(REDIS_BENCH_CONFIGURATION));
+                    num_of_snap_avg = ((num_of_snap_avg * iter) + max_snap) / (iter + 1);
+                    iter += 1;
                 });
-                println!("{:?}", num_of_snap)
-            });
-            g.bench_with_input(BenchmarkId::new(format!("{}-snap-100", $q), $n), &$n, |b, _| {
-                let mut num_of_snap = HashMap::new();
+                println!("Average number of taken snapshots: {:?}", num_of_snap_avg);
+            }); 
+            /*
+            g.bench_with_input(BenchmarkId::new(format!("{}-remote-snap-{}", $q, $name), $n), &$n, |b, _| {
+                let pathb = Arc::new($p.to_path_buf());
+                let mut num_of_snap_avg = 0;
+                let mut iter = 0;
                 b.iter(|| {
-                    let mut config = EnvironmentConfig::local(4);
-                    config.add_persistency(PersistencyConfig { 
-                        server_addr: String::from("redis://127.0.0.1"), 
-                        try_restart: false, 
-                        clean_on_exit: false, 
-                        restart_from: None, 
-                        snapshot_frequency_by_item: Some(($n/(4*100)) as u64),  // 4 replicas
-                        snapshot_frequency_by_time: None,
-                        //snapshot_frequency_by_item: None,
-                        //snapshot_frequency_by_time: Some(std::time::Duration::from_millis($n/1000)),
-
+                    let p = pathb.clone();
+                    remote_loopback_deploy(5, 4, Some($p_conf), move |mut env| {
+                        run_wc(&mut env, $q, &p);
                     });
-                    let mut env = StreamEnvironment::new(config);
-                    run_wc(&mut env, $q, $p);
-                    env.execute_blocking();
-                    let max_snap = noir::persistency::redis_handler::get_max_snapshot_id_and_flushall(String::from("redis://127.0.0.1"));
-                    *num_of_snap.entry(max_snap).or_insert(0) += 1;
+                    let max_snap = noir::persistency::redis_handler::get_max_snapshot_id_and_flushall(String::from(REDIS_BENCH_CONFIGURATION));
+                    num_of_snap_avg = ((num_of_snap_avg * iter) + max_snap) / (iter + 1);
+                    iter += 1;
                 });
-                println!("{:?}", num_of_snap)
-            });            
-            g.bench_with_input(
-                BenchmarkId::new(format!("{}-remote-snap-t", $q), $n),
-                &$n,
-                |b, _| {
-                    let pathb = Arc::new($p.to_path_buf());
-                    let pers_conf = PersistencyConfig { 
-                        server_addr: String::from("redis://127.0.0.1"), 
-                        try_restart: false, 
-                        clean_on_exit: true, 
-                        restart_from: None, 
-                        snapshot_frequency_by_item: None,
-                        snapshot_frequency_by_time: None,
-
-                    };
-                    let mut num_of_snap = HashMap::new();
-                    b.iter(|| {
-                        let p = pathb.clone();
-                        remote_loopback_deploy(5, 4, Some(pers_conf.clone()), move |mut env| {
-                            run_wc(&mut env, $q, &p);
-                        });
-                        let max_snap = noir::persistency::redis_handler::get_max_snapshot_id_and_flushall(String::from("redis://127.0.0.1"));
-                        *num_of_snap.entry(max_snap).or_insert(0) += 1;
-                    });
-                    println!("{:?}", num_of_snap)
-                },
-            );
-            g.bench_with_input(
-                BenchmarkId::new(format!("{}-remote-snap-100", $q), $n),
-                &$n,
-                |b, _| {
-                    let pathb = Arc::new($p.to_path_buf());
-                    let pers_conf = PersistencyConfig { 
-                        server_addr: String::from("redis://127.0.0.1"), 
-                        try_restart: false, 
-                        clean_on_exit: true, 
-                        restart_from: None, 
-                        snapshot_frequency_by_item: Some(($n/(5*4*100)) as u64),    // 5 replicas * 4 hosts
-                        snapshot_frequency_by_time: None,
-                        //snapshot_frequency_by_item: None,
-                        //snapshot_frequency_by_time: Some(std::time::Duration::from_millis($n/1000)),
-
-                    };
-                    let mut num_of_snap = HashMap::new();
-                    b.iter(|| {
-                        let p = pathb.clone();
-                        remote_loopback_deploy(5, 4, Some(pers_conf.clone()), move |mut env| {
-                            run_wc(&mut env, $q, &p);
-                        });
-                        let max_snap = noir::persistency::redis_handler::get_max_snapshot_id_and_flushall(String::from("redis://127.0.0.1"));
-                        *num_of_snap.entry(max_snap).or_insert(0) += 1;
-                    });
-                    println!("{:?}", num_of_snap)
-                },
-            );
+                println!("Average number of taken snapshots: {:?}", num_of_snap_avg);
+            });           
+            */
         }};
     }
 
-    for lines in [10_000, 100_000, 1_000_000, 10_000_000] {
+    for lines in [10_000, 100_000, 1_000_000] {
         let file = make_file(lines as usize);
         let file_size = file.as_file().metadata().unwrap().len();
         let file_path = file.path();
         g.throughput(Throughput::Bytes(file_size));
 
-        bench_wc!("wc-fold", lines, file_path);
-        bench_wc!("wc-fold-assoc", lines, file_path);
-        //bench_wc!("wc-count-assoc", lines, file_path):
-        //bench_wc!("wc-reduce", lines, file_path);
-        //bench_wc!("wc-reduce-assoc", lines, file_path);
-        bench_wc!("wc-fast", lines, file_path);
-        //bench_wc!("wc-fast-kstring", lines, file_path);
+        bench_wc!("wc-fast", lines, file_path, "only-TSnap", persistency_config_bench(None, None));
+        bench_wc!("wc-fast", lines, file_path, "100Snap-by-item", persistency_config_bench(Some((lines/(4*100)) as u64), None));
+        bench_wc!("wc-fold-assoc", lines, file_path, "only-TSnap", persistency_config_bench(None, None));
+        bench_wc!("wc-fold-assoc", lines, file_path, "100Snap-by-item", persistency_config_bench(Some((lines/(4*100)) as u64), None));
+        bench_wc!("wc-fold", lines, file_path, "only-TSnap", persistency_config_bench(None, None));
+        bench_wc!("wc-fold", lines, file_path, "100Snap-by-item", persistency_config_bench(Some((lines/(4*100)) as u64), None));
+    }
+    
+    // Some benches with snapshot by time
+    for freq in [2, 4, 8, 16, 32]{
+        let lines = 100_000;
+        let file = make_file(lines as usize);
+        let file_size = file.as_file().metadata().unwrap().len();
+        let file_path = file.path();
+        g.throughput(Throughput::Bytes(file_size));
+
+        bench_wc!("wc-fast", lines, file_path, format!("snap-every-{}ms", freq), persistency_config_bench(None, Some(std::time::Duration::from_millis(freq))));
+        bench_wc!("wc-fold-assoc", lines, file_path, format!("snap-every-{}ms", freq), persistency_config_bench(None, Some(std::time::Duration::from_millis(freq))));
+        bench_wc!("wc-fold", lines, file_path, format!("snap-every-{}ms", freq), persistency_config_bench(None, Some(std::time::Duration::from_millis(freq))));
+    }
+    
+    for freq in [8, 16, 32, 64, 128]{
+        let lines = 1_000_000;
+        let file = make_file(lines as usize);
+        let file_size = file.as_file().metadata().unwrap().len();
+        let file_path = file.path();
+        g.throughput(Throughput::Bytes(file_size));
+
+        bench_wc!("wc-fast", lines, file_path, format!("snap-every-{}ms", freq), persistency_config_bench(None, Some(std::time::Duration::from_millis(freq))));
+        bench_wc!("wc-fold-assoc", lines, file_path, format!("snap-every-{}ms", freq), persistency_config_bench(None, Some(std::time::Duration::from_millis(freq))));
+        bench_wc!("wc-fold", lines, file_path, format!("snap-every-{}ms", freq), persistency_config_bench(None, Some(std::time::Duration::from_millis(freq))));
     }
     g.finish();
 

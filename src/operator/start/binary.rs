@@ -134,6 +134,7 @@ pub(crate) struct BinaryStartReceiver<OutL: ExchangeData, OutR: ExchangeData> {
     terminated_replicas: Vec<Coord>,
     last_snapshots: HashMap<Coord, SnapshotId>,
     iteration_stack_level: usize,
+    iteration_index: Option<u64>,
     should_flush_cached_side: bool,
 }
 
@@ -144,6 +145,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
         left_cache: bool,
         right_cache: bool,
         iteration_stack_level: usize,
+        iteration_index: Option<u64>,
     ) -> Self {
         assert!(
             !(left_cache && right_cache),
@@ -160,6 +162,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
             terminated_replicas: Vec::new(),
             last_snapshots: HashMap::new(),
             iteration_stack_level,
+            iteration_index,
             should_flush_cached_side: false,
         }
     }
@@ -221,13 +224,14 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
                         }
                     }
                 }
-                StreamElement::Snapshot(snapshot_id) => {
-                    let mut snap_id = snapshot_id.clone();
+                StreamElement::Snapshot(mut snap_id) => {
                     // Set the iteration stack accordingly to iteration stack level
                     while snap_id.iteration_stack.len() < self.iteration_stack_level {
                         // put 0 at each missing level
                         snap_id.iteration_stack.push(0);
                     }
+                    // Set iteration_index if needed
+                    snap_id.iteration_index = self.iteration_index;
                     // if needed cache prev msgs
                     if self.left.cached && to_cache.len() > 0 {
                         let last_msgs = NetworkMessage::new_batch(to_cache.clone(), sender);
@@ -236,7 +240,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
                     }
                     // extend to_return with to_cache
                     to_return.extend(to_cache);
-                    to_return.push(StreamElement::Snapshot(snapshot_id).map(BinaryElement::Left));
+                    to_return.push(StreamElement::Snapshot(snap_id.clone()).map(BinaryElement::Left));
                     to_cache = Vec::new();
 
                     // put previous msgs in all partial snapshot that have sender in the set
@@ -326,13 +330,14 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
                         }
                     }
                 }
-                StreamElement::Snapshot(snapshot_id) => {
-                    let mut snap_id = snapshot_id.clone();
+                StreamElement::Snapshot(mut snap_id) => {
                     // Set the iteration stack accordingly to iteration stack level
                     while snap_id.iteration_stack.len() < self.iteration_stack_level {
                         // put 0 at each missing level
                         snap_id.iteration_stack.push(0);
                     }
+                    // Set iteration_index if needed
+                    snap_id.iteration_index = self.iteration_index;
                     // if needed cache prev msgs
                     if self.right.cached && to_cache.len() > 0 {
                         let last_msgs = NetworkMessage::new_batch(to_cache.clone(), sender);
@@ -341,7 +346,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
                     }
                     // extend to_return with to_cache
                     to_return.extend(to_cache);
-                    to_return.push(StreamElement::Snapshot(snapshot_id).map(BinaryElement::Right));
+                    to_return.push(StreamElement::Snapshot(snap_id.clone()).map(BinaryElement::Right));
                     to_cache = Vec::new();
 
                     // put previous msgs in all partial snapshot that have sender in the set
@@ -772,6 +777,7 @@ mod tests {
             false,
             None,
             0,
+            None,
         );
        
         let mut metadata = t.metadata();
@@ -926,6 +932,7 @@ mod tests {
             false,
             None,
             0,
+            None,
         );
        
         let mut metadata = t.metadata();
@@ -1167,6 +1174,7 @@ mod tests {
             false,
             None,
             0,
+            None,
         );
        
         let mut metadata = t.metadata();

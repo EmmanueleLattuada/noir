@@ -295,7 +295,7 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
         let mut last_position = None;
         if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<CsvSourceState>();
-            if !metadata.contains_cached_stream {
+            if !metadata.iterations_snapshot_alignment {
                 if let Some(snap_freq) = p_service.snapshot_frequency_by_item {
                     self.snapshot_generator.set_item_interval(snap_freq);
                 }

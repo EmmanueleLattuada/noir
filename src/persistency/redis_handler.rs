@@ -84,51 +84,6 @@ impl PersistencyServices for RedisHandler{
         log::debug!("Saved state for operator: {op_coord}, at snapshot id: {snapshot_id}\n",);     
     }
 
-    fn save_void_state(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId) {
-        // Prepare connection
-        let mut conn = self.conn_pool
-            .as_ref()
-            .unwrap()
-            .get()
-            .unwrap_or_else(|e|
-                panic!("Fail to connect to Redis: {e:?}")
-            );
-
-        // Serialize op_coord
-        let op_coord_key_buf = serialize_op_coord(op_coord);
-
-        // Serialize snap_id
-        let snap_id_buf= serialize_snapshot_id(snapshot_id.clone());
-
-        // Save op_coord -> snap_id (push on list)
-        conn.lpush(op_coord_key_buf.clone(), snap_id_buf)
-            .unwrap_or_else(|e|
-                panic!("Fail to save the state: {e:?}")
-            );
-
-        // Another list for the iter_stack
-        let iter_stack =  snapshot_id.iteration_stack.clone();
-        if iter_stack.len() > 0 {
-            // Serialize the iter_stack
-            let ser_iter_stack = serialize_data(iter_stack);
-
-            let serial_index = snapshot_id.id().to_be_bytes().to_vec();
-            let mut op_snap_id_key_buf = Vec::with_capacity(op_coord_key_buf.len() + serial_index.len());
-            op_snap_id_key_buf.append(&mut op_coord_key_buf.clone());
-            op_snap_id_key_buf.append(&mut serial_index.clone());
-            assert_eq!(op_snap_id_key_buf.len(), op_coord_key_buf.len() + serial_index.len());
-
-            // Save op_coord -> snap_id (push on list)
-            conn.lpush(op_snap_id_key_buf, ser_iter_stack)
-                .unwrap_or_else(|e|
-                    panic!("Fail to save the state: {e:?}")
-                );
-        }
-
-        // Log the store
-        log::debug!("Saved void state for operator: {op_coord}, at snapshot id: {snapshot_id}\n",);
-    }
-
     fn get_last_snapshot(&self, op_coord: OperatorCoord) -> Option<SnapshotId> {
         // Prepare connection
         let mut conn = self.conn_pool
@@ -161,7 +116,7 @@ impl PersistencyServices for RedisHandler{
     }
 
     
-    fn get_last_snapshot_with_index(&self, op_coord: OperatorCoord, snapshot_index: u64) -> Option<Vec<u64>> {
+    fn get_last_iter_stack(&self, op_coord: OperatorCoord, snapshot_index: u64) -> Option<Vec<u64>> {
         // Prepare connection
         let mut conn = self.conn_pool
             .as_ref()

@@ -22,6 +22,7 @@ pub(crate) fn persistency_config_unit_tests() -> PersistencyConfig{
         restart_from: None,
         snapshot_frequency_by_item: None,
         snapshot_frequency_by_time: None,
+        iterations_snapshot_alignment: true,
     }
 }
 
@@ -136,7 +137,7 @@ impl<T: ExchangeData> FakeNetworkTopology<T> {
             network: &mut self.topology,
             batch_mode: BatchMode::adaptive(100, Duration::from_millis(100)),
             persistency_builder: Default::default(),
-            contains_cached_stream: false,
+            iterations_snapshot_alignment: false,
         }
     }
 
