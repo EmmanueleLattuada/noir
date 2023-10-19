@@ -274,11 +274,11 @@ impl TestHelper {
             restart_from,
             snapshot_frequency_by_item,
             snapshot_frequency_by_time: None,
-            iterations_snapshot_alignment: true,
+            iterations_snapshot_alignment: false,
         }
     }
 
-    pub fn persistency_config_test_no_isa(try_restart: bool, clean_on_exit: bool, restart_from: Option<u64>, snapshot_frequency_by_item: Option<u64>) -> PersistencyConfig {
+    pub fn persistency_config_test_isa(try_restart: bool, clean_on_exit: bool, restart_from: Option<u64>, snapshot_frequency_by_item: Option<u64>) -> PersistencyConfig {
         PersistencyConfig { 
             server_addr: String::from(REDIS_TEST_CONFIGURATION), 
             try_restart, 
@@ -286,7 +286,7 @@ impl TestHelper {
             restart_from,
             snapshot_frequency_by_item,
             snapshot_frequency_by_time: None,
-            iterations_snapshot_alignment: false,
+            iterations_snapshot_alignment: true,
         }
     }
 

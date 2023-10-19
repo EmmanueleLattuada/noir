@@ -392,15 +392,15 @@ fn test_replay_snapshot_not_alligned() {
 
     let execution_list = vec![
         // Complete execution
-        TestHelper::persistency_config_test_no_isa(false, false, None, snap_freq),
+        TestHelper::persistency_config_test_isa(false, false, None, snap_freq),
         // Restart from snapshot 1
-        TestHelper::persistency_config_test_no_isa(true, false, Some(1), snap_freq),
+        TestHelper::persistency_config_test_isa(true, false, Some(1), snap_freq),
         // Restart from snapshot 2
-        TestHelper::persistency_config_test_no_isa(true, false, Some(2), snap_freq),
+        TestHelper::persistency_config_test_isa(true, false, Some(2), snap_freq),
         // Restart from snapshot  5, from the last iteration
-        TestHelper::persistency_config_test_no_isa(true, false, Some(5), snap_freq),
+        TestHelper::persistency_config_test_isa(true, false, Some(5), snap_freq),
         // Restart from last snapshot, all operators have terminated
-        TestHelper::persistency_config_test_no_isa(true, true, None, snap_freq),
+        TestHelper::persistency_config_test_isa(true, true, None, snap_freq),
     ];
 
     TestHelper::local_remote_env_with_persistency(body, execution_list);

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use criterion::{criterion_group, criterion_main, Criterion};
 use criterion::{BenchmarkId, Throughput};
 use nexmark::config::NexmarkConfig;
@@ -358,6 +360,18 @@ fn run_query(env: &mut StreamEnvironment, q: &str, n: usize) {
     }
 }
 
+fn persistency_config_bench(snapshot_frequency_by_item: Option<u64>, snapshot_frequency_by_time: Option<Duration>) -> PersistencyConfig {
+    PersistencyConfig { 
+        server_addr: String::from(REDIS_BENCH_CONFIGURATION), 
+        try_restart: false, 
+        clean_on_exit: false, 
+        restart_from: None,
+        snapshot_frequency_by_item,
+        snapshot_frequency_by_time,
+        iterations_snapshot_alignment: false,
+    }
+}
+
 fn nexmark_persistency_bench(c: &mut Criterion) {
     let mut g = c.benchmark_group("nexmark_persistency");
     g.sample_size(SAMPLES);
@@ -366,98 +380,48 @@ fn nexmark_persistency_bench(c: &mut Criterion) {
 
 
     macro_rules! bench_query {
-        ($q:expr, $n:expr) => {{
-            g.bench_with_input(BenchmarkId::new(format!("{}-snap-t", $q), $n), &$n, |b, size| {
+        ($q:expr, $n:expr, $name:expr, $p_conf:expr) => {{
+            g.bench_with_input(BenchmarkId::new(format!("{}-snap-{}", $q, $name), $n), &$n, |b, _| {
+                let mut num_of_snap_avg = 0;
+                let mut iter = 0;
                 b.iter(|| {
                     let mut config = EnvironmentConfig::local(4);
-                    config.add_persistency(PersistencyConfig { 
-                        server_addr: String::from("redis://127.0.0.1"), 
-                        try_restart: false, 
-                        clean_on_exit: true, 
-                        restart_from: None, 
-                        snapshot_frequency_by_item: None,
-                        snapshot_frequency_by_time: None,
-                        iterations_snapshot_alignment: false,
-                    });
+                    config.add_persistency($p_conf);
                     let mut env = StreamEnvironment::new(config);
-                    run_query(&mut env, $q, *size);
+                    run_query(&mut env, $q, $n);
                     env.execute_blocking();
-                })
+                    let max_snap = noir::persistency::redis_handler::get_max_snapshot_id_and_flushall( String::from(REDIS_BENCH_CONFIGURATION));
+                    num_of_snap_avg = ((num_of_snap_avg * iter) + max_snap) / (iter + 1);
+                    iter += 1;
+                });
+                println!("Average number of taken snapshots: {:?}", num_of_snap_avg);
             });
-            g.bench_with_input(BenchmarkId::new(format!("{}-snap-100", $q), $n), &$n, |b, size| {
+            /*
+            g.bench_with_input(BenchmarkId::new(format!("{}-remote-snap-{}", $q, $name), $n), &$n, |b, _| {
+                let mut num_of_snap_avg = 0;
+                let mut iter = 0;
                 b.iter(|| {
-                    let mut config = EnvironmentConfig::local(4);
-                    config.add_persistency(PersistencyConfig { 
-                        server_addr: String::from("redis://127.0.0.1"), 
-                        try_restart: false, 
-                        clean_on_exit: true, 
-                        restart_from: None, 
-                        snapshot_frequency_by_item: Some((*size/(4*100)) as u64),
-                        snapshot_frequency_by_time: None,
-                        iterations_snapshot_alignment: false,
+                    remote_loopback_deploy(5, 4, Some($p_conf), move |mut env| {
+                        run_query(&mut env, $q, $n);
                     });
-                    let mut env = StreamEnvironment::new(config);
-                    run_query(&mut env, $q, *size);
-                    env.execute_blocking();
-                })
+                    let max_snap = noir::persistency::redis_handler::get_max_snapshot_id_and_flushall( String::from(REDIS_BENCH_CONFIGURATION));
+                    num_of_snap_avg = ((num_of_snap_avg * iter) + max_snap) / (iter + 1);
+                    iter += 1;
+                });
+                println!("Average number of taken snapshots: {:?}", num_of_snap_avg);
             });
-            g.bench_with_input(
-                BenchmarkId::new(format!("{}-remote-snap-t", $q), $n),
-                &$n,
-                |b, _| {
-                    let pers_conf = PersistencyConfig { 
-                        server_addr: String::from("redis://127.0.0.1"), 
-                        try_restart: false, 
-                        clean_on_exit: true, 
-                        restart_from: None, 
-                        snapshot_frequency_by_item: None,
-                        snapshot_frequency_by_time: None,
-                        iterations_snapshot_alignment: false,
-                    };
-                    b.iter(|| {
-                        remote_loopback_deploy(5, 4, Some(pers_conf.clone()), move |mut env| {
-                            run_query(&mut env, $q, $n);
-                        });
-                    })
-                },
-            );
-            g.bench_with_input(
-                BenchmarkId::new(format!("{}-remote-snap-100", $q), $n),
-                &$n,
-                |b, size| {
-                    let pers_conf = PersistencyConfig { 
-                        server_addr: String::from("redis://127.0.0.1"), 
-                        try_restart: false, 
-                        clean_on_exit: true, 
-                        restart_from: None, 
-                        snapshot_frequency_by_item: Some((*size/(5*4*100)) as u64),    // 5 replicas * 4 hosts
-                        snapshot_frequency_by_time: None,
-                        //snapshot_frequency_by_item: None,
-                        //snapshot_frequency_by_time: Some(std::time::Duration::from_millis($n/1000)),
-                        iterations_snapshot_alignment: false,
-
-                    };
-                    b.iter(|| {
-                        remote_loopback_deploy(5, 4, Some(pers_conf.clone()), move |mut env| {
-                            run_query(&mut env, $q, $n);
-                        });
-                    })
-                },
-            );
+            */
         }};
     }
 
     for size in [10_000, 100_000, 1_000_000] {
         g.throughput(Throughput::Elements(size as u64));
-        //bench_query!("0", size);
-        //bench_query!("1", size);
-        //bench_query!("2", size);
-        //bench_query!("3", size);
-        bench_query!("4", size);
-        //bench_query!("5", size);
-        bench_query!("6", size);
-        //bench_query!("7", size);
-        bench_query!("8", size);
+
+        for q in ["0", "1", "2", "3", "4", "5", "6", "7", "8"] {
+            bench_query!(q, size, "only-TSnap", persistency_config_bench(None, None));
+            bench_query!(q, size, "100Snap-by-item", persistency_config_bench(Some((size/(4*100)) as u64), None));
+        }
+        
     }
     g.finish();
 
