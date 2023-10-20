@@ -50,9 +50,7 @@ pub struct StreamEnvironment {
 
 impl Default for StreamEnvironment {
     fn default() -> Self {
-        Self::new(EnvironmentConfig::local(
-            available_parallelism().map(|q| q.get()).unwrap_or(1) as u64,
-        ))
+        Self::new(EnvironmentConfig::default())
     }
 }
 

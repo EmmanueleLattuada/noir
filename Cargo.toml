@@ -155,6 +155,9 @@ harness = false
 name = "wordcount_persistency"
 harness = false
 [[bench]]
+name = "wordcount_persistency_2"
+harness = false
+[[bench]]
 name = "nexmark_persistency"
 harness = false
 

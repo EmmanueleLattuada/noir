@@ -95,7 +95,7 @@ pub struct PersistencyConfig {
     pub restart_from: Option<u64>,
     pub snapshot_frequency_by_item: Option<u64>,
     pub snapshot_frequency_by_time: Option<Duration>,
-    pub iterations_snapshot_alignment: bool
+    pub iterations_snapshot_alignment: bool,
 }
 
 /// Which kind of environment to use for the execution.
@@ -208,6 +208,12 @@ pub struct CommandLineOptions {
 
     /// The rest of the arguments.
     args: Vec<String>,
+}
+
+impl Default for EnvironmentConfig {
+    fn default() -> Self {
+        Self::local(std::thread::available_parallelism().map(|q| q.get()).unwrap_or(1) as u64)
+    }
 }
 
 impl EnvironmentConfig {

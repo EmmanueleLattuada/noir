@@ -71,3 +71,93 @@ pub fn remote_loopback_deploy(
             .unwrap_or_else(|e| panic!("Remote worker for host {host_id} crashed: {e:?}"));
     }
 }
+
+pub struct PersistentBenchBuilder<F, G, R>
+where
+    F: Fn() -> StreamEnvironment,
+    G: Fn(&mut StreamEnvironment) -> R,
+{
+    make_env: F,
+    make_network: G,
+    _result: PhantomData<R>,
+    snap_count: u64,
+    run_count: u64,
+}
+
+impl<F, G, R> PersistentBenchBuilder<F, G, R>
+where
+    F: Fn() -> StreamEnvironment,
+    G: Fn(&mut StreamEnvironment) -> R,
+{
+    pub fn new(make_env: F, make_network: G) -> Self {
+        Self {
+            make_env,
+            make_network,
+            _result: Default::default(),
+            snap_count: 0,
+            run_count: 0,
+        }
+    }
+
+    pub fn bench(&mut self, n: u64) -> Duration {
+        let mut time = Duration::default();
+        for _ in 0..n {
+            let mut env = (self.make_env)();
+            let _result = (self.make_network)(&mut env);
+            let start = Instant::now();
+            env.execute_blocking();
+            time += start.elapsed();
+            black_box(_result);
+            let max_snap = noir::persistency::redis_handler::get_max_snapshot_id_and_flushall( String::from(REDIS_BENCH_CONFIGURATION));
+            self.snap_count += max_snap;
+            self.run_count += 1;
+        }
+        time
+    }
+
+    pub fn mean_snap_per_run(&self) -> f32 {
+        self.snap_count as f32 / self.run_count as f32
+    }
+}
+
+pub fn persist_interval(
+    interval: Duration,
+) -> PersistencyConfig {
+    PersistencyConfig {
+        server_addr: String::from(REDIS_BENCH_CONFIGURATION),
+        try_restart: false,
+        clean_on_exit: false,
+        restart_from: None,
+        snapshot_frequency_by_item: None,
+        snapshot_frequency_by_time: Some(interval),
+        iterations_snapshot_alignment: false,
+    }
+}
+
+pub fn persist_count(
+    count: u64,
+) -> PersistencyConfig {
+    PersistencyConfig {
+        server_addr: String::from(REDIS_BENCH_CONFIGURATION),
+        try_restart: false,
+        clean_on_exit: false,
+        restart_from: None,
+        snapshot_frequency_by_item: Some(count),
+        snapshot_frequency_by_time: None,
+        iterations_snapshot_alignment: false,
+    }
+}
+
+pub fn persist_none(
+    count: u64,
+) -> PersistencyConfig {
+    PersistencyConfig {
+        server_addr: String::from(REDIS_BENCH_CONFIGURATION),
+        try_restart: false,
+        clean_on_exit: false,
+        restart_from: None,
+        snapshot_frequency_by_item: None,
+        snapshot_frequency_by_time: None,
+        iterations_snapshot_alignment: false,
+    }
+}
