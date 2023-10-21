@@ -152,7 +152,7 @@ impl SnapshotId {
         self.terminate
     }
 
-    pub (crate) fn check_next(&self, next: Self) -> bool {
+    pub (crate) fn check_next(&self, next: &Self) -> bool {
         if self.iteration_index != next.iteration_index {
             return false;
         }

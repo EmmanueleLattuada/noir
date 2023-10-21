@@ -2,7 +2,6 @@ use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use std::any::TypeId;
 use std::sync::Arc;
-use std::thread::available_parallelism;
 
 use crate::block::Block;
 use crate::config::{EnvironmentConfig, ExecutionRuntime, RemoteRuntimeConfig};

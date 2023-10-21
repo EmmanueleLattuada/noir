@@ -6,7 +6,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use criterion::measurement::WallTime;
-use criterion::{criterion_group, criterion_main, Criterion, BenchmarkGroup};
+use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion};
 use criterion::{BenchmarkId, Throughput};
 use fake::Fake;
 use kstring::KString;
@@ -174,7 +174,14 @@ fn wc_fast_kstring(env: &mut StreamEnvironment, path: &Path) {
     std::hint::black_box(result);
 }
 
-fn bench_wc(g: &mut BenchmarkGroup<WallTime>, bench: &str, test: &str, lines: usize, file_path: &Path, persistency_conf: PersistencyConfig) {
+fn bench_wc(
+    g: &mut BenchmarkGroup<WallTime>,
+    bench: &str,
+    test: &str,
+    lines: usize,
+    file_path: &Path,
+    persistency_conf: &PersistencyConfig,
+) {
     let id = BenchmarkId::new(format!("{}-snap-{}", bench, test), lines);
     g.bench_with_input(id, &lines, move |b, _| {
         let p = persistency_conf.clone();
@@ -190,10 +197,7 @@ fn bench_wc(g: &mut BenchmarkGroup<WallTime>, bench: &str, test: &str, lines: us
         );
 
         b.iter_custom(|n| harness.bench(n));
-        println!(
-            "mean snaps: {:?}",
-            harness.mean_snap_per_run()
-        );
+        println!("mean snaps: {:?}", harness.mean_snap_per_run());
     });
 }
 
@@ -235,6 +239,14 @@ fn run_wc(env: &mut StreamEnvironment, q: &str, path: &Path) {
 }
 
 fn wordcount_persistency_bench(c: &mut Criterion) {
+    use tracing_subscriber::layer::SubscriberExt;
+
+    tracing::subscriber::set_global_default(
+        tracing_subscriber::registry()
+            .with(tracing_tracy::TracyLayer::new()),
+    ).expect("set up the subscriber");
+
+
     let mut g = c.benchmark_group("wordcount_persistency");
     g.sample_size(SAMPLES);
 
@@ -243,10 +255,13 @@ fn wordcount_persistency_bench(c: &mut Criterion) {
         let file_size = file.as_file().metadata().unwrap().len();
         let file_path = file.path();
         g.throughput(Throughput::Bytes(file_size));
-
-        bench_wc(&mut g, "wc-fold-assoc", "10ms", lines, file_path, persist_interval(Duration::from_millis(10)));
-        bench_wc(&mut g, "wc-reduce", "10ms", lines, file_path, persist_interval(Duration::from_millis(10)));
-        bench_wc(&mut g, "wc-fast", "10ms", lines, file_path, persist_interval(Duration::from_millis(10)));
+        for interval in [10, 100, 1000].map(Duration::from_millis) {
+            let test = format!("{interval:?}");
+            let conf = persist_interval(interval);
+            bench_wc(&mut g, "wc-fold-assoc", &test, lines, file_path, &conf);
+            bench_wc(&mut g, "wc-reduce", &test, lines, file_path, &conf);
+            bench_wc(&mut g, "wc-fast", &test, lines, file_path, &conf);
+        }
 
         // bench_wc_remote(&mut g, "wc-fold-assoc", "10ms-remote", lines, file_path, persist_interval(Duration::from_millis(10)));
         // bench_wc_remote(&mut g, "wc-reduce", "10ms-remote", lines, file_path, persist_interval(Duration::from_millis(10)));

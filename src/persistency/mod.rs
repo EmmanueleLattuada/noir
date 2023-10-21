@@ -20,9 +20,9 @@ static KEY_SERIALIZER: Lazy<
         .reject_trailing_bytes()
 });
 
-fn serialize_op_coord(op_coord: OperatorCoord) -> Vec<u8> {
+fn serialize_op_coord(op_coord: &OperatorCoord) -> Vec<u8> {
     let op_coord_key_len = KEY_SERIALIZER
-        .serialized_size(&op_coord)
+        .serialized_size(op_coord)
         .unwrap_or_else(|e| {
             panic!(
                 "Failed to compute serialized length of operator coordinate: {op_coord}. Error: {e:?}",
@@ -40,9 +40,9 @@ fn serialize_op_coord(op_coord: OperatorCoord) -> Vec<u8> {
     op_coord_key_buf
 }
 
-fn serialize_snapshot_id(snapshot_id: SnapshotId) -> Vec<u8> {
+fn serialize_snapshot_id(snapshot_id: &SnapshotId) -> Vec<u8> {
     let snap_id_len = KEY_SERIALIZER
-        .serialized_size(&snapshot_id)
+        .serialized_size(snapshot_id)
         .unwrap_or_else(|e| {
             panic!(
                 "Failed to compute serialized length of snapshot id: {snapshot_id}. Error: {e:?}",
@@ -60,7 +60,7 @@ fn serialize_snapshot_id(snapshot_id: SnapshotId) -> Vec<u8> {
     snap_id_buf
 } 
 
-fn serialize_data<D: ExchangeData>(data: D) -> Vec<u8> {
+fn serialize_data<D: ExchangeData>(data: &D) -> Vec<u8> {
     let data_len = SERIALIZER
             .serialized_size(&data)
             .unwrap_or_else(|e| {
@@ -82,15 +82,15 @@ fn serialize_data<D: ExchangeData>(data: D) -> Vec<u8> {
 
 pub(crate) trait PersistencyServices {  
     /// Method to save the state of the operator. State must be serialized
-    fn save_state(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId, state: Vec<u8>);
+    fn save_state(&self, op_coord: &OperatorCoord, snapshot_id: &SnapshotId, state: Vec<u8>);
     /// Method to get the state of the operator
-    fn get_state<State: ExchangeData>(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId) -> Option<State>;
+    fn get_state<State: ExchangeData>(&self, op_coord: &OperatorCoord, snapshot_id: &SnapshotId) -> Option<State>;
     /// Method to get the id of the last snapshot done by specified operator
-    fn get_last_snapshot(&self, op_coord: OperatorCoord) -> Option<SnapshotId>;
+    fn get_last_snapshot(&self, op_coord: &OperatorCoord) -> Option<SnapshotId>;
     /// Method to get the iter_stack of the last snapshot with specified index done by specified operator
-    fn get_last_iter_stack(&self, op_coord: OperatorCoord, snapshot_index: u64) -> Option<Vec<u64>>;
+    fn get_last_iter_stack(&self, op_coord: &OperatorCoord, snapshot_index: u64) -> Option<Vec<u64>>;
     /// Method to remove the state associated to specified operator and snapshot id
-    fn delete_state(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId);
+    fn delete_state(&self, op_coord: &OperatorCoord, snapshot_id: &SnapshotId);
 }
 
 

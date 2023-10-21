@@ -167,17 +167,17 @@ mod tests {
         assert!(snap1 > SnapshotId::new(1));
         assert!(snap1 >= SnapshotId::new(2));
         assert!(snap1 < SnapshotId::new(3));
-        assert!(SnapshotId::new(2).check_next(snap1.clone()));
-        assert!(snap1.check_next(SnapshotId::new(3)));
-        assert!(!(snap1.check_next(SnapshotId::new(2))));
+        assert!(SnapshotId::new(2).check_next(&snap1));
+        assert!(snap1.check_next(&SnapshotId::new(3)));
+        assert!(!(snap1.check_next(&SnapshotId::new(2))));
 
         let mut snap2 = SnapshotId::new(2);
         snap2.iteration_stack.push(0);
         snap2.iteration_stack.push(1);        
         assert!(snap2 < snap1);
-        assert!(SnapshotId::new(2).check_next(snap2.clone()));
-        assert!(snap2.check_next(snap1.clone()));
-        assert!(!(snap1.check_next(snap2.clone())));
+        assert!(SnapshotId::new(2).check_next(&snap2));
+        assert!(snap2.check_next(&snap1));
+        assert!(!(snap1.check_next(&snap2)));
 
         let mut snap3 = SnapshotId::new(2);
         snap3.iteration_stack.push(0);
@@ -185,9 +185,9 @@ mod tests {
         snap3.iteration_stack.push(1);        
         assert!(snap3 < snap1);
         assert!(snap3 < snap2);
-        assert!(SnapshotId::new(2).check_next(snap3.clone()));
-        assert!(snap3.check_next(snap2.clone()));
-        assert!(!(snap2.check_next(snap3.clone())));
+        assert!(SnapshotId::new(2).check_next(&snap3));
+        assert!(snap3.check_next(&snap2));
+        assert!(!(snap2.check_next(&snap3)));
 
         let s_next = snap1.next();
         assert_eq!(s_next.id(), snap1.id() + 1);

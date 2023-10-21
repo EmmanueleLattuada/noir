@@ -121,14 +121,14 @@ impl<State:ExchangeData> PersistencyService<State> {
 
     #[inline(never)]
     pub (crate) fn get_last_snapshot(&self, op_coord: OperatorCoord) -> Option<SnapshotId> {
-        self.handler.get_last_snapshot(op_coord)
+        self.handler.get_last_snapshot(&op_coord)
     }
     #[inline(never)]
     pub (crate) fn get_state(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId) -> Option<State> {
-        self.handler.get_state(op_coord, snapshot_id)
+        self.handler.get_state(&op_coord, &snapshot_id)
     }
     #[inline(never)]
     pub (crate) fn delete_state(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId) {
-        self.handler.delete_state(op_coord, snapshot_id);
+        self.handler.delete_state(&op_coord, &snapshot_id);
     }
 }
