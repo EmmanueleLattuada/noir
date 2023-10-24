@@ -29,6 +29,7 @@ impl RedisHandler {
 
 impl PersistencyServices for RedisHandler {
     fn save_state(&self, op_coord: &OperatorCoord, snapshot_id: &SnapshotId, state_buf: Vec<u8>) {
+        micrometer::span!(_g, "redis::save_state");
         let mut conn = self.pool.get().expect("Fail to connect to Redis");
 
         // let state_buf = serialize_data(state);
@@ -70,6 +71,7 @@ impl PersistencyServices for RedisHandler {
     }
 
     fn get_last_snapshot(&self, op_coord: &OperatorCoord) -> Option<SnapshotId> {
+        micrometer::span!(_g, "redis::get_last_snapshot");
         let mut conn = self.pool.get().expect("Fail to connect to Redis");
         let op_coord_key_buf = serialize_op_coord(&op_coord);
 
@@ -97,6 +99,7 @@ impl PersistencyServices for RedisHandler {
         op_coord: &OperatorCoord,
         snapshot_index: u64,
     ) -> Option<Vec<u64>> {
+        micrometer::span!(_g, "redis::get_last_iter_stack");
         let mut conn = self.pool.get().expect("Fail to connect to Redis");
 
         // Serialize op_coord
@@ -132,6 +135,7 @@ impl PersistencyServices for RedisHandler {
         op_coord: &OperatorCoord,
         snapshot_id: &SnapshotId,
     ) -> Option<State> {
+        micrometer::span!(_g, "redis::get_state");
         // Prepare connection
         let mut conn = self.pool.get().expect("Redis connection error");
 

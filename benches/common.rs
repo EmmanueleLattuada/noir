@@ -104,9 +104,11 @@ where
         for _ in 0..n {
             let mut env = (self.make_env)();
             let _result = (self.make_network)(&mut env);
+            micrometer::span!(_g, "execution");
             let start = Instant::now();
             env.execute_blocking();
             time += start.elapsed();
+            drop(_g);
             black_box(_result);
             let max_snap = noir::persistency::redis_handler::get_max_snapshot_id_and_flushall( String::from(REDIS_BENCH_CONFIGURATION));
             self.snap_count += max_snap;

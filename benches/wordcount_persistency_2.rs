@@ -30,7 +30,7 @@ fn make_file(lines: usize) -> tempfile::NamedTempFile {
     let mut file = tempfile::NamedTempFile::new().unwrap();
     let seed = b"By imDema, edomora97 and mark03.".to_owned();
     let r = &mut StdRng::from_seed(seed);
-    let mut w = BufWriter::new(&mut file);
+    let mut w = BufWriter::with_capacity(4 << 20, &mut file);
 
     for _ in 0..lines {
         use fake::faker::lorem::en::*;
@@ -127,6 +127,7 @@ fn wc_fast(env: &mut StreamEnvironment, path: &Path) {
         .fold_assoc(
             HashMap::<KString, u64, BuildHasherDefault<WyHash>>::default(),
             |acc, line| {
+                micrometer::span!(fold_local);
                 let mut word = String::with_capacity(4);
                 for c in line.chars() {
                     if !c.is_whitespace() {
@@ -139,6 +140,7 @@ fn wc_fast(env: &mut StreamEnvironment, path: &Path) {
                 }
             },
             |a, mut b| {
+                micrometer::span!(fold_global);
                 for (k, v) in b.drain() {
                     *a.entry(k).or_default() += v;
                 }
@@ -239,18 +241,10 @@ fn run_wc(env: &mut StreamEnvironment, q: &str, path: &Path) {
 }
 
 fn wordcount_persistency_bench(c: &mut Criterion) {
-    use tracing_subscriber::layer::SubscriberExt;
-
-    tracing::subscriber::set_global_default(
-        tracing_subscriber::registry()
-            .with(tracing_tracy::TracyLayer::new()),
-    ).expect("set up the subscriber");
-
-
     let mut g = c.benchmark_group("wordcount_persistency");
     g.sample_size(SAMPLES);
 
-    for lines in [100_000, 1_000_000] {
+    for lines in [10_000_000] {
         let file = make_file(lines as usize);
         let file_size = file.as_file().metadata().unwrap().len();
         let file_path = file.path();
@@ -267,6 +261,8 @@ fn wordcount_persistency_bench(c: &mut Criterion) {
         // bench_wc_remote(&mut g, "wc-reduce", "10ms-remote", lines, file_path, persist_interval(Duration::from_millis(10)));
         // bench_wc_remote(&mut g, "wc-fast", "10ms-remote", lines, file_path, persist_interval(Duration::from_millis(10)));
     }
+    micrometer::summary_grouped();
+    micrometer::append_csv_uniform("target/micrometer.csv", &std::env::args().collect::<String>()).unwrap();
 }
 
 criterion_group!(benches, wordcount_persistency_bench);

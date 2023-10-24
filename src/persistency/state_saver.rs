@@ -115,6 +115,7 @@ impl ActualSaver {
     // Read from the channel and process messages
     fn run(mut self) {
         while let Ok(msg) = self.rx.recv() {
+            micrometer::span!(_g, "redis::saver_rx_save");
             if let PersistencyMessage::State(op_coord, snap_id, state) = msg {
                 let last_snap = self.last_snapshots.get(&op_coord);
                 if !((snap_id.id() == 1 && last_snap.is_none())
