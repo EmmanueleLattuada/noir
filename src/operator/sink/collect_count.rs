@@ -63,14 +63,14 @@ where
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
 
-        self.operator_coord.from_coord(metadata.coord);
+        self.operator_coord.setup_coord(metadata.coord);
 
         if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<u64>();
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
-            if snapshot_id.is_some() {
+            if let Some(restart_snap) = snapshot_id {
                 // Get and resume the persisted state
-                let opt_state: Option<u64> = p_service.get_state(self.operator_coord, snapshot_id.unwrap());
+                let opt_state: Option<u64> = p_service.get_state(self.operator_coord, restart_snap);
                 if let Some(state) = opt_state {
                     self.result = state as usize;
                 } else {

@@ -66,7 +66,7 @@ impl<Out: ExchangeData> StartReceiver<Out> for SimpleStartReceiver<Out> {
     fn structure(&self) -> BlockStructure {
         let mut operator = OperatorStructure::new::<Out, _>("Start");
         // op id must be 0
-        operator.subtitle = format!("op id: 0");
+        operator.subtitle = "op id: 0".to_string();
         operator
             .receivers
             .push(OperatorReceiver::new::<Out>(self.previous_block_id));

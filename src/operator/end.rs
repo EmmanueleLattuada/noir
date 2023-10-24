@@ -135,7 +135,7 @@ where
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
-        self.operator_coord.from_coord(metadata.coord);
+        self.operator_coord.setup_coord(metadata.coord);
 
         // TODO: wrap sender-block assignment logic in a struct
         let senders = metadata.network.get_senders(metadata.coord);
@@ -182,7 +182,7 @@ where
                                 },
                                 _ => {
                                     // flush feedback pending snapshots
-                                    while self.feedback_pending_snapshots.len() > 0 {
+                                    while !self.feedback_pending_snapshots.is_empty() {
                                         sender.1.enqueue(self.feedback_pending_snapshots.pop_back().unwrap());
                                     }
                                 }
@@ -200,7 +200,7 @@ where
                     let sender_idx = block.indexes[index];
                     if Some(self.senders[sender_idx].0.coord.block_id) == self.feedback_id {
                         // flush feedback pending snapshots
-                        while self.feedback_pending_snapshots.len() > 0 {
+                        while !self.feedback_pending_snapshots.is_empty() {
                             self.senders[sender_idx].1.enqueue(self.feedback_pending_snapshots.pop_back().unwrap());
                         }
                     }

@@ -114,7 +114,7 @@ where
                 .map(|slot| SlotState {
                     count: slot.count as u64,
                     acc: slot.acc.get_state(),
-                    ts: slot.ts.clone(),
+                    ts: slot.ts,
                 })
             );
         CountWindowManagerState {
@@ -125,13 +125,12 @@ where
     fn set_state(&mut self, state: Self::ManagerState) {
         let win = VecDeque::from_iter(
             state.ws
-                .clone()
                 .iter()
                 .map(|slot| {
                     let mut saved_slot = Slot {
                         count: slot.count as usize,
                         acc: self.init.clone(),
-                        ts: slot.ts.clone(),
+                        ts: slot.ts,
                     };
                     saved_slot.acc.set_state(slot.acc.clone());
                     saved_slot

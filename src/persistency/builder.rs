@@ -31,14 +31,14 @@ impl PersistencyBuilder {
         if let Some(config) = conf {
             let handler = RedisHandler::new(config.server_addr.clone());
             let state_saver_handler = StateSaverHandler::new(handler.clone());
-            return Self {
+            Self {
                 handler,
                 state_saver_handler,
                 restart_from: None,
                 restart_form_stack: HashMap::default(),
                 snapshot_frequency_by_item: config.snapshot_frequency_by_item,
                 snapshot_frequency_by_time: config.snapshot_frequency_by_time,
-            };
+            }
         } else {
             panic!("Please provide persistency configuration");
         }
@@ -58,7 +58,7 @@ impl PersistencyBuilder {
             if let Some(snap_idx) = snapshot_index {
                 if snap_idx == 0 {
                     self.restart_from = None;
-                    self.clean_persisted_state(operators.clone()); //FIX
+                    self.clean_persisted_state(operators); //FIX
                 } else if snap_idx < restart.id() {
                     // TODO: Check that the snapshot with this id has not been deleted
                     let snap = SnapshotId::new(snap_idx);
@@ -74,7 +74,7 @@ impl PersistencyBuilder {
         &mut self,
         operators: Vec<OperatorCoord>,
     ) -> HashMap<u64, Vec<OperatorCoord>> {
-        let mut op_iter = operators.clone().into_iter();
+        let mut op_iter = operators.into_iter();
         let last_snap = self
             .handler
             .get_last_snapshot(&op_iter.next().expect("No operators provided"));
@@ -146,13 +146,12 @@ impl PersistencyBuilder {
                         } else if iter_stack.len() < i + 1 {
                             // iter_stack has less levels
                             break;
-                        } else {
-                            if last_iter_stack[i] > iter_stack[i] {
-                                last_iter_stack = iter_stack;
-                                break;
-                            } else if last_iter_stack[i] < iter_stack[i] {
-                                break;
-                            }
+                        } else if last_iter_stack[i] > iter_stack[i] {
+                            last_iter_stack = iter_stack;
+                            break;
+                        } else if last_iter_stack[i] < iter_stack[i] {
+                            break;
+                        
                         }
                         i += 1;
                     }

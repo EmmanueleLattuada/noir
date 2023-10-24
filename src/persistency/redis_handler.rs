@@ -33,7 +33,7 @@ impl PersistencyServices for RedisHandler {
 
         // let state_buf = serialize_data(state);
         let op_coord_key_buf = serialize_op_coord(op_coord);
-        let snap_id_buf = serialize_snapshot_id(&snapshot_id);
+        let snap_id_buf = serialize_snapshot_id(snapshot_id);
 
         // Save op_coord + snap_id -> state
         let mut op_snap_key_buf =
@@ -49,7 +49,7 @@ impl PersistencyServices for RedisHandler {
 
         // Another list for the iter_stack
         let iter_stack = snapshot_id.iteration_stack.clone();
-        if iter_stack.len() > 0 {
+        if !iter_stack.is_empty() {
             // Serialize the iter_stack
             let ser_iter_stack = serialize_data(&iter_stack);
 
@@ -71,18 +71,18 @@ impl PersistencyServices for RedisHandler {
 
     fn get_last_snapshot(&self, op_coord: &OperatorCoord) -> Option<SnapshotId> {
         let mut conn = self.pool.get().expect("Fail to connect to Redis");
-        let op_coord_key_buf = serialize_op_coord(&op_coord);
+        let op_coord_key_buf = serialize_op_coord(op_coord);
 
         // Get the last snapshotid
         let ser_snap_id: Option<Vec<u8>> =
-            conn.lindex(op_coord_key_buf.clone(), 0)
+            conn.lindex(op_coord_key_buf, 0)
                 .unwrap_or_else(|e| {
                     panic!("Failed to get last snapshot id of operator: {op_coord}. Error {e:?}")
                 });
         // Check if is Some
         if let Some(snap_id) = ser_snap_id {
             // Deserialize the snapshot_id
-            let error_msg = format!("Fail deserialization of snapshot id");
+            let error_msg = "Fail deserialization of snapshot id".to_string();
             let snapshot_id: SnapshotId = KEY_SERIALIZER
                 .deserialize(snap_id.as_ref())
                 .expect(&error_msg);
@@ -150,7 +150,7 @@ impl PersistencyServices for RedisHandler {
             .get::<Vec<u8>, Vec<u8>>(op_snap_key_buf)
             .expect("Fail to get the state");
 
-        if res.len() == 0 {
+        if res.is_empty() {
             return None;
         }
 
@@ -168,7 +168,7 @@ impl PersistencyServices for RedisHandler {
         let mut conn = self.pool.get().expect("Redis connection error");
 
         let op_coord_key_buf = serialize_op_coord(op_coord);
-        let snap_id_buf = serialize_snapshot_id(&snapshot_id);
+        let snap_id_buf = serialize_snapshot_id(snapshot_id);
 
         // Compute key op_coord + snap_id
         let mut op_snap_key_buf = Vec::with_capacity(op_coord_key_buf.len() + snap_id_buf.len());
@@ -194,7 +194,7 @@ impl PersistencyServices for RedisHandler {
 
         // Remove the iter_stack from iter_stack list
         let iter_stack = snapshot_id.iteration_stack.clone();
-        if iter_stack.len() > 0 {
+        if !iter_stack.is_empty() {
             let ser_iter_stack = serialize_data(&iter_stack);
             let serial_index = snapshot_id.id().to_be_bytes().to_vec();
             let mut op_snap_id_key_buf =
@@ -232,7 +232,7 @@ pub fn get_max_snapshot_id_and_flushall(server_addr: String) -> u64 {
             if snap_id.id() > result {
                 result = snap_id.id();
             }
-            op_coord.block_id = op_coord.block_id + 1;
+            op_coord.block_id += 1;
         } else {
             break;
         }

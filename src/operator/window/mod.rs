@@ -201,13 +201,13 @@ where
     fn setup(&mut self, metadata: &mut crate::ExecutionMetadata) {
         self.prev.setup(metadata);
 
-        self.operator_coord.from_coord(metadata.coord);
+        self.operator_coord.setup_coord(metadata.coord);
         if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<WindowOperatorState<Key, W::ManagerState>>();
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
-            if snapshot_id.is_some() {
+            if let Some(restart_snap_id) = snapshot_id {
                 // Get and resume the persisted state
-                let opt_state: Option<WindowOperatorState<Key, W::ManagerState>> = p_service.get_state(self.operator_coord, snapshot_id.unwrap());
+                let opt_state: Option<WindowOperatorState<Key, W::ManagerState>> = p_service.get_state(self.operator_coord, restart_snap_id);
                 if let Some(state) = opt_state {
                     state.manager.windows
                         .iter()
@@ -231,10 +231,8 @@ where
     fn next(&mut self) -> StreamElement<(Key, Out)> {
         loop {
             if let Some(item) = self.output_buffer.pop_front() {
-                if matches!(item, StreamElement::Terminate){
-                    if self.persistency_service.is_some() {
-                        self.save_terminate();
-                    }
+                if matches!(item, StreamElement::Terminate) && self.persistency_service.is_some(){
+                    self.save_terminate();
                 }
                 return item;
             }

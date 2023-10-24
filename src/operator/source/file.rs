@@ -99,7 +99,7 @@ impl Operator<String> for FileSource {
         let global_id = metadata.global_id;
         let instances = metadata.replicas.len();
 
-        self.operator_coord.from_coord(metadata.coord);
+        self.operator_coord.setup_coord(metadata.coord);
         let mut last_position = None;
         if let Some(pb) = metadata.persistency_builder {
             let p_service =pb.generate_persistency_service::<FileSourceState>();
@@ -118,7 +118,7 @@ impl Operator<String> for FileSource {
                 // Get the persisted state
                 let opt_state: Option<FileSourceState> = p_service.get_state(self.operator_coord, snap_id.clone());
                 if let Some(state) = opt_state {
-                    self.terminated = snap_id.clone().terminate();
+                    self.terminated = snap_id.terminate();
                     last_position = Some(state.current);
                 } else {
                     panic!("No persisted state founded for op: {0}", self.operator_coord);
@@ -150,8 +150,8 @@ impl Operator<String> for FileSource {
         };
 
         // Set start to last position (from persisted state), if any
-        if last_position.is_some() {
-            start = last_position.clone().unwrap() as usize;
+        if let Some(last_p) = last_position {
+            start = last_p as usize;
             self.current = start;
         }
 
@@ -187,8 +187,7 @@ impl Operator<String> for FileSource {
         if self.persistency_service.is_some(){
             // Check snapshot generator
             let snapshot = self.snapshot_generator.get_snapshot_marker();
-            if snapshot.is_some() {
-                let snapshot_id = snapshot.unwrap();
+            if let Some(snapshot_id) = snapshot {
                 // Save state and forward snapshot marker
                 let state = FileSourceState{
                     current: self.current as u64,
@@ -215,20 +214,18 @@ impl Operator<String> for FileSource {
                 }
                 Err(e) => panic!("Error while reading file: {e:?}",),
             }
+        } else if self.snapshot_before_flush {
+            self.snapshot_before_flush = false;
+            // Save state and forward snapshot with id 1, this is used 
+            // to sync iteration snapshot in presence of cached streams
+            let state = FileSourceState{
+                current: self.current as u64,
+            };
+            self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, SnapshotId::new(1), state);
+            StreamElement::Snapshot(SnapshotId::new(1))
         } else {
-            if self.snapshot_before_flush {
-                self.snapshot_before_flush = false;
-                // Save state and forward snapshot with id 1, this is used 
-                // to sync iteration snapshot in presence of cached streams
-                let state = FileSourceState{
-                    current: self.current as u64,
-                };
-                self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, SnapshotId::new(1), state);
-                StreamElement::Snapshot(SnapshotId::new(1))
-            } else {
-                self.terminated = true;
-                StreamElement::FlushAndRestart
-            }
+            self.terminated = true;
+            StreamElement::FlushAndRestart            
         };
 
         element
@@ -247,10 +244,8 @@ impl Operator<String> for FileSource {
     }
 
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
-        let mut res = Vec::new();
         // This operator is stateful
-        res.push(self.operator_coord.operator_id);
-        res
+        vec![self.operator_coord.operator_id]
     }
 }
 

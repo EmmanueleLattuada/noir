@@ -94,7 +94,7 @@ where
     It: Iterator<Item = Out> + Send + 'static,
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
-        self.operator_coord.from_coord(metadata.coord);
+        self.operator_coord.setup_coord(metadata.coord);
         if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<IteratorSourceState>();
             if !metadata.iterations_snapshot_alignment {
@@ -144,8 +144,7 @@ where
         if self.persistency_service.is_some(){
             // Check snapshot generator
             let snapshot = self.snapshot_generator.get_snapshot_marker();
-            if snapshot.is_some() {
-                let snapshot_id = snapshot.unwrap();
+            if let Some(snapshot_id) = snapshot {
                 // Save state and forward snapshot marker
                 let state = IteratorSourceState{
                     last_index: self.last_index,
@@ -196,10 +195,8 @@ where
     }
 
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
-        let mut res = Vec::new();
         // This operator is stateful
-        res.push(self.operator_coord.operator_id);
-        res
+        vec![self.operator_coord.operator_id]
     }
 }
 

@@ -219,7 +219,7 @@ where
 
         self.setup_endpoints();
 
-        self.operator_coord.from_coord(metadata.coord);
+        self.operator_coord.setup_coord(metadata.coord);
     }
 
     fn next(&mut self) -> StreamElement<()> {

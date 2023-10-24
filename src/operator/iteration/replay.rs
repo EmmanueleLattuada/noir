@@ -220,7 +220,7 @@ impl<Out: ExchangeData, State: ExchangeData + Sync> Operator<Out>
     for Replay<Out, State>
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
-        self.operator_coord.from_coord(metadata.coord);
+        self.operator_coord.setup_coord(metadata.coord);
         self.prev.setup(metadata);
         self.state.setup(metadata);
 
@@ -232,7 +232,7 @@ impl<Out: ExchangeData, State: ExchangeData + Sync> Operator<Out>
                     self.should_flush = true;
                 }
                 // Get and resume the persisted state
-                let opt_state: Option<ReplayState<Out, State>> = p_service.get_state(self.operator_coord, snap_id.clone());
+                let opt_state: Option<ReplayState<Out, State>> = p_service.get_state(self.operator_coord, snap_id);
                 if let Some(state) = opt_state {
                     self.recovered_state = Some(state.state.clone());
                     self.content = state.content.clone();
@@ -256,11 +256,8 @@ impl<Out: ExchangeData, State: ExchangeData + Sync> Operator<Out>
         // if i restart from a snap with 0 at this level of iter stack i need to flush all input
         if self.should_flush {
             loop {
-                match self.prev.next() {
-                    StreamElement::FlushAndRestart => {
-                        break;
-                    }
-                    _ => {}
+                if let StreamElement::FlushAndRestart = self.prev.next() {
+                    break;
                 }
             }
             self.should_flush = false;
@@ -435,16 +432,15 @@ where
 
         // Compute iteration stack level
         let iter_stack_level = self.block.iteration_ctx().len() + 1;
-        let iter_index;
-        if iter_stack_level == 1 {
+        let iter_index = if iter_stack_level == 1 {
             // New iteration loop not nested: give it a new index
             let mut env = env.lock();
             env.scheduler_mut().iterative_operators_counter += 1;
-            iter_index = env.scheduler_mut().iterative_operators_counter;
+            env.scheduler_mut().iterative_operators_counter
         } else {
             // Nested loop: take the index of the external loop
-            iter_index = self.block.iteration_index.unwrap();
-        }
+            self.block.iteration_index.unwrap()
+        };
         
         let leader = IterationLeader::new(
             initial_state,
@@ -479,7 +475,7 @@ where
             let mut env = env.lock();
             (env.config.persistency_configuration.is_some(), env.scheduler_mut().iterations_snapshot_alignment)
         };
-        if self.block.iteration_ctx().len() == 0 && persistency && !isa {
+        if self.block.iteration_ctx().is_empty() && persistency && !isa {
             // Add allignment block
             let input_stream = self.split_block(
                 End::new, 
@@ -522,7 +518,7 @@ where
                 iter_ctx,
                 Some(iter_index),
             ),
-            env: env.clone(),
+            env,
         };       
         
         let mut iter_start =
@@ -550,8 +546,8 @@ where
         let mut env = iter_end.env.lock();
         let scheduler = env.scheduler_mut();
         scheduler.schedule_block(iter_end.block);
-        if input_block.is_some() {
-            scheduler.schedule_block(input_block.unwrap());
+        if let Some(input_b) = input_block {
+            scheduler.schedule_block(input_b);
         } else {
             scheduler.schedule_block(allign_block.unwrap());
         }

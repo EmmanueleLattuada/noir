@@ -61,7 +61,7 @@ impl SnapshotGenerator {
         if !res && self.snap_item_interval.is_some(){
             res = self.item_counter == self.snap_item_interval.unwrap();
         }
-        self.item_counter = self.item_counter + 1;
+        self.item_counter += 1;
         if res {
             let tmp = self.snapshot_id.clone();
             self.item_counter = 0;

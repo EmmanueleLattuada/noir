@@ -383,7 +383,7 @@ impl<Out: ExchangeData, State: ExchangeData> Iterate<Out, State> {
 
 impl<Out: ExchangeData, State: ExchangeData + Sync> Operator<Out> for Iterate<Out, State> {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
-        self.operator_coord.from_coord(metadata.coord);
+        self.operator_coord.setup_coord(metadata.coord);
 
         let endpoint = ReceiverEndpoint::new(metadata.coord, self.input_block_id);
         self.input_receiver = Some(metadata.network.get_receiver(endpoint));
@@ -413,7 +413,7 @@ impl<Out: ExchangeData, State: ExchangeData + Sync> Operator<Out> for Iterate<Ou
                     self.should_flush = true;
                 }
                 // Get and resume the persisted state
-                let opt_state: Option<IterateState<Out, State>> = p_service.get_state(self.operator_coord, snap_id.clone());
+                let opt_state: Option<IterateState<Out, State>> = p_service.get_state(self.operator_coord, snap_id);
                 if let Some(state) = opt_state {
                     self.recovered_state = Some(state.state.clone());
                     self.content = state.content.clone();
@@ -439,11 +439,8 @@ impl<Out: ExchangeData, State: ExchangeData + Sync> Operator<Out> for Iterate<Ou
         while self.should_flush {
             let msg = self.input_receiver.as_ref().unwrap().recv().unwrap();
             for el in msg.into_iter() {
-                match el {
-                    StreamElement::FlushAndRestart => {
-                        self.should_flush = false;
-                    }
-                    _ => {}
+                if let StreamElement::FlushAndRestart = el {
+                    self.should_flush = false;
                 }
             }
         }
@@ -557,10 +554,8 @@ impl<Out: ExchangeData, State: ExchangeData + Sync> Operator<Out> for Iterate<Ou
     }
 
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
-        let mut res = Vec::new();
         // This operator is stateful
-        res.push(self.operator_coord.operator_id);
-        res
+        vec![self.operator_coord.operator_id]
     }
 }
 
@@ -668,16 +663,15 @@ where
 
         // Compute iteration stack level
         let iter_stack_level = self.block.iteration_ctx().len() + 1;
-        let iter_index;
-        if iter_stack_level == 1 {
+        let iter_index = if iter_stack_level == 1 {
             // New iteration loop not nested: give it a new index
             let mut env = env.lock();
             env.scheduler_mut().iterative_operators_counter += 1;
-            iter_index = env.scheduler_mut().iterative_operators_counter;
+            env.scheduler_mut().iterative_operators_counter
         } else {
             // Nested loop: take the index of the external loop
-            iter_index = self.block.iteration_index.unwrap();
-        }
+            self.block.iteration_index.unwrap()
+        };
 
         // prepare the stream with the IterationLeader block, this will provide the state output
         let mut leader_stream = StreamEnvironmentInner::stream(
@@ -709,7 +703,7 @@ where
             let mut env = env.lock();
             (env.config.persistency_configuration.is_some(), env.scheduler_mut().iterations_snapshot_alignment)
         };
-        if self.block.iteration_ctx().len() == 0 && persistency && !isa {
+        if self.block.iteration_ctx().is_empty() && persistency && !isa {
             // Add allignment block
             let input_stream = self.split_block(
                 End::new, 
@@ -824,8 +818,8 @@ where
         let scheduler = env.scheduler_mut();
         scheduler.schedule_block(state_update_end.block);
         scheduler.schedule_block(feedback_end.block);
-        if input_block.is_some() {
-            scheduler.schedule_block(input_block.unwrap());
+        if let Some(input_b) = input_block {
+            scheduler.schedule_block(input_b);
         } else {
             scheduler.schedule_block(allign_block.unwrap());
         }

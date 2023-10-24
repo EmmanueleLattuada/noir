@@ -79,7 +79,7 @@ impl<Out: Data + core::fmt::Debug> Source<Out> for ChannelSource<Out> {
 
 impl<Out: Data + core::fmt::Debug> Operator<Out> for ChannelSource<Out> {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
-        self.operator_coord.from_coord(metadata.coord);
+        self.operator_coord.setup_coord(metadata.coord);
         if let Some(pb) = metadata.persistency_builder {
             let p_service = pb.generate_persistency_service::<()>();
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
@@ -112,8 +112,7 @@ impl<Out: Data + core::fmt::Debug> Operator<Out> for ChannelSource<Out> {
             if self.persistency_service.is_some() {
                 // Check snapshot generator
                 let snapshot = self.snapshot_generator.get_snapshot_marker();
-                if snapshot.is_some() {
-                    let snapshot_id = snapshot.unwrap();
+                if let Some(snapshot_id) = snapshot {
                     // Save void state (this operator is stateless) and forward snapshot marker
                     self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id.clone(), ());
                     return StreamElement::Snapshot(snapshot_id);
@@ -172,10 +171,8 @@ impl<Out: Data + core::fmt::Debug> Operator<Out> for ChannelSource<Out> {
     }
 
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
-        let mut res = Vec::new();
         // This operator is stateful
-        res.push(self.operator_coord.operator_id);
-        res
+        vec![self.operator_coord.operator_id]
     }
 }
 

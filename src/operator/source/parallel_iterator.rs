@@ -254,7 +254,7 @@ where
                 .expect("Num replicas > max id"),
         );
 
-        self.operator_coord.from_coord(metadata.coord);
+        self.operator_coord.setup_coord(metadata.coord);
         if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<ParallelIteratorSourceState>();
             if !metadata.iterations_snapshot_alignment {
@@ -272,7 +272,7 @@ where
                 // Get and resume the persisted state
                 let opt_state: Option<ParallelIteratorSourceState> = p_service.get_state(self.operator_coord, snap_id.clone());
                 if let Some(state) = opt_state {
-                    self.terminated = snap_id.clone().terminate();
+                    self.terminated = snap_id.terminate();
                     if let Some(idx) = state.last_index {
                         self.inner.nth(idx as usize);
                         self.last_index = Some(idx);
@@ -304,8 +304,7 @@ where
         if self.persistency_service.is_some(){
             // Check snapshot generator
             let snapshot = self.snapshot_generator.get_snapshot_marker();
-            if snapshot.is_some() {
-                let snapshot_id = snapshot.unwrap();
+            if let Some(snapshot_id) = snapshot {
                 // Save state and forward snapshot marker
                 let state = ParallelIteratorSourceState{
                     last_index: self.last_index,
@@ -355,10 +354,8 @@ where
     }
 
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
-        let mut res = Vec::new();
         // This operator is stateful
-        res.push(self.operator_coord.operator_id);
-        res
+        vec![self.operator_coord.operator_id]
     }
 }
 

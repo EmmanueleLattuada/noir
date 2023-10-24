@@ -230,14 +230,14 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
     fn setup(&mut self, metadata: &mut crate::ExecutionMetadata) {
         self.prev.setup(metadata);
         
-        self.operator_coord.from_coord(metadata.coord);
+        self.operator_coord.setup_coord(metadata.coord);
         if let Some(pb) = metadata.persistency_builder {
             let p_service = pb.generate_persistency_service::<JoinKeyedOuterState<K, V1, V2>>();
                     
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
-            if snapshot_id.is_some() {
+            if let Some(restart_snap) = snapshot_id {
                 // Get and resume the persisted state
-                let opt_state: Option<JoinKeyedOuterState<K, V1, V2>> = p_service.get_state(self.operator_coord, snapshot_id.unwrap());
+                let opt_state: Option<JoinKeyedOuterState<K, V1, V2>> = p_service.get_state(self.operator_coord, restart_snap);
                 if let Some(state) = opt_state {
                     self.left = state.left;
                     self.right = state.right;
@@ -443,14 +443,14 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
     fn setup(&mut self, metadata: &mut crate::ExecutionMetadata) {
         self.prev.setup(metadata);
 
-        self.operator_coord.from_coord(metadata.coord);
+        self.operator_coord.setup_coord(metadata.coord);
 
         if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<JoinKeyedInnerState<K, V1, V2>>();
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
-            if snapshot_id.is_some() {
+            if let Some(restart_snap) = snapshot_id {
                 // Get and resume the persisted state
-                let opt_state: Option<JoinKeyedInnerState<K, V1, V2>> = p_service.get_state(self.operator_coord, snapshot_id.unwrap());
+                let opt_state: Option<JoinKeyedInnerState<K, V1, V2>> = p_service.get_state(self.operator_coord, restart_snap);
                 if let Some(state) = opt_state {
                     self.left_ended = state.left_ended;
                     self.right_ended = state.right_ended;

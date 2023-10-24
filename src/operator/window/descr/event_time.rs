@@ -120,15 +120,15 @@ where
                 .clone()
                 .iter()
                 .map(|slot| Slot {
-                    start: slot.start.clone(),
-                    end: slot.end.clone(),
+                    start: slot.start,
+                    end: slot.end,
                     acc: slot.acc.get_state(),
                     active: slot.active,
                 })
             );
         EventTimeWindowManagerState {
             ws: win,
-            last_watermark: self.last_watermark.clone(),
+            last_watermark: self.last_watermark,
         }
     }
 
@@ -136,12 +136,11 @@ where
         self.last_watermark = state.last_watermark;
         let win = VecDeque::from_iter(
             state.ws
-                .clone()
                 .iter()
                 .map(|slot| {
                     let mut saved_slot = Slot {
-                        start: slot.start.clone(),
-                        end: slot.end.clone(),
+                        start: slot.start,
+                        end: slot.end,
                         acc: self.init.clone(),
                         active: slot.active,
                     };

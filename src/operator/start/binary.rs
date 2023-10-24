@@ -233,7 +233,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
                     // Set iteration_index if needed
                     snap_id.iteration_index = self.iteration_index;
                     // if needed cache prev msgs
-                    if self.left.cached && to_cache.len() > 0 {
+                    if self.left.cached && !to_cache.is_empty() {
                         let last_msgs = NetworkMessage::new_batch(to_cache.clone(), sender);
                         self.left.cache.push(last_msgs);
                         self.left.cache_pointer = self.left.cache.len();
@@ -260,7 +260,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
         }
         // batch ended, handle 
         // if needed cache prev msgs
-        if self.left.cached && to_cache.len() > 0 {
+        if self.left.cached && !to_cache.is_empty() {
             let last_msgs = NetworkMessage::new_batch(to_cache.clone(), sender);
             self.left.cache.push(last_msgs);
             self.left.cache_pointer = self.left.cache.len();
@@ -339,7 +339,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
                     // Set iteration_index if needed
                     snap_id.iteration_index = self.iteration_index;
                     // if needed cache prev msgs
-                    if self.right.cached && to_cache.len() > 0 {
+                    if self.right.cached && !to_cache.is_empty() {
                         let last_msgs = NetworkMessage::new_batch(to_cache.clone(), sender);
                         self.right.cache.push(last_msgs);
                         self.right.cache_pointer = self.right.cache.len();
@@ -366,7 +366,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
         }
         // batch ended, handle 
         // if needed cache prev msgs
-        if self.right.cached && to_cache.len() > 0 {
+        if self.right.cached && !to_cache.is_empty() {
             let last_msgs = NetworkMessage::new_batch(to_cache.clone(), sender);
             self.right.cache.push(last_msgs);
             self.right.cache_pointer = self.right.cache.len();
@@ -401,15 +401,14 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
             cache_full: self.right.cache_full,
             cache_pointer: self.right.cache_pointer as u64,
         };
-        let state = BinaryReceiverState {
+       BinaryReceiverState {
             left,
             right,
             first_message: self.first_message,
             persisted_message_queue_left: VecDeque::new(),
             persisted_message_queue_right: VecDeque::new(),
             should_flush_cached_side: false,
-        };
-        state
+        }
     }
 
     fn process_snapshot(&mut self, snap_id: SnapshotId, sender: Coord) {
@@ -480,7 +479,8 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
         let mut previous = Vec::new();
         if !(self.left.cached && self.left.cache_full) {
             previous.append(&mut self.left.receiver.prev_replicas());
-        }if !(self.right.cached && self.right.cache_full) {
+        }
+        if !(self.right.cached && self.right.cache_full) {
             previous.append(&mut self.right.receiver.prev_replicas());
         }
         previous
@@ -549,12 +549,10 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
                 } else {
                     Side::Right(self.right.recv(timeout))
                 }
+            } else if let Some(p_data) = self.persisted_message_queue_left.pop_front() {
+                Side::Left(Ok(p_data))
             } else {
-                if let Some(p_data) = self.persisted_message_queue_left.pop_front() {
-                    Side::Left(Ok(p_data))
-                } else {
-                    Side::Left(self.left.recv(timeout))
-                }
+                Side::Left(self.left.recv(timeout))
             }
         } else if self.left.cached && self.left.cache_full && !self.left.cache_finished() {
             // The left side is cached, therefore we can access it immediately
@@ -672,7 +670,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> StartReceiver<BinaryElement<OutL, O
     fn structure(&self) -> BlockStructure {
         let mut operator = OperatorStructure::new::<BinaryElement<OutL, OutR>, _>("Start");
         // op id must be 0
-        operator.subtitle = format!("op id: 0");
+        operator.subtitle = "op id: 0".to_string();
         operator.receivers.push(OperatorReceiver::new::<OutL>(
             self.left.receiver.previous_block_id,
         ));
@@ -688,10 +686,10 @@ impl<OutL: ExchangeData, OutR: ExchangeData> StartReceiver<BinaryElement<OutL, O
     fn get_state(&mut self, snap_id: SnapshotId) -> Option<Self::ReceiverState> {
         let entry = self.on_going_snapshots.get(&snap_id);
         if let Some((_, missing_rep)) = entry {
-            if missing_rep.len() == 0 {
-                return Some(self.on_going_snapshots.remove(&snap_id).unwrap().0)
+            if missing_rep.is_empty() {
+                Some(self.on_going_snapshots.remove(&snap_id).unwrap().0)
             } else {
-                return None
+                None
             }
         } else {
             panic!("Binary receiver cannot provide state for snapshot: {:?}", snap_id);

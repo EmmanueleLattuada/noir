@@ -97,13 +97,13 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Operator<(Out1, Out2)> for Zip<Out1
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
 
-        self.operator_coord.from_coord(metadata.coord);
+        self.operator_coord.setup_coord(metadata.coord);
         if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<ZipState<Out1, Out2>>();
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
-            if snapshot_id.is_some() {
+            if let Some(snap_id) = snapshot_id {
                 // Get and resume the persisted state
-                let opt_state: Option<ZipState<Out1, Out2>> = p_service.get_state(self.operator_coord, snapshot_id.unwrap());
+                let opt_state: Option<ZipState<Out1, Out2>> = p_service.get_state(self.operator_coord, snap_id);
                 if let Some(state) = opt_state {
                     self.stash1 = state.stash1;
                     self.stash2 = state.stash2;

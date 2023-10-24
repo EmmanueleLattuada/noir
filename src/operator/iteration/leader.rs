@@ -252,7 +252,7 @@ where
     LoopCond: Fn(&mut State) -> bool + Send + Clone,
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
-        self.operator_coord.from_coord(metadata.coord);
+        self.operator_coord.setup_coord(metadata.coord);
         self.feedback_senders = metadata
             .network
             .get_senders(metadata.coord)
@@ -273,9 +273,9 @@ where
         if let Some(pb) = metadata.persistency_builder {
             let p_service = pb.generate_persistency_service::<IterationLeaderState<State>>(); 
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
-            if snapshot_id.is_some() {
+            if let Some(restart_snap) = snapshot_id {
                 // Get and resume the persisted state
-                let opt_state: Option<IterationLeaderState<State>> = p_service.get_state(self.operator_coord, snapshot_id.clone().unwrap());
+                let opt_state: Option<IterationLeaderState<State>> = p_service.get_state(self.operator_coord, restart_snap.clone());
                 if let Some(state) = opt_state {
                     self.state = state.state.clone();
                     self.iteration_index = state.iteration_index as usize;
@@ -284,7 +284,7 @@ where
                 } else {
                     panic!("No persisted state founded for op: {0}", self.operator_coord);
                 } 
-                self.snapshot_generator.restart_from(snapshot_id.unwrap());
+                self.snapshot_generator.restart_from(restart_snap);
             }
             // Set snapshot generator, this will be used starting from the secodn iterations
             // Frequency by item will count the iterations
@@ -400,11 +400,8 @@ where
 
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
         // This operator is stateful
-        let mut res = Vec::new();
         // It will have a Start with op_id = 0 
-        res.push(0);
-        res.push(self.operator_coord.operator_id);
-        res
+        vec![0, self.operator_coord.operator_id]
     }
 }
 

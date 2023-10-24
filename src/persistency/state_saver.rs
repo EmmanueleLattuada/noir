@@ -75,7 +75,7 @@ impl StateSaverHandler {
         };
         // generate and deploy the actual saver
         let handle = std::thread::Builder::new()
-            .name(format!("noir-persist"))
+            .name("noir-persist".to_string())
             .spawn(move || saver.run())
             .unwrap();
         Self {
@@ -112,6 +112,12 @@ impl ActualSaver {
         self.last_snapshots.insert(coord, snap_id);
     }
 
+    fn initial_snapshot(&self, op_coord: &OperatorCoord) -> SnapshotId {
+        self.redis
+            .get_last_snapshot(op_coord)
+            .unwrap_or(SnapshotId::new(0))
+    }
+
     // Read from the channel and process messages
     fn run(mut self) {
         while let Ok(msg) = self.rx.recv() {
@@ -119,7 +125,7 @@ impl ActualSaver {
                 let last_snap = self.last_snapshots.get(&op_coord);
                 if !((snap_id.id() == 1 && last_snap.is_none())
                     || last_snap
-                        .unwrap_or(&SnapshotId::new(0))
+                        .unwrap_or(&self.initial_snapshot(&op_coord))
                         .check_next(&snap_id))
                 {
                     panic!("Passed snap_id: {snap_id:?}.\n Last saved snap_id: {last_snap:?}.\n  Op_coord: {op_coord:?}.\n Snapshot id must be a sequence with step 1 starting from 1");
@@ -133,7 +139,7 @@ impl ActualSaver {
                         self.save_state(op_coord, terminal_snap_id, state)
                     }
                     _ => {
-                        let terminal_snap_id = SnapshotId::new_terminate(1);
+                        let terminal_snap_id = SnapshotId::new_terminate(self.initial_snapshot(&op_coord).id() + 1);
                         self.save_state(op_coord, terminal_snap_id, state)
                     }
                 }

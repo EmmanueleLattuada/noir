@@ -160,6 +160,9 @@ harness = false
 [[bench]]
 name = "nexmark_persistency"
 harness = false
+[[bench]]
+name = "iterations_persistency"
+harness = false
 
 [profile.release]
 lto = true

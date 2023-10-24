@@ -89,16 +89,16 @@ where
             .get_sender(ReceiverEndpoint::new(leader, metadata.coord.block_id));
         self.leader_sender = Some(sender);
 
-        self.operator_coord.from_coord(metadata.coord);
+        self.operator_coord.setup_coord(metadata.coord);
         self.prev.setup(metadata);
 
         // Setup persistency
         if let Some(pb) = metadata.persistency_builder {
             let p_service = pb.generate_persistency_service::<bool>(); 
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
-            if snapshot_id.is_some() {
+            if let Some(restart_snap) = snapshot_id {
                 // Get and resume the persisted state
-                let opt_state: Option<bool> = p_service.get_state(self.operator_coord, snapshot_id.unwrap());
+                let opt_state: Option<bool> = p_service.get_state(self.operator_coord, restart_snap);
                 if let Some(state) = opt_state {
                     self.has_received_item = state;
                 } else {

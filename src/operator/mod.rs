@@ -120,7 +120,7 @@ pub type Timestamp = i64;
 pub type Timestamp = ();
 
 /// Identifier of the snapshot
-#[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, Serialize, Deserialize)]
+#[derive(Clone, Debug, Hash, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SnapshotId {
     snapshot_id: u64,
     terminate: bool,
@@ -170,11 +170,7 @@ impl SnapshotId {
                             }
                             i += 1;
                         }
-                        if next.iteration_stack[i] != 1 {
-                            return false;
-                        } else {
-                            return true;
-                        }
+                        return next.iteration_stack[i] == 1
                     }                    
                 }
                 if next.iteration_stack.len() < i + 1{
@@ -187,10 +183,8 @@ impl SnapshotId {
                 }
                 i += 1;
             }
-        } else if self.snapshot_id + 1 == next.snapshot_id {
-            return true;
         } else {
-            return false;
+            self.snapshot_id + 1 == next.snapshot_id
         }
     }
 
@@ -210,24 +204,24 @@ impl SnapshotId {
         if self.iteration_stack.len() >= iteration_stack_level {
             let mut it_stack = self.iteration_stack.clone();
             it_stack[iteration_stack_level - 1] += 1;
-            return Self {
+            Self {
                 snapshot_id: self.snapshot_id,
                 terminate: self.terminate,
                 iteration_stack: it_stack,
                 iteration_index: self.iteration_index,
-            };
+            }
         } else {
             let mut it_stack = self.iteration_stack.clone();
             while it_stack.len() < iteration_stack_level {
                 it_stack.push(0);
             }
             it_stack[iteration_stack_level - 1] = 1;
-            return Self {
+            Self {
                 snapshot_id: self.snapshot_id,
                 terminate: self.terminate,
                 iteration_stack: it_stack,
                 iteration_index: self.iteration_index,
-            };
+            }
         }
     }
 
@@ -262,7 +256,13 @@ impl PartialOrd for SnapshotId {
                 i += 1;
             }
         }
-        return Some(res);
+        Some(res)
+    }
+}
+
+impl Ord for SnapshotId {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.partial_cmp(other).unwrap()
     }
 }
 

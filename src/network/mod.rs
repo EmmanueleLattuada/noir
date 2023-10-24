@@ -174,7 +174,7 @@ impl OperatorCoord {
     }
     /// Set fields: block_id, host_id, replica_id from given Coord. 
     /// N.B.: operator_id remains the same.
-    pub (crate) fn from_coord(&mut self, coord: Coord){         
+    pub (crate) fn setup_coord(&mut self, coord: Coord){         
         self.block_id = coord.block_id; 
         self.host_id = coord.host_id; 
         self.replica_id = coord.replica_id;         

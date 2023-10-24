@@ -27,8 +27,8 @@ impl <State:ExchangeData> Clone for PersistencyService<State> {
             state_saver: self.state_saver.clone(),
             restart_from_id: self.restart_from_id.clone(),
             restart_from_stack: self.restart_from_stack.clone(),
-            snapshot_frequency_by_item: self.snapshot_frequency_by_item.clone(),
-            snapshot_frequency_by_time: self.snapshot_frequency_by_time.clone(),
+            snapshot_frequency_by_item: self.snapshot_frequency_by_item,
+            snapshot_frequency_by_time: self.snapshot_frequency_by_time,
             _state: PhantomData::clone(&self._state),
         }
     }
@@ -44,8 +44,8 @@ impl<State:ExchangeData> PersistencyService<State> {
         snapshot_frequency_by_item: Option<u64>, 
         snapshot_frequency_by_time: Option<Duration>
         ) -> Self{       
-            return Self { 
-                handler: handler.clone(), 
+            Self { 
+                handler, 
                 state_saver,
                 restart_from_id,
                 restart_from_stack,

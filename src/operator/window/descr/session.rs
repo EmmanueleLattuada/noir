@@ -96,13 +96,13 @@ where
     /// calculating the elapsed time to the snapshot and the elapsed time from
     /// the snapshot and now
     fn set_state(&mut self, state: Self::ManagerState) {
-        self.w = match state.w.clone() {
+        self.w = match state.w {
             Some(slot) => {
                 // Unwrap should always succeed, maybe remove default and panic
                 let elapsed_abs_time = slot.abs_time.elapsed().unwrap_or(Duration::new(0, 0));
                 let mut saved_slot = Slot {
                     acc: self.init.clone(),
-                    last: Instant::now() - slot.last - elapsed_abs_time,
+                    last: Instant::now().checked_sub(slot.last + elapsed_abs_time).unwrap(),
                 };
                 saved_slot.acc.set_state(slot.acc);
                 Some(saved_slot)

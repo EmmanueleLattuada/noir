@@ -291,7 +291,7 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
         let global_id = metadata.global_id;
         let instances = metadata.replicas.len();
 
-        self.operator_coord.from_coord(metadata.coord);
+        self.operator_coord.setup_coord(metadata.coord);
         let mut last_position = None;
         if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<CsvSourceState>();
@@ -310,7 +310,7 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
                 // Get the persisted state
                 let opt_state: Option<CsvSourceState> = p_service.get_state(self.operator_coord, snap_id.clone());
                 if let Some(state) = opt_state {
-                    self.terminated = snap_id.clone().terminate();
+                    self.terminated = snap_id.terminate();
                     last_position = Some(state.current);
                 } else {
                     panic!("No persisted state founded for op: {0}", self.operator_coord);
@@ -366,8 +366,8 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
         };
 
         // Set start to last position (from persisted state), if any
-        if last_position.is_some() {
-            start = last_position.unwrap();
+        if let Some(last_p) = last_position {
+            start = last_p;
         }
 
         // Align start byte
@@ -451,8 +451,7 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
         if self.persistency_service.is_some(){
             // Check snapshot generator
             let snapshot = self.snapshot_generator.get_snapshot_marker();
-            if snapshot.is_some() {
-                let snapshot_id = snapshot.unwrap();
+            if let Some(snapshot_id) = snapshot {
                 // Save state and forward snapshot marker
                 let state = CsvSourceState {
                     current: csv_reader.position().byte(),
@@ -495,10 +494,8 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
     }
 
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
-        let mut res = Vec::new();
         // This operator is stateful
-        res.push(self.operator_coord.operator_id);
-        res
+        vec![self.operator_coord.operator_id]
     }
 }
 

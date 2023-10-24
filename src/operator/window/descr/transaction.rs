@@ -106,7 +106,7 @@ where
             Some(slot) => {
                 Some(Slot {
                     acc: slot.acc.get_state(),
-                    close: slot.close.clone(),
+                    close: slot.close,
                 })
             }
             None => None
@@ -117,11 +117,11 @@ where
     }
 
     fn set_state(&mut self, state: Self::ManagerState) {
-        self.w = match state.w.clone() {
+        self.w = match state.w {
             Some(slot) => {
                 let mut saved_slot = Slot {
                     acc: self.init.clone(),
-                    close: slot.close.clone(),
+                    close: slot.close,
                 };
                 saved_slot.acc.set_state(slot.acc);
                 Some(saved_slot)

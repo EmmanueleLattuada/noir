@@ -126,7 +126,6 @@ where
     fn set_state(&mut self, state: Self::ManagerState) {
         let win = VecDeque::from_iter(
             state.ws
-                .clone()
                 .iter()
                 .map(|slot| {
                     // Unwrap should always succeed, maybe remove default and panic

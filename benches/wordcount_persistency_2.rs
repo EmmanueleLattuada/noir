@@ -187,7 +187,7 @@ fn bench_wc(
         let p = persistency_conf.clone();
         let mut harness = PersistentBenchBuilder::new(
             move || {
-                let mut config = EnvironmentConfig::default();
+                let mut config = EnvironmentConfig::local(10);
                 config.add_persistency(p.clone());
                 StreamEnvironment::new(config)
             },
@@ -239,17 +239,39 @@ fn run_wc(env: &mut StreamEnvironment, q: &str, path: &Path) {
 }
 
 fn wordcount_persistency_bench(c: &mut Criterion) {
-    use tracing_subscriber::layer::SubscriberExt;
+    /*use tracing_subscriber::layer::SubscriberExt;
 
     tracing::subscriber::set_global_default(
         tracing_subscriber::registry()
             .with(tracing_tracy::TracyLayer::new()),
-    ).expect("set up the subscriber");
+    ).expect("set up the subscriber");*/
 
 
     let mut g = c.benchmark_group("wordcount_persistency");
     g.sample_size(SAMPLES);
 
+    let lines = 1_000_000;
+    let file = make_file(lines as usize);
+    let file_size = file.as_file().metadata().unwrap().len();
+    let file_path = file.path();
+    g.throughput(Throughput::Bytes(file_size));
+    for interval in [2, 3, 4, 5, 6].map(Duration::from_millis) {
+        let test = format!("{interval:?}");
+        let conf = persist_interval(interval);
+        bench_wc(&mut g, "wc-fast", &test, lines, file_path, &conf);
+    }
+    for interval in [6, 7, 8, 9, 10].map(Duration::from_millis) {
+        let test = format!("{interval:?}");
+        let conf = persist_interval(interval);
+        bench_wc(&mut g, "wc-fold-assoc", &test, lines, file_path, &conf);
+    }
+    for interval in [10, 11, 12, 13, 14].map(Duration::from_millis) {
+        let test = format!("{interval:?}");
+        let conf = persist_interval(interval);
+        bench_wc(&mut g, "wc-fold-assoc", &test, lines, file_path, &conf);
+    }
+
+    /*
     for lines in [100_000, 1_000_000] {
         let file = make_file(lines as usize);
         let file_size = file.as_file().metadata().unwrap().len();
@@ -266,7 +288,7 @@ fn wordcount_persistency_bench(c: &mut Criterion) {
         // bench_wc_remote(&mut g, "wc-fold-assoc", "10ms-remote", lines, file_path, persist_interval(Duration::from_millis(10)));
         // bench_wc_remote(&mut g, "wc-reduce", "10ms-remote", lines, file_path, persist_interval(Duration::from_millis(10)));
         // bench_wc_remote(&mut g, "wc-fast", "10ms-remote", lines, file_path, persist_interval(Duration::from_millis(10)));
-    }
+    }*/
 }
 
 criterion_group!(benches, wordcount_persistency_bench);

@@ -87,7 +87,7 @@ impl<Key: ExchangeData, I: ExchangeData, U: ExchangeData, D: ExchangeData, O: Ex
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
-        self.operator_coord.from_coord(metadata.coord);
+        self.operator_coord.setup_coord(metadata.coord);
     }
 
     fn next(&mut self) -> StreamElement<(Key, U)> {
