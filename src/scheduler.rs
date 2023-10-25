@@ -45,6 +45,7 @@ pub struct ExecutionMetadata<'a> {
     /// Persistency for saving the state
     pub(crate) persistency_builder: Option<&'a PersistencyBuilder>,
     pub(crate) iterations_snapshot_alignment: bool,
+    pub(crate) contains_iterative_oper: bool,
 }
 
 /// Information about a block in the job graph.
@@ -234,6 +235,7 @@ impl Scheduler {
                 batch_mode: block_info.batch_mode,
                 persistency_builder: self.persistency_builder.as_ref(),
                 iterations_snapshot_alignment: self.iterations_snapshot_alignment,
+                contains_iterative_oper: self.iterative_operators_counter > 0,
             };
             let (handle, structure) = init_fn(&mut metadata);
             join.push(handle);

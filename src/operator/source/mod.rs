@@ -76,8 +76,21 @@ impl SnapshotGenerator {
         None
     }
 
+    pub (crate) fn get_flush_snapshot_marker(&mut self) -> SnapshotId {
+        let tmp = self.snapshot_id.clone();
+        self.item_counter = 0;
+        self.timer = SystemTime::now();
+        if self.iter_stack == 0 {
+            self.snapshot_id = self.snapshot_id.next();
+        } else {
+            self.snapshot_id = self.snapshot_id.next_iter(self.iter_stack);
+        }
+        tmp
+    }
+
     pub (crate) fn set_iter_stack(&mut self, iter_stack: usize) {
         self.iter_stack = iter_stack;
+        self.snapshot_id.iteration_stack = vec![0; self.iter_stack];
     }
 
     pub (crate) fn set_time_interval(&mut self, time_interval: Duration) {

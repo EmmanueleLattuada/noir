@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::block::{BlockStructure, OperatorKind, OperatorStructure, Replication};
 use crate::network::OperatorCoord;
 use crate::operator::source::Source;
-use crate::operator::{Data, Operator, StreamElement, SnapshotId};
+use crate::operator::{Data, Operator, StreamElement};
 use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::Stream;
@@ -284,6 +284,7 @@ impl<Out: Data + for<'a> Deserialize<'a>> Source<Out> for CsvSource<Out> {
 #[derive(Clone, Serialize, Deserialize)]
 struct CsvSourceState{
     current: u64,
+    snapshot_before_flush: bool,
 }
 
 impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
@@ -295,15 +296,17 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
         let mut last_position = None;
         if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<CsvSourceState>();
-            if !metadata.iterations_snapshot_alignment {
-                if let Some(snap_freq) = p_service.snapshot_frequency_by_item {
-                    self.snapshot_generator.set_item_interval(snap_freq);
+            if metadata.contains_iterative_oper {
+                if !metadata.iterations_snapshot_alignment {
+                    if let Some(snap_freq) = p_service.snapshot_frequency_by_item {
+                        self.snapshot_generator.set_item_interval(snap_freq);
+                    }
+                    if let Some(snap_freq) = p_service.snapshot_frequency_by_time {
+                        self.snapshot_generator.set_time_interval(snap_freq);
+                    }
                 }
-                if let Some(snap_freq) = p_service.snapshot_frequency_by_time {
-                    self.snapshot_generator.set_time_interval(snap_freq);
-                }
-            } else {
                 self.snapshot_before_flush = true;
+
             }
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
             if let Some(snap_id) = snapshot_id {
@@ -312,13 +315,11 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
                 if let Some(state) = opt_state {
                     self.terminated = snap_id.terminate();
                     last_position = Some(state.current);
+                    // Don't send twice the "snapshot before flush"
+                    self.snapshot_before_flush = state.snapshot_before_flush;
                 } else {
                     panic!("No persisted state founded for op: {0}", self.operator_coord);
                 } 
-                if self.snapshot_before_flush && snap_id.id() == 1{
-                    // Don't send twice the "snapshot before flush"
-                    self.snapshot_before_flush = false;
-                }
                 self.snapshot_generator.restart_from(snap_id);
             }
             self.persistency_service = Some(p_service);
@@ -443,6 +444,7 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
                  // Save terminated state
                  let state = CsvSourceState {
                     current: csv_reader.position().byte(),
+                    snapshot_before_flush: false,
                 };         
                 self.persistency_service.as_mut().unwrap().save_terminated_state(self.operator_coord, state);
             }
@@ -455,6 +457,7 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
                 // Save state and forward snapshot marker
                 let state = CsvSourceState {
                     current: csv_reader.position().byte(),
+                    snapshot_before_flush: self.snapshot_before_flush,
                 };         
                 self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id.clone(), state);
                 return StreamElement::Snapshot(snapshot_id);
@@ -466,13 +469,13 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
             None => {
                 if self.snapshot_before_flush {
                     self.snapshot_before_flush = false;
-                    // Save state and forward snapshot with id 1, this is used 
-                    // to sync iteration snapshot in presence of cached streams
+                    let snap_id = self.snapshot_generator.get_flush_snapshot_marker();
                     let state = CsvSourceState {
                         current: csv_reader.position().byte(),
+                        snapshot_before_flush: false,
                     };
-                    self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, SnapshotId::new(1), state);
-                    StreamElement::Snapshot(SnapshotId::new(1))
+                    self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snap_id.clone(), state);
+                    StreamElement::Snapshot(snap_id)
                 } else {
                     self.terminated = true;
                     StreamElement::FlushAndRestart

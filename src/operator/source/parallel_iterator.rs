@@ -6,7 +6,7 @@ use serde::{Serialize, Deserialize};
 use crate::block::{BlockStructure, OperatorKind, OperatorStructure, Replication};
 use crate::network::OperatorCoord;
 use crate::operator::source::Source;
-use crate::operator::{Data, Operator, StreamElement, SnapshotId};
+use crate::operator::{Data, Operator, StreamElement};
 use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::{CoordUInt, Stream};
@@ -236,6 +236,7 @@ where
 #[derive(Clone, Serialize, Deserialize, Debug)]
 struct ParallelIteratorSourceState {
     last_index: Option<u64>,
+    snapshot_before_flush: bool,
 }
 
 impl<Source> Operator<Source::Item> for ParallelIteratorSource<Source>
@@ -257,14 +258,15 @@ where
         self.operator_coord.setup_coord(metadata.coord);
         if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<ParallelIteratorSourceState>();
-            if !metadata.iterations_snapshot_alignment {
-                if let Some(snap_freq) = p_service.snapshot_frequency_by_item {
-                    self.snapshot_generator.set_item_interval(snap_freq);
+            if metadata.contains_iterative_oper {
+                if !metadata.iterations_snapshot_alignment {
+                    if let Some(snap_freq) = p_service.snapshot_frequency_by_item {
+                        self.snapshot_generator.set_item_interval(snap_freq);
+                    }
+                    if let Some(snap_freq) = p_service.snapshot_frequency_by_time {
+                        self.snapshot_generator.set_time_interval(snap_freq);
+                    }
                 }
-                if let Some(snap_freq) = p_service.snapshot_frequency_by_time {
-                    self.snapshot_generator.set_time_interval(snap_freq);
-                }
-            } else {
                 self.snapshot_before_flush = true;
             }
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
@@ -277,12 +279,10 @@ where
                         self.inner.nth(idx as usize);
                         self.last_index = Some(idx);
                     }
+                    // Don't send twice the "snapshot before flush"
+                    self.snapshot_before_flush = state.snapshot_before_flush;
                 } else {
                     panic!("No persisted state founded for op: {0}", self.operator_coord);
-                }
-                if self.snapshot_before_flush && snap_id.id() == 1{
-                    // Don't send twice the "snapshot before flush"
-                    self.snapshot_before_flush = false;
                 }
                 self.snapshot_generator.restart_from(snap_id);
             }
@@ -296,6 +296,7 @@ where
                 // Save terminated state
                 let state = ParallelIteratorSourceState{
                     last_index: self.last_index,
+                    snapshot_before_flush: false,
                 };
                 self.persistency_service.as_mut().unwrap().save_terminated_state(self.operator_coord, state);
             } 
@@ -308,6 +309,7 @@ where
                 // Save state and forward snapshot marker
                 let state = ParallelIteratorSourceState{
                     last_index: self.last_index,
+                    snapshot_before_flush: self.snapshot_before_flush,
                 };
                 self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id.clone(), state);
                 return StreamElement::Snapshot(snapshot_id);
@@ -326,13 +328,14 @@ where
             None => {
                 if self.snapshot_before_flush {
                     self.snapshot_before_flush = false;
-                    // Save state and forward snapshot with id 1, this is used 
-                    // to sync iteration snapshot in presence of cached streams
+                    // Save state and forward snapshot this is used for iterations
+                    let snap_id = self.snapshot_generator.get_flush_snapshot_marker();
                     let state = ParallelIteratorSourceState {
                         last_index: self.last_index,
+                        snapshot_before_flush: self.snapshot_before_flush,
                     };
-                    self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, SnapshotId::new(1), state);
-                    StreamElement::Snapshot(SnapshotId::new(1))
+                    self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snap_id.clone(), state);
+                    StreamElement::Snapshot(snap_id)
                 } else {
                     self.terminated = true;
                     StreamElement::FlushAndRestart

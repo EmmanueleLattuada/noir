@@ -11,7 +11,6 @@ use serde::Serialize;
 use crate::block::Replication;
 use crate::block::{BlockStructure, OperatorKind, OperatorStructure};
 use crate::network::OperatorCoord;
-use crate::operator::SnapshotId;
 use crate::operator::source::Source;
 use crate::operator::{Operator, StreamElement};
 use crate::persistency::persistency_service::PersistencyService;
@@ -92,6 +91,7 @@ impl Source<String> for FileSource {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 struct FileSourceState {
     current: u64,
+    snapshot_before_flush: bool,
 }
 
 impl Operator<String> for FileSource {
@@ -103,14 +103,15 @@ impl Operator<String> for FileSource {
         let mut last_position = None;
         if let Some(pb) = metadata.persistency_builder {
             let p_service =pb.generate_persistency_service::<FileSourceState>();
-            if !metadata.iterations_snapshot_alignment {
-                if let Some(snap_freq) = p_service.snapshot_frequency_by_item {
-                    self.snapshot_generator.set_item_interval(snap_freq);
-                }
-                if let Some(snap_freq) = p_service.snapshot_frequency_by_time {
-                    self.snapshot_generator.set_time_interval(snap_freq);
-                }
-            } else {
+            if metadata.contains_iterative_oper {
+                if !metadata.iterations_snapshot_alignment {
+                    if let Some(snap_freq) = p_service.snapshot_frequency_by_item {
+                        self.snapshot_generator.set_item_interval(snap_freq);
+                    }
+                    if let Some(snap_freq) = p_service.snapshot_frequency_by_time {
+                        self.snapshot_generator.set_time_interval(snap_freq);
+                    }
+                } 
                 self.snapshot_before_flush = true;
             }
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
@@ -120,13 +121,11 @@ impl Operator<String> for FileSource {
                 if let Some(state) = opt_state {
                     self.terminated = snap_id.terminate();
                     last_position = Some(state.current);
+                    // Don't send twice the "snapshot before flush"
+                    self.snapshot_before_flush = state.snapshot_before_flush;
                 } else {
                     panic!("No persisted state founded for op: {0}", self.operator_coord);
                 } 
-                if self.snapshot_before_flush && snap_id.id() == 1{
-                    // Don't send twice the "snapshot before flush"
-                    self.snapshot_before_flush = false;
-                }
                 self.snapshot_generator.restart_from(snap_id);
             }
             self.persistency_service = Some(p_service);
@@ -178,6 +177,7 @@ impl Operator<String> for FileSource {
                 // Save terminated state
                 let state = FileSourceState{
                     current: self.current as u64,
+                    snapshot_before_flush: false,
                 }; 
                 self.persistency_service.as_mut().unwrap().save_terminated_state(self.operator_coord, state);            
             }
@@ -191,6 +191,7 @@ impl Operator<String> for FileSource {
                 // Save state and forward snapshot marker
                 let state = FileSourceState{
                     current: self.current as u64,
+                    snapshot_before_flush: self.snapshot_before_flush,
                 }; 
                 self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id.clone(), state);
                 return StreamElement::Snapshot(snapshot_id);
@@ -216,13 +217,13 @@ impl Operator<String> for FileSource {
             }
         } else if self.snapshot_before_flush {
             self.snapshot_before_flush = false;
-            // Save state and forward snapshot with id 1, this is used 
-            // to sync iteration snapshot in presence of cached streams
+            let snap_id = self.snapshot_generator.get_flush_snapshot_marker();            
             let state = FileSourceState{
                 current: self.current as u64,
+                snapshot_before_flush: false,
             };
-            self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, SnapshotId::new(1), state);
-            StreamElement::Snapshot(SnapshotId::new(1))
+            self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snap_id.clone(), state);
+            StreamElement::Snapshot(snap_id)
         } else {
             self.terminated = true;
             StreamElement::FlushAndRestart            

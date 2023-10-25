@@ -138,6 +138,7 @@ impl<T: ExchangeData> FakeNetworkTopology<T> {
             batch_mode: BatchMode::adaptive(100, Duration::from_millis(100)),
             persistency_builder: Default::default(),
             iterations_snapshot_alignment: false,
+            contains_iterative_oper: false,
         }
     }
 
