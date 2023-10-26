@@ -187,7 +187,8 @@ fn bench_wc(
         let p = persistency_conf.clone();
         let mut harness = PersistentBenchBuilder::new(
             move || {
-                let mut config = EnvironmentConfig::local(10);
+                //let mut config = EnvironmentConfig::local(10);
+                let mut config = EnvironmentConfig::default();
                 config.add_persistency(p.clone());
                 StreamEnvironment::new(config)
             },
@@ -250,25 +251,38 @@ fn wordcount_persistency_bench(c: &mut Criterion) {
     let mut g = c.benchmark_group("wordcount_persistency");
     g.sample_size(SAMPLES);
 
+    for lines in [100_000, 1_000_000] {
+        let file = make_file(lines as usize);
+        let file_size = file.as_file().metadata().unwrap().len();
+        let file_path = file.path();
+        g.throughput(Throughput::Bytes(file_size));
+        bench_wc(&mut g, "wc-fast", "T", lines, file_path, &persist_none());
+        bench_wc(&mut g, "wc-fold-assoc", "T", lines, file_path, &persist_none());
+        bench_wc(&mut g, "wc-fold", "T", lines, file_path, &persist_none());
+    }
+    
     let lines = 1_000_000;
     let file = make_file(lines as usize);
     let file_size = file.as_file().metadata().unwrap().len();
     let file_path = file.path();
     g.throughput(Throughput::Bytes(file_size));
-    for interval in [2, 3, 4, 5, 6].map(Duration::from_millis) {
+
+    for interval in [1, 2, 4, 10, 100, 1000].map(Duration::from_millis) {
         let test = format!("{interval:?}");
         let conf = persist_interval(interval);
         bench_wc(&mut g, "wc-fast", &test, lines, file_path, &conf);
     }
-    for interval in [6, 7, 8, 9, 10].map(Duration::from_millis) {
+
+    for interval in [1, 2, 4, 8, 16, 3000].map(Duration::from_millis) {
         let test = format!("{interval:?}");
         let conf = persist_interval(interval);
         bench_wc(&mut g, "wc-fold-assoc", &test, lines, file_path, &conf);
     }
-    for interval in [10, 11, 12, 13, 14].map(Duration::from_millis) {
+
+    for interval in [2, 4, 5, 10, 30, 3000].map(Duration::from_millis) {
         let test = format!("{interval:?}");
         let conf = persist_interval(interval);
-        bench_wc(&mut g, "wc-fold-assoc", &test, lines, file_path, &conf);
+        bench_wc(&mut g, "wc-fold", &test, lines, file_path, &conf);
     }
 
     /*

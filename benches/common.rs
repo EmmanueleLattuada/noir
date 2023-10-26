@@ -148,9 +148,7 @@ pub fn persist_count(
     }
 }
 
-pub fn persist_none(
-    count: u64,
-) -> PersistencyConfig {
+pub fn persist_none() -> PersistencyConfig {
     PersistencyConfig {
         server_addr: String::from(REDIS_BENCH_CONFIGURATION),
         try_restart: false,

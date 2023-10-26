@@ -296,17 +296,18 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
         let mut last_position = None;
         if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<CsvSourceState>();
+            let mut set_snap_gen =  true;
             if metadata.contains_iterative_oper {
-                if !metadata.iterations_snapshot_alignment {
-                    if let Some(snap_freq) = p_service.snapshot_frequency_by_item {
-                        self.snapshot_generator.set_item_interval(snap_freq);
-                    }
-                    if let Some(snap_freq) = p_service.snapshot_frequency_by_time {
-                        self.snapshot_generator.set_time_interval(snap_freq);
-                    }
-                }
+                set_snap_gen = !metadata.iterations_snapshot_alignment;
                 self.snapshot_before_flush = true;
-
+            }
+            if set_snap_gen {
+                if let Some(snap_freq) = p_service.snapshot_frequency_by_item {
+                    self.snapshot_generator.set_item_interval(snap_freq);
+                }
+                if let Some(snap_freq) = p_service.snapshot_frequency_by_time {
+                    self.snapshot_generator.set_time_interval(snap_freq);
+                }
             }
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
             if let Some(snap_id) = snapshot_id {

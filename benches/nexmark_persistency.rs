@@ -1,6 +1,7 @@
 use std::time::Duration;
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::measurement::WallTime;
+use criterion::{criterion_group, criterion_main, Criterion, BenchmarkGroup};
 use criterion::{BenchmarkId, Throughput};
 use nexmark::config::NexmarkConfig;
 use noir::config::PersistencyConfig;
@@ -360,72 +361,84 @@ fn run_query(env: &mut StreamEnvironment, q: &str, n: usize) {
     }
 }
 
-fn persistency_config_bench(snapshot_frequency_by_item: Option<u64>, snapshot_frequency_by_time: Option<Duration>) -> PersistencyConfig {
-    PersistencyConfig { 
-        server_addr: String::from(REDIS_BENCH_CONFIGURATION), 
-        try_restart: false, 
-        clean_on_exit: false, 
-        restart_from: None,
-        snapshot_frequency_by_item,
-        snapshot_frequency_by_time,
-        iterations_snapshot_alignment: false,
-    }
+fn bench_nx(
+    g: &mut BenchmarkGroup<WallTime>,
+    bench: &str,
+    test: &str,
+    size: usize,
+    persistency_conf: &PersistencyConfig,
+) {
+    let id = BenchmarkId::new(format!("{}-snap-{}", bench, test), size);
+    g.bench_with_input(id, &size, move |b, _| {
+        let p = persistency_conf.clone();
+        let mut harness = PersistentBenchBuilder::new(
+            move || {
+                //let mut config = EnvironmentConfig::local(10);
+                let mut config = EnvironmentConfig::default();
+                config.add_persistency(p.clone());
+                StreamEnvironment::new(config)
+            },
+            |env| {
+                run_query(env, bench, size);
+            },
+        );
+
+        b.iter_custom(|n| harness.bench(n));
+        println!("mean snaps: {:?}", harness.mean_snap_per_run());
+    });
 }
 
+// fn bench_nx_remote(g: &mut BenchmarkGroup<WallTime>, bench: &str, test: &str, size: usize, persistency_conf: &PersistencyConfig) {
+//     let id = BenchmarkId::new(format!("{}-snap-{}", bench, test), size);
+//     g.bench_with_input(id, &size, move |b, _| {
+//         let p = persistency_conf.clone();
+//         let mut harness = PersistentBenchBuilder::new(
+//             move || {
+//                 let mut config = EnvironmentConfig::default();
+//                 config.add_persistency(p.clone());
+//                 StreamEnvironment::new(config)
+//             },
+//             |env| {
+//                run_query(env, bench, size);
+//             },
+//         );
+
+//         b.iter_custom(|n| harness.bench(n));
+//         println!(
+//             "Average number of taken snapshots: {:?}",
+//             harness.mean_snap_per_run()
+//         );
+//     });
+// }
+
+
 fn nexmark_persistency_bench(c: &mut Criterion) {
+    /*use tracing_subscriber::layer::SubscriberExt;
+
+    tracing::subscriber::set_global_default(
+        tracing_subscriber::registry()
+            .with(tracing_tracy::TracyLayer::new()),
+    ).expect("set up the subscriber");*/
+
+
     let mut g = c.benchmark_group("nexmark_persistency");
     g.sample_size(SAMPLES);
-    g.warm_up_time(WARM_UP);
-    g.measurement_time(DURATION);
 
-
-    macro_rules! bench_query {
-        ($q:expr, $n:expr, $name:expr, $p_conf:expr) => {{
-            g.bench_with_input(BenchmarkId::new(format!("{}-snap-{}", $q, $name), $n), &$n, |b, _| {
-                let mut num_of_snap_avg = 0;
-                let mut iter = 0;
-                b.iter(|| {
-                    let mut config = EnvironmentConfig::local(4);
-                    config.add_persistency($p_conf);
-                    let mut env = StreamEnvironment::new(config);
-                    run_query(&mut env, $q, $n);
-                    env.execute_blocking();
-                    let max_snap = noir::persistency::redis_handler::get_max_snapshot_id_and_flushall( String::from(REDIS_BENCH_CONFIGURATION));
-                    num_of_snap_avg = ((num_of_snap_avg * iter) + max_snap) / (iter + 1);
-                    iter += 1;
-                });
-                println!("Average number of taken snapshots: {:?}", num_of_snap_avg);
-            });
-            /*
-            g.bench_with_input(BenchmarkId::new(format!("{}-remote-snap-{}", $q, $name), $n), &$n, |b, _| {
-                let mut num_of_snap_avg = 0;
-                let mut iter = 0;
-                b.iter(|| {
-                    remote_loopback_deploy(5, 4, Some($p_conf), move |mut env| {
-                        run_query(&mut env, $q, $n);
-                    });
-                    let max_snap = noir::persistency::redis_handler::get_max_snapshot_id_and_flushall( String::from(REDIS_BENCH_CONFIGURATION));
-                    num_of_snap_avg = ((num_of_snap_avg * iter) + max_snap) / (iter + 1);
-                    iter += 1;
-                });
-                println!("Average number of taken snapshots: {:?}", num_of_snap_avg);
-            });
-            */
-        }};
-    }
-
-    for size in [10_000, 100_000, 1_000_000] {
+    for size in [1_000_000] {
         g.throughput(Throughput::Elements(size as u64));
 
         for q in ["0", "1", "2", "3", "4", "5", "6", "7", "8"] {
-            bench_query!(q, size, "only-TSnap", persistency_config_bench(None, None));
-            bench_query!(q, size, "100Snap-by-item", persistency_config_bench(Some((size/(4*100)) as u64), None));
+            bench_nx(&mut g, q, "T", size, &persist_none());
+            if size == 1_000_000 {
+                for interval in [1, 10, 100, 1000].map(Duration::from_millis) {
+                    let test = format!("{interval:?}");
+                    let conf = persist_interval(interval);
+                    bench_nx(&mut g, q, &test, size, &conf);
+                }
+            }
         }
         
     }
-    g.finish();
-
-    
 }
 
 criterion_group!(benches, nexmark_persistency_bench);
