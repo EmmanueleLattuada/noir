@@ -198,7 +198,7 @@ fn bench_wc(
         );
 
         b.iter_custom(|n| harness.bench(n));
-        println!("mean snaps: {:?}", harness.mean_snap_per_run());
+        println!("mean snaps: {:?}; mean redis used memory: {:?}", harness.mean_snap_per_run(), harness.mean_stored_mem_per_run());
     });
 }
 
@@ -267,13 +267,15 @@ fn wordcount_persistency_bench(c: &mut Criterion) {
     let file_path = file.path();
     g.throughput(Throughput::Bytes(file_size));
 
-    for interval in [1, 2, 4, 10, 100, 1000].map(Duration::from_millis) {
+    for interval in [10, 100, 1000].map(Duration::from_millis) {
         let test = format!("{interval:?}");
         let conf = persist_interval(interval);
         bench_wc(&mut g, "wc-fast", &test, lines, file_path, &conf);
+        bench_wc(&mut g, "wc-fold-assoc", &test, lines, file_path, &conf);
+        bench_wc(&mut g, "wc-fold", &test, lines, file_path, &conf);
     }
-
-    for interval in [1, 2, 4, 8, 16, 3000].map(Duration::from_millis) {
+    /*
+    for interval in [10, 100, 1000].map(Duration::from_millis) {
         let test = format!("{interval:?}");
         let conf = persist_interval(interval);
         bench_wc(&mut g, "wc-fold-assoc", &test, lines, file_path, &conf);
@@ -283,7 +285,7 @@ fn wordcount_persistency_bench(c: &mut Criterion) {
         let test = format!("{interval:?}");
         let conf = persist_interval(interval);
         bench_wc(&mut g, "wc-fold", &test, lines, file_path, &conf);
-    }
+    }*/
 
     /*
     for lines in [100_000, 1_000_000] {

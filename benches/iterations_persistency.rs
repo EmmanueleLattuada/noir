@@ -67,7 +67,7 @@ fn bench_it(
         );
 
         b.iter_custom(|n| harness.bench(n));
-        //println!("mean snaps: {:?}", harness.mean_snap_per_run());
+        println!("mean snaps: {:?}; mean redis used memory: {:?}", harness.mean_snap_per_run(), harness.mean_stored_mem_per_run());
     });
 }
 

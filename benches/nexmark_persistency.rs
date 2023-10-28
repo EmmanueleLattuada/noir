@@ -384,7 +384,7 @@ fn bench_nx(
         );
 
         b.iter_custom(|n| harness.bench(n));
-        println!("mean snaps: {:?}", harness.mean_snap_per_run());
+        println!("mean snaps: {:?}; mean redis used memory: {:?}", harness.mean_snap_per_run(), harness.mean_stored_mem_per_run());
     });
 }
 
@@ -430,7 +430,7 @@ fn nexmark_persistency_bench(c: &mut Criterion) {
         for q in ["0", "1", "2", "3", "4", "5", "6", "7", "8"] {
             bench_nx(&mut g, q, "T", size, &persist_none());
             if size == 1_000_000 {
-                for interval in [1, 10, 100, 1000].map(Duration::from_millis) {
+                for interval in [5, 10, 100, 1000].map(Duration::from_millis) {
                     let test = format!("{interval:?}");
                     let conf = persist_interval(interval);
                     bench_nx(&mut g, q, &test, size, &conf);

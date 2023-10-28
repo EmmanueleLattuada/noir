@@ -25,6 +25,32 @@ impl RedisHandler {
         let conn_pool: Pool<Client> = Pool::builder().build(client).unwrap();
         Self { pool: conn_pool }
     }
+
+    /// Get number of taken snpashot for this operator
+    fn get_snap_num(&self, op_coord: &OperatorCoord) -> u64 {
+        let mut conn = self.pool.get().expect("Fail to connect to Redis");
+        let op_coord_key_buf = serialize_op_coord(op_coord);
+
+        let snap_num: Option<u64> =
+            conn.llen(op_coord_key_buf)
+                .unwrap_or_else(|e| {
+                    panic!("Failed to get the number of taken snapshot for operator: {op_coord}. Error {e:?}")
+                });
+        snap_num.unwrap_or(0)
+    }
+
+    /// Get size of data stored in redis
+    fn get_stored_memory(&self) -> u64 {
+        let mut conn = self.pool.get().expect("Fail to connect to Redis");
+
+        let info : redis::InfoDict = redis::cmd("INFO").query(&mut conn).unwrap();
+        let mem : Option<String> = info.get("used_memory");
+        if let Some(mem_s) = mem {
+            mem_s.parse::<u64>().unwrap()
+        } else {
+            0
+        }
+    }
 }
 
 impl PersistencyServices for RedisHandler {
@@ -213,6 +239,7 @@ impl PersistencyServices for RedisHandler {
     }
 }
 
+/*
 /// Function for tests and benchmarks
 /// Try to get the number of persisted snapshots then flush all redis db
 /// it does NOT work with iterative computations
@@ -242,4 +269,35 @@ pub fn get_max_snapshot_id_and_flushall(server_addr: String) -> u64 {
     let mut conn = handler.pool.get().expect("Redis connection error");
     redis::cmd("FLUSHALL").query::<String>(&mut *conn).unwrap();
     result
+}*/
+
+/// Function for tests and benchmarks
+/// Try to get the number of persisted snapshots and the memory used by redis then flush all redis db
+pub fn get_statistics_and_flushall(server_addr: String) -> (u64, u64) {
+    let handler = RedisHandler::new(server_addr);
+    let mut num_snap = 0;
+    let mut op_coord = OperatorCoord {
+        block_id: 0,
+        host_id: 0,
+        replica_id: 0,
+        operator_id: 0,
+    };
+    // Find num of taken snapshot for each block Start operator, and take the max
+    loop {
+        let op_snaps = handler.get_snap_num(&op_coord);
+        if op_snaps > 0 {
+            if op_snaps > num_snap {
+                num_snap = op_snaps;
+            }
+            op_coord.block_id += 1;
+        } else {
+            break;
+        }
+    }
+    let used_mem = handler.get_stored_memory();
+    // Clear all db
+    // Prepare connection
+    let mut conn = handler.pool.get().expect("Redis connection error");
+    redis::cmd("FLUSHALL").query::<String>(&mut *conn).unwrap();
+    (num_snap, used_mem)
 }

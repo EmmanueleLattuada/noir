@@ -81,6 +81,7 @@ where
     make_network: G,
     _result: PhantomData<R>,
     snap_count: u64,
+    stored_mem:  u64,
     run_count: u64,
 }
 
@@ -95,6 +96,7 @@ where
             make_network,
             _result: Default::default(),
             snap_count: 0,
+            stored_mem: 0,
             run_count: 0,
         }
     }
@@ -108,8 +110,9 @@ where
             env.execute_blocking();
             time += start.elapsed();
             black_box(_result);
-            let max_snap = noir::persistency::redis_handler::get_max_snapshot_id_and_flushall( String::from(REDIS_BENCH_CONFIGURATION));
-            self.snap_count += max_snap;
+            let (snap, mem) = noir::persistency::redis_handler::get_statistics_and_flushall(String::from(REDIS_BENCH_CONFIGURATION));
+            self.snap_count += snap;
+            self.stored_mem += mem;
             self.run_count += 1;
         }
         time
@@ -117,6 +120,10 @@ where
 
     pub fn mean_snap_per_run(&self) -> f32 {
         self.snap_count as f32 / self.run_count as f32
+    }
+
+    pub fn mean_stored_mem_per_run(&self) -> f32 {
+        self.stored_mem as f32 / self.run_count as f32
     }
 }
 

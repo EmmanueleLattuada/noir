@@ -1,6 +1,6 @@
 //! Utility traits and structures related to the source operators.
 
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant};
 
 pub use self::csv::*;
 #[cfg(feature = "tokio")]
@@ -36,7 +36,7 @@ pub trait Source<Out: Data>: Operator<Out> {
 pub (crate) struct SnapshotGenerator {
     snapshot_id: SnapshotId,
     snap_time_interval: Option<Duration>,
-    timer: SystemTime,
+    timer: Instant,
     snap_item_interval: Option<u64>,
     item_counter: u64,
     iter_stack: usize,
@@ -47,7 +47,7 @@ impl SnapshotGenerator {
         Self {
             snapshot_id: SnapshotId::new(1),
             snap_time_interval: None,
-            timer: SystemTime::now(),
+            timer: Instant::now(),
             snap_item_interval: None,
             item_counter: 0, 
             iter_stack: 0,
@@ -56,7 +56,8 @@ impl SnapshotGenerator {
     pub (crate) fn get_snapshot_marker(&mut self) -> Option<SnapshotId> {
         let mut res = false;
         if self.snap_time_interval.is_some(){
-            res =self.timer.elapsed().unwrap() > self.snap_time_interval.unwrap(); 
+            // Avoid deadlock with to high snapshot freq, produce at least 1 tuple between 2 snapshot tokens
+            res =self.timer.elapsed() > self.snap_time_interval.unwrap() && self.item_counter != 0;
         }
         if !res && self.snap_item_interval.is_some(){
             res = self.item_counter == self.snap_item_interval.unwrap();
@@ -65,7 +66,11 @@ impl SnapshotGenerator {
         if res {
             let tmp = self.snapshot_id.clone();
             self.item_counter = 0;
-            self.timer = SystemTime::now();
+            if let Some(sti) = self.snap_time_interval {
+                // Avoid timer lag
+                let lag = self.timer.elapsed().checked_sub(sti);
+                self.timer = Instant::now() - lag.unwrap_or(Duration::default());
+            }            
             if self.iter_stack == 0 {
                 self.snapshot_id = self.snapshot_id.next();
             } else {
@@ -79,7 +84,7 @@ impl SnapshotGenerator {
     pub (crate) fn get_flush_snapshot_marker(&mut self) -> SnapshotId {
         let tmp = self.snapshot_id.clone();
         self.item_counter = 0;
-        self.timer = SystemTime::now();
+        self.timer = Instant::now();
         if self.iter_stack == 0 {
             self.snapshot_id = self.snapshot_id.next();
         } else {
@@ -95,6 +100,7 @@ impl SnapshotGenerator {
 
     pub (crate) fn set_time_interval(&mut self, time_interval: Duration) {
         self.snap_time_interval = Some(time_interval);
+        self.timer = Instant::now();
     }
 
     pub (crate) fn set_item_interval(&mut self, item_interval: u64) {

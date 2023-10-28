@@ -4,15 +4,13 @@ use hashbrown::HashMap;
 
 use crate::{
     block::CoordHasherBuilder,
-    channel::Receiver,
-    channel::{bounded, Sender},
+    channel::{unbounded, UnboundedSender, UnboundedReceiver},
     network::OperatorCoord,
     operator::{ExchangeData, SnapshotId},
 };
 
 use super::{redis_handler::RedisHandler, serialize_data, PersistencyServices};
 
-const CHANNEL_SIZE: usize = 30;
 
 #[derive(Clone, Debug)]
 pub(crate) enum PersistencyMessage<State> {
@@ -23,7 +21,7 @@ pub(crate) enum PersistencyMessage<State> {
 
 #[derive(Clone)]
 pub(crate) struct StateSaver<State> {
-    sender: Sender<PersistencyMessage<Vec<u8>>>,
+    sender: UnboundedSender<PersistencyMessage<Vec<u8>>>,
     _state: PhantomData<State>,
 }
 
@@ -60,14 +58,14 @@ impl<State: ExchangeData> StateSaver<State> {
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub(crate) struct StateSaverHandler {
-    sender: Sender<PersistencyMessage<Vec<u8>>>,
+    sender: UnboundedSender<PersistencyMessage<Vec<u8>>>,
     actual_saver: Option<JoinHandle<()>>,
 }
 
 impl StateSaverHandler {
     pub(super) fn new(handler: RedisHandler) -> Self {
         // generate channel
-        let (tx, rx) = bounded(CHANNEL_SIZE);
+        let (tx, rx) = unbounded(); //bounded(CHANNEL_SIZE);
         let saver = ActualSaver {
             rx,
             redis: handler,
@@ -102,7 +100,7 @@ impl StateSaverHandler {
 }
 
 struct ActualSaver {
-    rx: Receiver<PersistencyMessage<Vec<u8>>>,
+    rx: UnboundedReceiver<PersistencyMessage<Vec<u8>>>,
     redis: RedisHandler,
     last_snapshots: HashMap<OperatorCoord, SnapshotId, CoordHasherBuilder>,
 }
