@@ -43,7 +43,7 @@ impl RedisHandler {
     fn get_stored_memory(&self) -> u64 {
         let mut conn = self.pool.get().expect("Fail to connect to Redis");        
         let mut mem = 0;
-        let keys: Vec<String> = conn
+        let keys: Vec<Vec<u8>> = conn
             .keys("*")
             .expect("Fail to get keys");
 
