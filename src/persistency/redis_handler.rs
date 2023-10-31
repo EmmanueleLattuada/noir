@@ -41,15 +41,21 @@ impl RedisHandler {
 
     /// Get size of data stored in redis
     fn get_stored_memory(&self) -> u64 {
-        let mut conn = self.pool.get().expect("Fail to connect to Redis");
+        let mut conn = self.pool.get().expect("Fail to connect to Redis");        
+        let mut mem = 0;
+        let keys: Vec<String> = conn
+            .keys("*")
+            .expect("Fail to get keys");
 
-        let info : redis::InfoDict = redis::cmd("INFO").query(&mut conn).unwrap();
-        let mem : Option<String> = info.get("used_memory");
-        if let Some(mem_s) = mem {
-            mem_s.parse::<u64>().unwrap()
-        } else {
-            0
+        for key in keys {
+            let r = redis::cmd("MEMORY")
+                .arg("USAGE")
+                .arg(&key)
+                .query(&mut conn)
+                .unwrap_or(0);
+            mem += r;
         }
+        mem
     }
 }
 
@@ -272,7 +278,7 @@ pub fn get_max_snapshot_id_and_flushall(server_addr: String) -> u64 {
 }*/
 
 /// Function for tests and benchmarks
-/// Try to get the number of persisted snapshots and the memory used by redis then flush all redis db
+/// Try to get the number of persisted snapshots and the memory (bytes) used by redis then flush all redis db
 pub fn get_statistics_and_flushall(server_addr: String) -> (u64, u64) {
     let handler = RedisHandler::new(server_addr);
     let mut num_snap = 0;

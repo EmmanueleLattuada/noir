@@ -218,7 +218,7 @@ fn wordcount_persistency_bench(c: &mut Criterion) {
                     let mut env = StreamEnvironment::new(config);
                     run_wc(&mut env, $q, $p);
                     env.execute_blocking();
-                    let max_snap = noir::persistency::redis_handler::get_max_snapshot_id_and_flushall( String::from(REDIS_BENCH_CONFIGURATION));
+                    let max_snap = noir::persistency::redis_handler::get_statistics_and_flushall( String::from(REDIS_BENCH_CONFIGURATION)).0;
                     num_of_snap_avg = ((num_of_snap_avg * iter) + max_snap) / (iter + 1);
                     iter += 1;
                 });

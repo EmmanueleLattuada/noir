@@ -274,6 +274,15 @@ fn wordcount_persistency_bench(c: &mut Criterion) {
         bench_wc(&mut g, "wc-fold-assoc", &test, lines, file_path, &conf);
         bench_wc(&mut g, "wc-fold", &test, lines, file_path, &conf);
     }
+
+    //snap_by_time vs snap_by_item
+    bench_wc(&mut g, "wc-fast", "snap-by-time", lines, file_path, &persist_interval(Duration::from_millis(4)));
+    bench_wc(&mut g, "wc-fast", "snap-by-item", lines, file_path, &persist_count((lines/(12*100)) as u64));
+    bench_wc(&mut g, "wc-fold-assoc", "snap-by-time", lines, file_path, &persist_interval(Duration::from_millis(18)));
+    bench_wc(&mut g, "wc-fold-assoc", "snap-by-item", lines, file_path, &persist_count((lines/(12*100)) as u64));
+    bench_wc(&mut g, "wc-fold", "snap-by-time", lines, file_path, &persist_interval(Duration::from_millis(25)));
+    bench_wc(&mut g, "wc-fold", "snap-by-item", lines, file_path, &persist_count((lines/(12*100)) as u64));
+
     /*
     for interval in [10, 100, 1000].map(Duration::from_millis) {
         let test = format!("{interval:?}");
