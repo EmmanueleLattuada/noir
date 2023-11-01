@@ -57,7 +57,6 @@ impl<State:ExchangeData> PersistencyService<State> {
     
     /// Return last complete snapshot. Use find_snapshot() first to compute it.
     /// Remove all partial snapshotd with id > self.restart_from
-    #[inline(never)]
     pub (crate) fn restart_from_snapshot(&self, op_coord: OperatorCoord) -> Option<SnapshotId> {
         if let Some(mut snap_id) = self.restart_from_id.clone() {
             let mut last_snap = self.get_last_snapshot(op_coord).unwrap();
@@ -84,7 +83,6 @@ impl<State:ExchangeData> PersistencyService<State> {
     /// In case there are no saved snapshots the id is set to one.
     /// If the operator has already saved a terminated state this function does nothing.
     /// Call this before forward StreamElement::Terminate.
-    #[inline(never)]
     pub (crate) fn save_terminated_state(&self, op_coord: OperatorCoord, state: State) {
         self.state_saver.save_terminated_state(op_coord, state);
         // Old version 
@@ -104,7 +102,6 @@ impl<State:ExchangeData> PersistencyService<State> {
     }
 
 
-    #[inline(never)]
     pub (crate) fn save_state(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId, state: State) {
         if snapshot_id.id() == 0 {
             panic!("Passed snap_id: {snapshot_id:?}.\nSnapshot id must start from 1");
@@ -119,15 +116,12 @@ impl<State:ExchangeData> PersistencyService<State> {
         self.state_saver.save(op_coord, snapshot_id, state)
     }
 
-    #[inline(never)]
     pub (crate) fn get_last_snapshot(&self, op_coord: OperatorCoord) -> Option<SnapshotId> {
         self.handler.get_last_snapshot(&op_coord)
     }
-    #[inline(never)]
     pub (crate) fn get_state(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId) -> Option<State> {
         self.handler.get_state(&op_coord, &snapshot_id)
     }
-    #[inline(never)]
     pub (crate) fn delete_state(&self, op_coord: OperatorCoord, snapshot_id: SnapshotId) {
         self.handler.delete_state(&op_coord, &snapshot_id);
     }

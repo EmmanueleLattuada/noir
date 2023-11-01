@@ -44,7 +44,9 @@ pub struct ExecutionMetadata<'a> {
     pub batch_mode: BatchMode,
     /// Persistency for saving the state
     pub(crate) persistency_builder: Option<&'a PersistencyBuilder>,
+    /// Strategy to align snapshot tokens before iterative operators
     pub(crate) iterations_snapshot_alignment: bool,
+    /// True if the stream contains iterative operators
     pub(crate) contains_iterative_oper: bool,
 }
 

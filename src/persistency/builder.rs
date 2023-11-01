@@ -47,7 +47,6 @@ impl PersistencyBuilder {
     /// Call this method to restart from specified snapshot or from the last one.
     /// All partial or complete snapshot with an higher index will be deleted in another step.
     /// You must includes all coordinates of each operator in the graph to have a correct result.
-    #[inline(never)]
     pub(crate) fn find_snapshot(
         &mut self,
         operators: Vec<OperatorCoord>,
@@ -163,7 +162,6 @@ impl PersistencyBuilder {
 
     /// Method to remove all persisted data.
     /// You must includes all coordinates of each operator in the graph to have a complete cleaning.
-    #[inline(never)]
     pub(crate) fn clean_persisted_state(&mut self, operators: Vec<OperatorCoord>) {
         for op_coord in operators {
             let mut last_opt_snap = self.handler.get_last_snapshot(&op_coord);

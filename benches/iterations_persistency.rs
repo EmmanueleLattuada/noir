@@ -57,9 +57,9 @@ fn it_pre_iter(env: &mut StreamEnvironment, n_tuples: u64, n_iter: usize) {
                 }
             }
             if is_prime {
-                None
-            } else {
                 Some(n)
+            } else {
+                None
             }
         })
         .iterate(
@@ -124,18 +124,18 @@ fn iterations_persistency_bench(c: &mut Criterion) {
         g.throughput(Throughput::Elements(n_iter as u64));
         let n_tuples = 10_000;
         let pers_conf = persist_none();
-        bench_it(&mut g, "it-simple", "only-TSnap-alignblock", n_tuples, n_iter, &pers_conf);
+        bench_it(&mut g, "it-simple", "10_000-T-alignblock", n_tuples, n_iter, &pers_conf);
         let mut pers_conf_isa = pers_conf.clone();
         pers_conf_isa.iterations_snapshot_alignment = true;
-        bench_it(&mut g, "it-simple", "only-TSnap-isa", n_tuples, n_iter, &pers_conf_isa);
+        bench_it(&mut g, "it-simple", "10_000-T-isa", n_tuples, n_iter, &pers_conf_isa);
 
         for interval in [10, 100, 1000].map(Duration::from_millis) {            
             //let test = format!("{interval:?}");
             let pers_conf = persist_interval(interval);
-            bench_it(&mut g, "it-simple", &format!("{interval:?}-alignblock"), n_tuples, n_iter, &pers_conf);
+            bench_it(&mut g, "it-simple", &format!("10_000-{interval:?}-alignblock"), n_tuples, n_iter, &pers_conf);
             let mut pers_conf_isa = pers_conf.clone();
             pers_conf_isa.iterations_snapshot_alignment = true;
-            bench_it(&mut g, "it-simple", &format!("{interval:?}-isa"), n_tuples, n_iter, &pers_conf_isa);
+            bench_it(&mut g, "it-simple", &format!("10_000-{interval:?}-isa"), n_tuples, n_iter, &pers_conf_isa);
         }
     }
 
@@ -143,29 +143,29 @@ fn iterations_persistency_bench(c: &mut Criterion) {
         g.throughput(Throughput::Elements(n_iter as u64));
         let n_tuples = 1_000_000;
         let pers_conf = persist_none();
-        bench_it(&mut g, "it-simple", "only-TSnap-alignblock", n_tuples, n_iter, &pers_conf);
+        bench_it(&mut g, "it-simple", "1_000_000-T-alignblock", n_tuples, n_iter, &pers_conf);
         let mut pers_conf_isa = pers_conf.clone();
         pers_conf_isa.iterations_snapshot_alignment = true;
-        bench_it(&mut g, "it-simple", "only-TSnap-isa", n_tuples, n_iter, &pers_conf_isa);
+        bench_it(&mut g, "it-simple", "1_000_000-T-isa", n_tuples, n_iter, &pers_conf_isa);
 
         for interval in [10, 100, 1000].map(Duration::from_millis) {            
             //let test = format!("{interval:?}");
             let pers_conf = persist_interval(interval);
-            bench_it(&mut g, "it-simple", &format!("{interval:?}-alignblock"), n_tuples, n_iter, &pers_conf);
+            bench_it(&mut g, "it-simple", &format!("1_000_000-{interval:?}-alignblock"), n_tuples, n_iter, &pers_conf);
             let mut pers_conf_isa = pers_conf.clone();
             pers_conf_isa.iterations_snapshot_alignment = true;
-            bench_it(&mut g, "it-simple", &format!("{interval:?}-isa"), n_tuples, n_iter, &pers_conf_isa);
+            bench_it(&mut g, "it-simple", &format!("1_000_000-{interval:?}-isa"), n_tuples, n_iter, &pers_conf_isa);
         }
     }
 
     for n_iter in [3, 5, 10, 100] {
         g.throughput(Throughput::Elements(n_iter as u64));
-        let n_tuples = 1_000_000;
+        let n_tuples = 10_000_000;
         let pers_conf = persist_none();
-        bench_it(&mut g, "it-preiter", "only-TSnap-alignblock", n_tuples, n_iter, &pers_conf);
+        bench_it(&mut g, "it-preiter", "T-alignblock", n_tuples, n_iter, &pers_conf);
         let mut pers_conf_isa = pers_conf.clone();
         pers_conf_isa.iterations_snapshot_alignment = true;
-        bench_it(&mut g, "it-preiter", "only-TSnap-isa", n_tuples, n_iter, &pers_conf_isa);
+        bench_it(&mut g, "it-preiter", "T-isa", n_tuples, n_iter, &pers_conf_isa);
 
         for interval in [10, 100, 1000].map(Duration::from_millis) {            
             //let test = format!("{interval:?}");

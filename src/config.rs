@@ -89,12 +89,25 @@ pub struct EnvironmentConfig {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct PersistencyConfig {
+    /// Server address, port, password
     pub server_addr: String,
+    /// If true restart from specified snapshot or last complete snapshot
     pub try_restart: bool,
+    /// If true clean the datastroe removing all stored data
     pub clean_on_exit: bool,
+    /// Use this to specify the snapshot from which to restart
     pub restart_from: Option<u64>,
+    /// Snapshot frequency count-based used to generate snapshot tokens. 
+    /// Use this only for tests and debugging. 
+    /// For iterations this will count the number of iterations
     pub snapshot_frequency_by_item: Option<u64>,
+    /// Time-based snapshot frequency used to generate snapshot tokens
     pub snapshot_frequency_by_time: Option<Duration>,
+    /// Alignment strateegy used in case of iterations:
+    /// - True: block Sources snapshot generations, Sources will generate only 1 snapshot token before the FlushAndRestart.
+    /// - False: an "alignemnt-block" will be add in before iterative operators.
+    /// In case of side inputs this must be true. 
+    /// If there are no iterative operators this parameter won't be used.
     pub iterations_snapshot_alignment: bool,
 }
 
