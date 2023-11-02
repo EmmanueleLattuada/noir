@@ -4,8 +4,11 @@
 //! [`KeyedStream`](crate::KeyedStream), [`WindowedStream`](crate::WindowedStream) and
 //! [`WindowedStream`](crate::WindowedStream).
 
+#[cfg(feature = "persist-state")]
 use std::cmp::Ordering;
-use std::fmt::{Display, self};
+#[cfg(feature = "persist-state")]
+use std::fmt;
+use std::fmt::Display;
 use std::hash::Hash;
 use std::ops::{AddAssign, Div};
 
@@ -83,6 +86,7 @@ mod reorder;
 mod replication;
 mod rich_map;
 mod rich_map_custom;
+#[cfg(feature = "persist-state")]
 mod rich_map_persistent;
 mod route;
 pub mod sink;
@@ -120,6 +124,7 @@ pub type Timestamp = i64;
 pub type Timestamp = ();
 
 /// Identifier of the snapshot
+#[cfg(feature = "persist-state")]
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SnapshotId {
     snapshot_id: u64,
@@ -127,6 +132,7 @@ pub struct SnapshotId {
     pub(crate) iteration_stack: Vec<u64>,
     pub(crate) iteration_index: Option<u64>,
 }
+#[cfg(feature = "persist-state")]
 impl SnapshotId {
     pub (crate) fn new(snapshot_id: u64) -> Self {
         Self{
@@ -228,6 +234,7 @@ impl SnapshotId {
 
     
 }
+#[cfg(feature = "persist-state")]
 impl fmt::Display for SnapshotId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if self.terminate {
@@ -237,7 +244,7 @@ impl fmt::Display for SnapshotId {
         }
     }
 }
-
+#[cfg(feature = "persist-state")]
 impl PartialOrd for SnapshotId {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         let mut res = self.snapshot_id.cmp(&other.snapshot_id);
@@ -259,7 +266,7 @@ impl PartialOrd for SnapshotId {
         Some(res)
     }
 }
-
+#[cfg(feature = "persist-state")]
 impl Ord for SnapshotId {
     fn cmp(&self, other: &Self) -> Ordering {
         self.partial_cmp(other).unwrap()
@@ -300,6 +307,7 @@ pub enum StreamElement<Out> {
     FlushAndRestart,
 
     /// Marker used to do the snapshot for saving the state
+    #[cfg(feature = "persist-state")]
     Snapshot(SnapshotId),
 }
 
@@ -329,6 +337,7 @@ pub trait Operator<Out: Data>: Clone + Send + Display {
     fn get_op_id(&self) -> OperatorId;
 
     /// Return a list with id of all stateful operators inside the chain
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<OperatorId>;
 }
 
@@ -343,6 +352,7 @@ impl<Out> StreamElement<Out> {
             StreamElement::Terminate => StreamElement::Terminate,
             StreamElement::FlushAndRestart => StreamElement::FlushAndRestart,
             StreamElement::FlushBatch => StreamElement::FlushBatch,
+            #[cfg(feature = "persist-state")]
             StreamElement::Snapshot(s) => StreamElement::Snapshot(s.clone()),
         }
     }
@@ -356,6 +366,7 @@ impl<Out> StreamElement<Out> {
             StreamElement::Terminate => StreamElement::Terminate,
             StreamElement::FlushAndRestart => StreamElement::FlushAndRestart,
             StreamElement::FlushBatch => StreamElement::FlushBatch,
+            #[cfg(feature = "persist-state")]
             StreamElement::Snapshot(s) => StreamElement::Snapshot(s),
         }
     }
@@ -386,6 +397,7 @@ impl<Out> StreamElement<Out> {
             StreamElement::FlushBatch => "FlushBatch",
             StreamElement::Terminate => "Terminate",
             StreamElement::FlushAndRestart => "FlushAndRestart",
+            #[cfg(feature = "persist-state")]
             StreamElement::Snapshot(_) => "Snapshot",
         }
     }
@@ -406,6 +418,7 @@ impl<Out> StreamElement<Out> {
             StreamElement::Terminate => StreamElement::Terminate,
             StreamElement::FlushAndRestart => StreamElement::FlushAndRestart,
             StreamElement::FlushBatch => StreamElement::FlushBatch,
+            #[cfg(feature = "persist-state")]
             StreamElement::Snapshot(s) => StreamElement::Snapshot(s),
         }
     }
@@ -418,6 +431,7 @@ impl<Out> StreamElement<Out> {
             StreamElement::FlushBatch => None,
             StreamElement::Terminate => None,
             StreamElement::FlushAndRestart => None,
+            #[cfg(feature = "persist-state")]
             StreamElement::Snapshot(_) => None,
         }
     }
@@ -434,6 +448,7 @@ impl<Key, Out> StreamElement<(Key, Out)> {
             StreamElement::Terminate => (None, StreamElement::Terminate),
             StreamElement::FlushAndRestart => (None, StreamElement::FlushAndRestart),
             StreamElement::FlushBatch => (None, StreamElement::FlushBatch),
+            #[cfg(feature = "persist-state")]
             StreamElement::Snapshot(s) => (None, StreamElement::Snapshot(s)),
         }
     }
@@ -446,6 +461,7 @@ impl<Key, Out> StreamElement<(Key, Out)> {
             StreamElement::Terminate => None,
             StreamElement::FlushAndRestart => None,
             StreamElement::FlushBatch => None,
+            #[cfg(feature = "persist-state")]
             StreamElement::Snapshot(_) => None,
         }
     }

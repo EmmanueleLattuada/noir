@@ -1,5 +1,6 @@
 //! Utility traits and structures related to the source operators.
 
+#[cfg(feature = "persist-state")]
 use std::time::{Duration, Instant};
 
 pub use self::csv::*;
@@ -15,6 +16,7 @@ use crate::{
     operator::{Data, Operator},
 };
 
+#[cfg(feature = "persist-state")]
 use super::SnapshotId;
 
 #[cfg(feature = "tokio")]
@@ -31,6 +33,7 @@ pub trait Source<Out: Data>: Operator<Out> {
     fn replication(&self) -> Replication;
 }
 
+#[cfg(feature = "persist-state")]
 #[derive(Derivative)]
 #[derivative(Debug, Clone)]
 pub (crate) struct SnapshotGenerator {
@@ -41,7 +44,7 @@ pub (crate) struct SnapshotGenerator {
     item_counter: u64,
     iter_stack: usize,
 }
-
+#[cfg(feature = "persist-state")]
 impl SnapshotGenerator {
     pub (crate) fn new() -> Self {
         Self {
@@ -118,7 +121,7 @@ impl SnapshotGenerator {
 
 }
 
-
+#[cfg(feature = "persist-state")]
 #[cfg(test)]
 mod tests {
     use std::{time::Duration, thread::sleep};

@@ -3,22 +3,25 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::marker::PhantomData;
+#[cfg(feature = "persist-state")]
 use std::hash::Hash;
-
+#[cfg(feature = "persist-state")]
 use serde::{Serialize, Deserialize};
 
 use crate::block::{BlockStructure, OperatorStructure};
-
 use crate::network::OperatorCoord;
 use crate::operator::{Data, ExchangeData, ExchangeDataKey, Operator, StreamElement, Timestamp};
+#[cfg(feature = "persist-state")]
 use crate::persistency::persistency_service::PersistencyService;
-use crate::scheduler::{ExecutionMetadata, OperatorId};
-
+use crate::scheduler::ExecutionMetadata;
+use crate::scheduler::OperatorId;
+#[cfg(feature = "persist-state")]
 use super::SnapshotId;
 
 
-#[derive(Derivative)]
-#[derivative(Debug, Clone)]
+//#[derive(Derivative)]
+//#[derivative(Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct KeyedFold<Key: ExchangeDataKey, Out: Data, NewOut: ExchangeData, F, PreviousOperators>
 where
     F: Fn(&mut NewOut, Out) + Send + Clone,
@@ -26,8 +29,9 @@ where
 {
     prev: PreviousOperators,
     operator_coord: OperatorCoord,
+    #[cfg(feature = "persist-state")]
     persistency_service: Option<PersistencyService<KeyedFoldState<Key, NewOut>>>,
-    #[derivative(Debug = "ignore")]
+    //#[derivative(Debug = "ignore")]
     fold: F,
     init: NewOut,
     accumulators: HashMap<Key, NewOut, crate::block::GroupHasherBuilder>,
@@ -67,6 +71,7 @@ where
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0,0,0,op_id),
+            #[cfg(feature = "persist-state")]
             persistency_service: None,
             fold,
             init,
@@ -95,6 +100,7 @@ where
     }
 
     /// Save state for snapshot
+    #[cfg(feature = "persist-state")]
     fn save_snap(&mut self, snapshot_id: SnapshotId){
         let state = KeyedFoldState{
             accumulators: self.accumulators.clone(),
@@ -106,6 +112,7 @@ where
         self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id, state);
     }
     /// Save terminated state
+    #[cfg(feature = "persist-state")]
     fn save_terminate(&mut self){
         let state = KeyedFoldState{
             accumulators: self.accumulators.clone(),
@@ -119,6 +126,7 @@ where
 }
 
 
+#[cfg(feature = "persist-state")]
 #[derive(Clone, Serialize, Deserialize, Debug)]
 struct KeyedFoldState<K: Hash + Eq, O> {
     accumulators: HashMap<K, O, crate::block::GroupHasherBuilder>,
@@ -138,6 +146,7 @@ where
         self.prev.setup(metadata);
 
         self.operator_coord.setup_coord(metadata.coord);
+        #[cfg(feature = "persist-state")]
         if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<KeyedFoldState<Key, NewOut>>();
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
@@ -183,6 +192,7 @@ where
                 }
                 // this block won't sent anything until the stream ends
                 StreamElement::FlushBatch => {}
+                #[cfg(feature = "persist-state")]
                 StreamElement::Snapshot(snap_id) => {
                     self.save_snap(snap_id.clone());
                     return StreamElement::Snapshot(snap_id);
@@ -221,6 +231,7 @@ where
         }
 
         // Save terminated state before end
+        #[cfg(feature = "persist-state")]
         if self.persistency_service.is_some() {
             self.save_terminate();
         }
@@ -242,6 +253,7 @@ where
         self.operator_coord.operator_id
     }
 
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
         let mut res = self.prev.get_stateful_operators();
         // This operator is stateful

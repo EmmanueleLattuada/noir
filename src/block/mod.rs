@@ -45,6 +45,7 @@ where
     /// The set of requirements that the block imposes on the scheduler.
     pub(crate) scheduler_requirements: SchedulerRequirements,
     /// Index of the iteration loop, if this is inside an iteration loop
+    #[cfg(feature = "persist-state")]
     pub(crate) iteration_index: Option<u64>,
 
     pub _out_type: PhantomData<Out>,
@@ -67,6 +68,7 @@ where
             iteration_ctx: self.iteration_ctx,
             is_only_one_strategy: false,
             scheduler_requirements: self.scheduler_requirements,
+            #[cfg(feature = "persist-state")]
             iteration_index: self.iteration_index,
             _out_type: Default::default(),
         }
@@ -147,6 +149,7 @@ where
         operators: OperatorChain,
         batch_mode: BatchMode,
         iteration_ctx: Vec<Arc<IterationStateLock>>,
+        #[cfg(feature = "persist-state")]
         iteration_index: Option<u64>,
     ) -> Self {
         Self {
@@ -156,6 +159,7 @@ where
             iteration_ctx,
             is_only_one_strategy: false,
             scheduler_requirements: Default::default(),
+            #[cfg(feature = "persist-state")]
             iteration_index,
             _out_type: Default::default(),
         }

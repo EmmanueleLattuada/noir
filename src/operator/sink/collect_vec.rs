@@ -3,7 +3,10 @@ use std::fmt::Display;
 use crate::block::{BlockStructure, OperatorKind, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::sink::{Sink, StreamOutputRef};
-use crate::operator::{ExchangeData, Operator, StreamElement, SnapshotId};
+use crate::operator::{ExchangeData, Operator, StreamElement};
+#[cfg(feature = "persist-state")]
+use crate::operator::SnapshotId;
+#[cfg(feature = "persist-state")]
 use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 
@@ -14,6 +17,7 @@ where
 {
     prev: PreviousOperators,
     operator_coord: OperatorCoord,
+    #[cfg(feature = "persist-state")]
     persistency_service: Option<PersistencyService<Option<Vec<Out>>>>,
     result: Option<Vec<Out>>,
     output: StreamOutputRef<Vec<Out>>,
@@ -29,17 +33,20 @@ where
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
+            #[cfg(feature = "persist-state")]
             persistency_service: None,
             result: Some(Vec::new()),
             output,
         }
     }
 
+    #[cfg(feature = "persist-state")]
     /// Save state for snapshot
     fn save_snap(&mut self, snapshot_id: SnapshotId){
         let state = self.result.clone();
         self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id, state);
     }
+    #[cfg(feature = "persist-state")]
     /// Save terminated state
     fn save_terminate(&mut self){
         let state = self.result.clone();
@@ -62,9 +69,8 @@ where
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.prev.setup(metadata);
-
         self.operator_coord.setup_coord(metadata.coord);
-
+        #[cfg(feature = "persist-state")]
         if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<Option<Vec<Out>>>();
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
@@ -92,6 +98,7 @@ where
             }
             StreamElement::Watermark(w) => StreamElement::Watermark(w),
             StreamElement::Terminate => {
+                #[cfg(feature = "persist-state")]
                 if self.persistency_service.is_some() {
                     self.save_terminate();
                 }
@@ -102,6 +109,7 @@ where
             }
             StreamElement::FlushBatch => StreamElement::FlushBatch,
             StreamElement::FlushAndRestart => StreamElement::FlushAndRestart,
+            #[cfg(feature = "persist-state")]
             StreamElement::Snapshot(snap_id) => {
                 self.save_snap(snap_id.clone());
                 StreamElement::Snapshot(snap_id)
@@ -111,8 +119,10 @@ where
 
     fn structure(&self) -> BlockStructure {
         let mut operator = OperatorStructure::new::<Out, _>("CollectVecSink");
-        let op_id = self.operator_coord.operator_id;
-        operator.subtitle = format!("op id: {op_id}");
+        #[cfg(feature = "persist-state")] {
+            let op_id = self.operator_coord.operator_id;
+            operator.subtitle = format!("op id: {op_id}");
+        }
         operator.kind = OperatorKind::Sink;
         self.prev.structure().add_operator(operator)
     }
@@ -121,6 +131,7 @@ where
         self.operator_coord.operator_id
     }
 
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
         let mut res = self.prev.get_stateful_operators();
         // This operator is stateful
@@ -143,6 +154,7 @@ where
     }
 }
 
+#[cfg(feature = "persist-state")]
 #[cfg(test)]
 mod tests {
     use itertools::Itertools;

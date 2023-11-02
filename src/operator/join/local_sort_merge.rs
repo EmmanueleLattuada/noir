@@ -11,7 +11,10 @@ use crate::network::OperatorCoord;
 use crate::operator::join::ship::{ShipBroadcastRight, ShipHash, ShipStrategy};
 use crate::operator::join::{InnerJoinTuple, JoinVariant, LeftJoinTuple, OuterJoinTuple};
 use crate::operator::start::{BinaryElement, BinaryStartOperator};
-use crate::operator::{Data, ExchangeData, KeyerFn, Operator, StreamElement, DataKey, ExchangeDataKey, SnapshotId};
+use crate::operator::{Data, ExchangeData, KeyerFn, Operator, StreamElement, DataKey, ExchangeDataKey};
+#[cfg(feature = "persist-state")]
+use crate::operator::SnapshotId;
+#[cfg(feature = "persist-state")]
 use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::stream::{KeyedStream, Stream};
@@ -33,6 +36,7 @@ struct JoinLocalSortMerge<
     prev: OperatorChain,
 
     operator_coord: OperatorCoord,
+    #[cfg(feature = "persist-state")]
     persistency_service: Option<PersistencyService<JoinLocalSortMergeState<Key, Out1, Out2>>>,
 
     keyer1: Keyer1,
@@ -89,6 +93,7 @@ impl<
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
+            #[cfg(feature = "persist-state")]
             persistency_service: None,
             keyer1,
             keyer2,
@@ -162,6 +167,7 @@ impl<
         }
     }
 
+    #[cfg(feature = "persist-state")]
     /// Save state for snapshot
     fn save_snap(&mut self, snapshot_id: SnapshotId){
         let state = JoinLocalSortMergeState{
@@ -173,6 +179,7 @@ impl<
         };
         self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id, state);
     }
+    #[cfg(feature = "persist-state")]
     /// Save terminated state
     fn save_terminate(&mut self){
         let state = JoinLocalSortMergeState{
@@ -212,6 +219,7 @@ impl<
 
         self.operator_coord.setup_coord(metadata.coord);
 
+        #[cfg(feature = "persist-state")]
         if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<JoinLocalSortMergeState<Key, Out1, Out2>>();
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
@@ -261,6 +269,7 @@ impl<
                 StreamElement::Timestamped(_, _) | StreamElement::Watermark(_) => {
                     panic!("Cannot join timestamp streams")
                 }
+                #[cfg(feature = "persist-state")]
                 StreamElement::Snapshot(snapshot_id) => {
                     self.save_snap(snapshot_id.clone());
                     return StreamElement::Snapshot(snapshot_id);
@@ -284,6 +293,7 @@ impl<
                 }
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
                 StreamElement::Terminate => {
+                    #[cfg(feature = "persist-state")]
                     if self.persistency_service.is_some() {
                         self.save_terminate();                        
                     }
@@ -307,6 +317,7 @@ impl<
         self.operator_coord.operator_id
     }
 
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
         let mut res = self.prev.get_stateful_operators();
         // This operator is stateful

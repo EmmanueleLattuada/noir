@@ -4,16 +4,19 @@ use std::fmt::Display;
 use std::time::Duration;
 
 use crate::block::{BlockStructure, OperatorStructure, Replication};
+#[cfg(feature = "persist-state")]
 use crate::config::PersistencyConfig;
 use crate::network::{Coord, NetworkSender, NetworkTopology, ReceiverEndpoint};
 use crate::operator::source::Source;
 use crate::operator::{Data, ExchangeData, Operator, StreamElement};
-use crate::scheduler::{ExecutionMetadata, OperatorId};
+use crate::scheduler::ExecutionMetadata;
+use crate::scheduler::OperatorId;
 use crate::CoordUInt;
 use crate::{BatchMode, EnvironmentConfig};
 
 pub(crate) const REDIS_TEST_CONFIGURATION: &str ="redis://127.0.0.1";
 
+#[cfg(feature = "persist-state")]
 pub(crate) fn persistency_config_unit_tests() -> PersistencyConfig{
     PersistencyConfig { 
         server_addr: String::from(REDIS_TEST_CONFIGURATION),
@@ -74,11 +77,10 @@ impl<Out: Data> Operator<Out> for FakeOperator<Out> {
     fn structure(&self) -> BlockStructure {
         BlockStructure::default().add_operator(OperatorStructure::new::<Out, _>("FakeOperator"))
     }
-
     fn get_op_id(&self) -> OperatorId {
         0
     }
-
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
         Vec::new()
     }
@@ -136,8 +138,11 @@ impl<T: ExchangeData> FakeNetworkTopology<T> {
             prev: self.prev.clone(),
             network: &mut self.topology,
             batch_mode: BatchMode::adaptive(100, Duration::from_millis(100)),
+            #[cfg(feature = "persist-state")]
             persistency_builder: Default::default(),
+            #[cfg(feature = "persist-state")]
             iterations_snapshot_alignment: false,
+            #[cfg(feature = "persist-state")]
             contains_iterative_oper: false,
         }
     }

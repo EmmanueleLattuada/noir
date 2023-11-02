@@ -3,7 +3,10 @@ use std::fmt::Display;
 use crate::block::{BlockStructure, OperatorKind, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::sink::{Sink, StreamOutputRef};
-use crate::operator::{Operator, StreamElement, SnapshotId};
+use crate::operator::{Operator, StreamElement};
+#[cfg(feature = "persist-state")]
+use crate::operator::SnapshotId;
+#[cfg(feature = "persist-state")]
 use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 
@@ -14,6 +17,7 @@ where
 {
     prev: PreviousOperators,
     operator_coord: OperatorCoord,
+    #[cfg(feature = "persist-state")]
     persistency_service: Option<PersistencyService<u64>>,
     result: usize,
     output: StreamOutputRef<usize>,
@@ -29,17 +33,20 @@ where
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
+            #[cfg(feature = "persist-state")]
             persistency_service: None,
             result: 0,
             output,
         }
     }
 
+    #[cfg(feature = "persist-state")]
     /// Save state for snapshot
     fn save_snap(&mut self, snapshot_id: SnapshotId){
         let state = self.result as u64;
         self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id, state);
     }
+    #[cfg(feature = "persist-state")]
     /// Save terminated state
     fn save_terminate(&mut self){
         let state = self.result as u64;
@@ -65,6 +72,7 @@ where
 
         self.operator_coord.setup_coord(metadata.coord);
 
+        #[cfg(feature = "persist-state")]
         if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<u64>();
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
@@ -90,6 +98,7 @@ where
             StreamElement::Watermark(w) => StreamElement::Watermark(w),
             StreamElement::Terminate => {
                 *self.output.lock().unwrap() = Some(self.result);
+                #[cfg(feature = "persist-state")]
                 if self.persistency_service.is_some() {
                     self.save_terminate();
                 }
@@ -97,6 +106,7 @@ where
             }
             StreamElement::FlushBatch => StreamElement::FlushBatch,
             StreamElement::FlushAndRestart => StreamElement::FlushAndRestart,
+            #[cfg(feature = "persist-state")]
             StreamElement::Snapshot(snap_id) => {
                 self.save_snap(snap_id.clone());
                 StreamElement::Snapshot(snap_id)
@@ -116,6 +126,7 @@ where
         self.operator_coord.operator_id
     }
 
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
         let mut res = self.prev.get_stateful_operators();
         // This operator is stateful
@@ -141,16 +152,26 @@ where
 #[cfg(test)]
 mod tests {
     use itertools::Itertools;
+    #[cfg(feature = "persist-state")]
     use serial_test::serial;
 
     use crate::config::EnvironmentConfig;
     use crate::environment::StreamEnvironment;
+    #[cfg(feature = "persist-state")]
     use crate::network::OperatorCoord;
+    #[cfg(feature = "persist-state")]
     use crate::operator::sink::StreamOutputRef;
+    #[cfg(feature = "persist-state")]
     use crate::operator::sink::collect_count::CollectCountSink;
-    use crate::operator::{source, StreamElement, Operator, SnapshotId};
+    use crate::operator::source;
+    #[cfg(feature = "persist-state")]
+    use crate::operator::{SnapshotId, StreamElement, Operator};
+    #[cfg(feature = "persist-state")]
     use crate::persistency::builder::PersistencyBuilder;
-    use crate::test::{FakeOperator, persistency_config_unit_tests};
+    #[cfg(feature = "persist-state")]
+    use crate::test::FakeOperator;
+    #[cfg(feature = "persist-state")]
+    use crate::test::persistency_config_unit_tests;
 
     #[test]
     fn collect_vec() {
@@ -161,6 +182,7 @@ mod tests {
         assert_eq!(res.get().unwrap(), (0..10).collect_vec());
     }
 
+    #[cfg(feature = "persist-state")]
     #[test]
     #[serial]
     fn test_collect_count_persistency_save_state() {

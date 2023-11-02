@@ -1,32 +1,37 @@
 use std::fmt::Display;
-
+#[cfg(feature = "persist-state")]
 use serde::{Serialize, Deserialize};
 
 use crate::block::{BlockStructure, OperatorKind, OperatorStructure, Replication};
 use crate::network::OperatorCoord;
 use crate::operator::source::Source;
 use crate::operator::{Data, Operator, StreamElement};
+#[cfg(feature = "persist-state")]
 use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::Stream;
 
+#[cfg(feature = "persist-state")]
 use super::SnapshotGenerator;
 
 /// Source that consumes an iterator and emits all its elements into the stream.
 ///
 /// The iterator will be consumed **only from one replica**, therefore this source is not parallel.
-#[derive(Derivative)]
-#[derivative(Debug)]
+#[derive(Debug)]
+//#[derivative(Debug)]
 pub struct IteratorSource<Out: Data, It>
 where
     It: Iterator<Item = Out> + Send + 'static,
 {
-    #[derivative(Debug = "ignore")]
+    //#[derivative(Debug = "ignore")]
     inner: It,
     terminated: bool,
     last_index: Option<u64>,
+    #[cfg(feature = "persist-state")]
     snapshot_generator: SnapshotGenerator,
+    #[cfg(feature = "persist-state")]
     persistency_service: Option<PersistencyService<IteratorSourceState>>,
+    #[cfg(feature = "persist-state")]
     snapshot_before_flush: bool,
     operator_coord: OperatorCoord,
 }
@@ -65,8 +70,11 @@ where
             inner,
             terminated: false,
             last_index: None,
+            #[cfg(feature = "persist-state")]
             snapshot_generator: SnapshotGenerator::new(),
+            #[cfg(feature = "persist-state")]
             persistency_service: None,
+            #[cfg(feature = "persist-state")]
             snapshot_before_flush: false,
             // This is the first operator in the chain so operator_id = 0
             // Other fields will be set inside setup method
@@ -84,6 +92,7 @@ where
     }
 }
 
+#[cfg(feature = "persist-state")]
 #[derive(Clone, Serialize, Deserialize, Debug)]
 struct IteratorSourceState{
     last_index: Option<u64>,
@@ -96,6 +105,7 @@ where
 {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.operator_coord.setup_coord(metadata.coord);
+        #[cfg(feature = "persist-state")]
         if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<IteratorSourceState>();
             let mut set_snap_gen =  true;
@@ -134,6 +144,7 @@ where
 
     fn next(&mut self) -> StreamElement<Out> {
         if self.terminated {
+            #[cfg(feature = "persist-state")]
             if self.persistency_service.is_some() {
                 // Save terminated state
                 let state = IteratorSourceState{
@@ -144,6 +155,7 @@ where
             }
             return StreamElement::Terminate;   
         }
+        #[cfg(feature = "persist-state")]
         if self.persistency_service.is_some(){
             // Check snapshot generator
             let snapshot = self.snapshot_generator.get_snapshot_marker();
@@ -169,6 +181,7 @@ where
                 StreamElement::Item(t) 
             }
             None => {
+                #[cfg(feature = "persist-state")]
                 if self.snapshot_before_flush {
                     self.snapshot_before_flush = false;
                     // Save state and forward snapshot this is used for iterations
@@ -180,6 +193,10 @@ where
                     self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snap_id.clone(), state);
                     StreamElement::Snapshot(snap_id)
                 } else {
+                    self.terminated = true;
+                    StreamElement::FlushAndRestart
+                }
+                #[cfg(not(feature = "persist-state"))] {
                     self.terminated = true;
                     StreamElement::FlushAndRestart
                 }
@@ -199,6 +216,7 @@ where
         self.operator_coord.operator_id
     }
 
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
         // This operator is stateful
         vec![self.operator_coord.operator_id]

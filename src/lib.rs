@@ -149,6 +149,7 @@ pub(crate) mod stream;
 pub(crate) mod test;
 pub(crate) mod worker;
 
+#[cfg(feature = "persist-state")]
 pub mod persistency;
 
 pub type CoordUInt = u64;

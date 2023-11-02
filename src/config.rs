@@ -6,6 +6,7 @@ use std::fmt::{Display, Formatter};
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
+#[cfg(feature = "persist-state")]
 use std::time::Duration;
 
 use anyhow::{bail, Result};
@@ -84,9 +85,11 @@ pub struct EnvironmentConfig {
     /// constructed.
     pub skip_single_remote_check: bool,
     /// Configuration for persistency
+    #[cfg(feature = "persist-state")]
     pub persistency_configuration: Option<PersistencyConfig>,
 }
 
+#[cfg(feature = "persist-state")]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct PersistencyConfig {
     /// Server address, port, password
@@ -250,11 +253,13 @@ impl EnvironmentConfig {
             runtime: ExecutionRuntime::Local(LocalRuntimeConfig { num_cores }),
             host_id: Some(0),
             skip_single_remote_check: false,
+            #[cfg(feature = "persist-state")]
             persistency_configuration: None,
         }
     }
 
     /// Add configuration to enable persistency services
+    #[cfg(feature = "persist-state")]
     pub fn add_persistency(&mut self, persistency_configuration: PersistencyConfig) {
         self.persistency_configuration = Some(persistency_configuration);
     }
@@ -288,6 +293,7 @@ impl EnvironmentConfig {
             runtime: ExecutionRuntime::Remote(config),
             host_id,
             skip_single_remote_check: false,
+            #[cfg(feature = "persist-state")]
             persistency_configuration: None,
         })
     }

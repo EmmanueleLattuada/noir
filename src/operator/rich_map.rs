@@ -5,7 +5,8 @@ use std::marker::PhantomData;
 use crate::block::{BlockStructure, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::{Data, DataKey, Operator, StreamElement};
-use crate::scheduler::{ExecutionMetadata, OperatorId};
+use crate::scheduler::ExecutionMetadata;
+use crate::scheduler::OperatorId;
 
 #[derive(Debug)]
 pub struct RichMap<Key: DataKey, Out: Data, NewOut: Data, F, OperatorChain>
@@ -122,6 +123,7 @@ where
         self.operator_coord.operator_id
     }
 
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
         // This operator is stateless
         self.prev.get_stateful_operators()

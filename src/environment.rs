@@ -180,7 +180,10 @@ impl StreamEnvironmentInner {
         }
 
         let source_replication = source.replication();
+        #[cfg(feature = "persist-state")]
         let mut block = env.new_block(source, Default::default(), Default::default(), None);
+        #[cfg(not(feature = "persist-state"))]
+        let mut block = env.new_block(source, Default::default(), Default::default());
 
         block.scheduler_requirements.replication(source_replication);
         drop(env);
@@ -192,12 +195,18 @@ impl StreamEnvironmentInner {
         source: S,
         batch_mode: BatchMode,
         iteration_ctx: Vec<Arc<IterationStateLock>>,
+        #[cfg(feature = "persist-state")]
         iteration_index: Option<u64>,
     ) -> Block<Out, S> {
         let new_id = self.new_block_id();
         let parallelism = source.replication();
         info!("new block (b{new_id:02}), replication {parallelism:?}",);
-        Block::new(new_id, source, batch_mode, iteration_ctx, iteration_index)
+        #[cfg(feature = "persist-state")] {
+            Block::new(new_id, source, batch_mode, iteration_ctx, iteration_index)
+        }
+        #[cfg(not(feature = "persist-state"))] {
+            Block::new(new_id, source, batch_mode, iteration_ctx)
+        }
     }
 
     pub(crate) fn close_block<Out: Data, Op: Operator<Out> + 'static>(

@@ -6,7 +6,8 @@ use crate::block::{
 };
 use crate::network::{ReceiverEndpoint, OperatorCoord};
 use crate::operator::{ExchangeData, KeyerFn, Operator, StreamElement};
-use crate::scheduler::{BlockId, ExecutionMetadata, OperatorId};
+use crate::scheduler::{BlockId, ExecutionMetadata};
+use crate::scheduler::OperatorId;
 
 /// The list with the interesting senders of a single block.
 #[derive(Debug, Clone)]
@@ -148,7 +149,7 @@ where
 
         let groupbyreplica_index = self.setup_senders();
 
-        
+        #[cfg(feature = "persist-state")]
         // if strategy is GroupByReplica set the right replica id
         if matches!(self.next_strategy, NextStrategy::GroupByReplica(_)) {
             self.next_strategy.set_replica(groupbyreplica_index);
@@ -162,7 +163,6 @@ where
         match &message {
             // Broadcast messages
             StreamElement::Watermark(_)
-            | StreamElement::Snapshot(_)
             | StreamElement::Terminate
             | StreamElement::FlushAndRestart => {
                 for block in self.block_senders.iter() {
@@ -176,10 +176,6 @@ where
                         if Some(sender.0.coord.block_id) == self.feedback_id {
                             match &message {
                                 StreamElement::Terminate => continue,
-                                StreamElement::Snapshot(_) => {
-                                    self.feedback_pending_snapshots.push_front(message.clone());
-                                    continue
-                                },
                                 _ => {
                                     // flush feedback pending snapshots
                                     while !self.feedback_pending_snapshots.is_empty() {
@@ -187,6 +183,24 @@ where
                                     }
                                 }
                             }
+                        }
+                        sender.1.enqueue(message.clone());
+                    }
+                }
+            }
+            #[cfg(feature = "persist-state")]
+            StreamElement::Snapshot(_) => {
+                for block in self.block_senders.iter() {
+                    for &sender_idx in block.indexes.iter() {
+                        let sender = &mut self.senders[sender_idx];
+
+                        // if this block is the end of the feedback loop it should not forward
+                        // `Terminate` since the destination is before us in the termination chain,
+                        // and therefore has already left.
+                        // same thing may happen with snapshots
+                        if Some(sender.0.coord.block_id) == self.feedback_id {
+                            self.feedback_pending_snapshots.push_front(message.clone());
+                            continue
                         }
                         sender.1.enqueue(message.clone());
                     }
@@ -204,6 +218,7 @@ where
                             self.senders[sender_idx].1.enqueue(self.feedback_pending_snapshots.pop_back().unwrap());
                         }
                     }
+                    #[cfg(feature = "persist-state")]
                     if matches!(self.next_strategy, NextStrategy::GroupByReplica(_)) {
                         assert_eq!(self.operator_coord.host_id, self.senders[sender_idx].0.coord.host_id);
                         assert_eq!(self.operator_coord.replica_id, self.senders[sender_idx].0.coord.replica_id)
@@ -256,6 +271,7 @@ where
         self.operator_coord.operator_id
     }
 
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
         // This operator is stateless
         self.prev.get_stateful_operators()

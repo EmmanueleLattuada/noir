@@ -6,16 +6,20 @@ use std::marker::PhantomData;
 use std::path::PathBuf;
 
 use csv::{Reader, ReaderBuilder, Terminator, Trim};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+#[cfg(feature = "persist-state")]
+use serde::Serialize;
 
 use crate::block::{BlockStructure, OperatorKind, OperatorStructure, Replication};
 use crate::network::OperatorCoord;
 use crate::operator::source::Source;
 use crate::operator::{Data, Operator, StreamElement};
+#[cfg(feature = "persist-state")]
 use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::Stream;
 
+#[cfg(feature = "persist-state")]
 use super::SnapshotGenerator;
 
 /// Wrapper that limits the bytes that can be read from a type that implements `io::Read`.
@@ -101,10 +105,13 @@ pub struct CsvSource<Out: Data + for<'a> Deserialize<'a>> {
     terminated: bool,
     /// Operator coordinate
     operator_coord: OperatorCoord,
+    #[cfg(feature = "persist-state")]
     /// Snapshot markers generator
     snapshot_generator: SnapshotGenerator,
+    #[cfg(feature = "persist-state")]
     /// Persistency service to save the state
     persistency_service: Option<PersistencyService<CsvSourceState>>,
+    #[cfg(feature = "persist-state")]
     snapshot_before_flush: bool,
     _out: PhantomData<Out>,
 }
@@ -157,8 +164,11 @@ impl<Out: Data + for<'a> Deserialize<'a>> CsvSource<Out> {
             // This is the first operator in the chain so operator_id = 0
             // Other fields will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, 0),
+            #[cfg(feature = "persist-state")]
             snapshot_generator: SnapshotGenerator::new(),
+            #[cfg(feature = "persist-state")]
             snapshot_before_flush: false,
+            #[cfg(feature = "persist-state")]
             persistency_service: None,
             _out: PhantomData,
         }
@@ -281,6 +291,7 @@ impl<Out: Data + for<'a> Deserialize<'a>> Source<Out> for CsvSource<Out> {
     }
 }
 
+#[cfg(feature = "persist-state")]
 #[derive(Clone, Serialize, Deserialize)]
 struct CsvSourceState{
     current: u64,
@@ -294,6 +305,7 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
 
         self.operator_coord.setup_coord(metadata.coord);
         let mut last_position = None;
+        #[cfg(feature = "persist-state")]
         if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<CsvSourceState>();
             let mut set_snap_gen =  true;
@@ -441,6 +453,7 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
             .expect("CsvSource was not initialized");
 
         if self.terminated {
+            #[cfg(feature = "persist-state")]
             if self.persistency_service.is_some(){
                  // Save terminated state
                  let state = CsvSourceState {
@@ -451,6 +464,7 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
             }
             return StreamElement::Terminate;
         }
+        #[cfg(feature = "persist-state")]
         if self.persistency_service.is_some(){
             // Check snapshot generator
             let snapshot = self.snapshot_generator.get_snapshot_marker();
@@ -468,6 +482,7 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
         match csv_reader.deserialize::<Out>().next() {
             Some(item) => StreamElement::Item(item.unwrap()),
             None => {
+                #[cfg(feature = "persist-state")]
                 if self.snapshot_before_flush {
                     self.snapshot_before_flush = false;
                     let snap_id = self.snapshot_generator.get_flush_snapshot_marker();
@@ -478,6 +493,10 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
                     self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snap_id.clone(), state);
                     StreamElement::Snapshot(snap_id)
                 } else {
+                    self.terminated = true;
+                    StreamElement::FlushAndRestart
+                }
+                #[cfg(not(feature = "persist-state"))] {
                     self.terminated = true;
                     StreamElement::FlushAndRestart
                 }
@@ -497,6 +516,7 @@ impl<Out: Data + for<'a> Deserialize<'a>> Operator<Out> for CsvSource<Out> {
         self.operator_coord.operator_id
     }
 
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
         // This operator is stateful
         vec![self.operator_coord.operator_id]
@@ -515,8 +535,11 @@ impl<Out: Data + for<'a> Deserialize<'a>> Clone for CsvSource<Out> {
             options: self.options.clone(),
             terminated: false,
             operator_coord: self.operator_coord,
+            #[cfg(feature = "persist-state")]
             snapshot_generator: self.snapshot_generator.clone(),
+            #[cfg(feature = "persist-state")]
             snapshot_before_flush: self.snapshot_before_flush,
+            #[cfg(feature = "persist-state")]
             persistency_service: self.persistency_service.clone(),
             _out: PhantomData,
         }

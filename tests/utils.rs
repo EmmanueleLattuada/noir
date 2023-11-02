@@ -10,7 +10,9 @@ use std::time::Duration;
 
 use itertools::{process_results, Itertools};
 
-use noir::config::{ExecutionRuntime, RemoteHostConfig, RemoteRuntimeConfig, PersistencyConfig};
+use noir::config::{ExecutionRuntime, RemoteHostConfig, RemoteRuntimeConfig};
+#[cfg(feature = "persist-state")]
+use noir::config::PersistencyConfig;
 use noir::operator::{Data, Operator, StreamElement, Timestamp};
 use noir::structure::BlockStructure;
 use noir::CoordUInt;
@@ -97,6 +99,7 @@ impl<Out: Data, PreviousOperator: Operator<Out>> Operator<Out>
         0
     }
 
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<u64> {
         // This operator is stateless
         self.prev.get_stateful_operators()
@@ -146,9 +149,15 @@ impl TestHelper {
     }
 
     /// Run the test body under a local environment.
-    pub fn local_env(body: Arc<dyn Fn(StreamEnvironment) + Send + Sync>, num_cores: CoordUInt, persistency_config: Option<PersistencyConfig>) {
+    pub fn local_env(
+        body: Arc<dyn Fn(StreamEnvironment) + Send + Sync>, 
+        num_cores: CoordUInt, 
+        #[cfg(feature = "persist-state")]
+        persistency_config: Option<PersistencyConfig>
+    ) {
         Self::setup();
         let mut config = EnvironmentConfig::local(num_cores);
+        #[cfg(feature = "persist-state")]
         if persistency_config.is_some() {
             config.add_persistency(persistency_config.unwrap());
         }
@@ -161,6 +170,7 @@ impl TestHelper {
         body: Arc<dyn Fn(StreamEnvironment) + Send + Sync>,
         num_hosts: CoordUInt,
         cores_per_host: CoordUInt,
+        #[cfg(feature = "persist-state")]
         persistency_config: Option<PersistencyConfig>
     ) {
         Self::setup();
@@ -191,8 +201,10 @@ impl TestHelper {
                 runtime: runtime.clone(),
                 host_id: Some(host_id),
                 skip_single_remote_check: true,
+                #[cfg(feature = "persist-state")]
                 persistency_configuration: None,
             };
+            #[cfg(feature = "persist-state")]
             if let Some(pers_conf) = persistency_config.clone(){
                 config.add_persistency(pers_conf);
             }
@@ -221,7 +233,10 @@ impl TestHelper {
         let local_cores =
             Self::parse_list_from_env("RSTREAM_TEST_LOCAL_CORES").unwrap_or_else(|| vec![4]);
         for num_cores in local_cores {
+            #[cfg(feature = "persist-state")]
             Self::local_env(body.clone(), num_cores, None);
+            #[cfg(not(feature = "persist-state"))]
+            Self::local_env(body.clone(), num_cores);
         }
 
         let remote_hosts =
@@ -230,11 +245,15 @@ impl TestHelper {
             Self::parse_list_from_env("RSTREAM_TEST_REMOTE_CORES").unwrap_or_else(|| vec![4]);
         for num_hosts in remote_hosts {
             for &num_cores in &remote_cores {
+                #[cfg(feature = "persist-state")]
                 Self::remote_env(body.clone(), num_hosts, num_cores, None);
+                #[cfg(not(feature = "persist-state"))]
+                Self::remote_env(body.clone(), num_hosts, num_cores);
             }
         }
     }
 
+    #[cfg(feature = "persist-state")]
      /// Run the test body under a local environment and later under a simulated remote environment.
      /// restart_config must contains all configurations to run sequentially
      /// Example: first a complete execution, then restart from snapshot 1 and finally restart from 
@@ -266,6 +285,7 @@ impl TestHelper {
         }
     }
 
+    #[cfg(feature = "persist-state")]
     pub fn persistency_config_test(try_restart: bool, clean_on_exit: bool, restart_from: Option<u64>, snapshot_frequency_by_item: Option<u64>) -> PersistencyConfig {
         PersistencyConfig { 
             server_addr: String::from(REDIS_TEST_CONFIGURATION), 
@@ -278,6 +298,7 @@ impl TestHelper {
         }
     }
 
+    #[cfg(feature = "persist-state")]
     pub fn persistency_config_test_isa(try_restart: bool, clean_on_exit: bool, restart_from: Option<u64>, snapshot_frequency_by_item: Option<u64>) -> PersistencyConfig {
         PersistencyConfig { 
             server_addr: String::from(REDIS_TEST_CONFIGURATION), 

@@ -89,7 +89,7 @@ fn group_by_count() {
     });
 }
 
-
+#[cfg(feature = "persist-state")]
 #[test]
 #[serial]
 fn group_by_count_persistency() {

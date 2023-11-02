@@ -9,9 +9,12 @@ use crate::network::OperatorCoord;
 use crate::operator::merge::MergeElement;
 
 use crate::operator::{ExchangeData, ExchangeDataKey, Operator, StreamElement, Timestamp};
+#[cfg(feature = "persist-state")]
 use crate::persistency::persistency_service::PersistencyService;
-use crate::scheduler::{ExecutionMetadata, OperatorId};
+use crate::scheduler::ExecutionMetadata;
+use crate::scheduler::OperatorId;
 
+#[cfg(feature = "persist-state")]
 use super::SnapshotId;
 
 type OutputElement<Key, Out, Out2> = (Key, (Out, Out2));
@@ -33,6 +36,7 @@ where
 {
     prev: OperatorChain,
     operator_coord: OperatorCoord,
+    #[cfg(feature = "persist-state")]
     persistency_service: Option<PersistencyService<IntervalJoinState<Key, Out, Out2>>>,
     /// Elements of the left side to be processed.
     left: VecDeque<(Timestamp, (Key, Out))>,
@@ -82,6 +86,7 @@ where
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
+            #[cfg(feature = "persist-state")]
             persistency_service: None,
             left: Default::default(),
             right: Default::default(),
@@ -147,6 +152,7 @@ where
         }
     }
 
+    #[cfg(feature = "persist-state")]
     /// Save state for snapshot
     fn save_snap(&mut self, snapshot_id: SnapshotId){
         let state = IntervalJoinState {
@@ -157,6 +163,7 @@ where
         };
         self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id, state); 
     }
+    #[cfg(feature = "persist-state")]
     /// Save terminated state
     fn save_terminate(&mut self){
         let state = IntervalJoinState {
@@ -195,6 +202,7 @@ where
         self.prev.setup(metadata);
 
         self.operator_coord.setup_coord(metadata.coord);
+        #[cfg(feature = "persist-state")]
         if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<IntervalJoinState<Key, Out, Out2>>();
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
@@ -247,11 +255,13 @@ where
                 StreamElement::Item(_) => panic!("Interval Join only supports timestamped streams"),
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
                 StreamElement::Terminate => {
+                    #[cfg(feature = "persist-state")]
                     if self.persistency_service.is_some() {
                         self.save_terminate();
                     }
                     return StreamElement::Terminate
                 }
+                #[cfg(feature = "persist-state")]
                 StreamElement::Snapshot(snap_id) => {
                     self.save_snap(snap_id.clone());
                     return StreamElement::Snapshot(snap_id);
@@ -280,6 +290,7 @@ where
         self.operator_coord.operator_id
     }
 
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
         let mut res = self.prev.get_stateful_operators();
         // This operator is stateful

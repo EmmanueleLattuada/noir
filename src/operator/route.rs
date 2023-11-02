@@ -5,9 +5,11 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 
 use crate::block::{BatchMode, Batcher, BlockStructure, Connection, OperatorStructure};
-use crate::network::{ReceiverEndpoint, OperatorCoord};
+use crate::network::ReceiverEndpoint;
+use crate::network::OperatorCoord;
 use crate::operator::{KeyerFn, StreamElement};
-use crate::scheduler::{BlockId, ExecutionMetadata, OperatorId};
+use crate::scheduler::{BlockId, ExecutionMetadata};
+use crate::scheduler::OperatorId;
 
 use super::end::BlockSenders;
 use super::SimpleStartReceiver;
@@ -60,6 +62,7 @@ impl<Out: ExchangeData, OperatorChain: Operator<Out> + 'static> RouterBuilder<Ou
         let batch_mode = self.stream.block.batch_mode;
         let block_id = self.stream.block.id;
         let iteration_context = self.stream.block.iteration_ctx.clone();
+        #[cfg(feature = "persist-state")]
         let iteration_index = self.stream.block.iteration_index;
 
         let mut new_blocks = (0..self.routes.len())
@@ -68,6 +71,7 @@ impl<Out: ExchangeData, OperatorChain: Operator<Out> + 'static> RouterBuilder<Ou
                     Start::single(block_id, iteration_context.last().cloned()),
                     batch_mode,
                     iteration_context.clone(),
+                    #[cfg(feature = "persist-state")]
                     iteration_index,
                 )
             })
@@ -232,8 +236,7 @@ where
         match &message {
             // Broadcast messages
             StreamElement::Watermark(_)
-            | StreamElement::FlushAndRestart
-            | StreamElement::Snapshot(_) => {
+            | StreamElement::FlushAndRestart => {
                 for e in self.endpoints.iter() {
                     for &sender_idx in e.block_senders.indexes.iter() {
                         let sender = &mut self.senders[sender_idx];
@@ -241,6 +244,16 @@ where
                     }
                 }
             }
+            #[cfg(feature = "persist-state")]
+            StreamElement::Snapshot(_) => {
+                for e in self.endpoints.iter() {
+                    for &sender_idx in e.block_senders.indexes.iter() {
+                        let sender = &mut self.senders[sender_idx];
+                        sender.1.enqueue(message.clone());
+                    }
+                }
+            }
+            
             StreamElement::Terminate => {
                 if self.terminated {
                     // Just return Terminate to exit
@@ -317,6 +330,7 @@ where
        self.operator_coord.operator_id
     }
 
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
         // This operator is stateless
         self.prev.get_stateful_operators()

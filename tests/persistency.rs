@@ -17,6 +17,7 @@ fn write_file(file: &NamedTempFile) {
     write!(file.as_file(), "cat dog monkey \n").unwrap();
 }
 
+#[cfg(feature = "persist-state")]
 #[test]
 #[serial]
 fn word_count_persistency() {

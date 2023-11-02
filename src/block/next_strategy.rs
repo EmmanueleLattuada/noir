@@ -29,6 +29,7 @@ where
     GroupBy(IndexFn, PhantomData<Out>),
     /// Like previous one but the key is fixed and is the replica index
     /// Used to allign snapshotId before iterations
+    #[cfg(feature = "persist-state")]
     GroupByReplica(usize),
     /// Every following replica will receive every message.
     All,
@@ -54,6 +55,7 @@ impl<Out: ExchangeData> NextStrategy<Out> {
     }
 
     /// Returns `NextStrategy::GroupByReplica`.
+    #[cfg(feature = "persist-state")]
     pub(crate) fn group_by_replica(replica: usize) -> NextStrategy<Out> {
         NextStrategy::GroupByReplica(replica)
     }
@@ -79,10 +81,12 @@ where
             NextStrategy::OnlyOne | NextStrategy::All => 0,
             NextStrategy::Random => tls_rng().generate(),
             NextStrategy::GroupBy(keyer, _) => keyer(message) as usize,
+            #[cfg(feature = "persist-state")]
             NextStrategy::GroupByReplica(replica) => *replica,
         }
     }
 
+    #[cfg(feature = "persist-state")]
     pub(crate) fn set_replica(&mut self, new_replica: usize) {
         match self {
             NextStrategy::GroupByReplica(replica) => {

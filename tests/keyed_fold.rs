@@ -95,6 +95,7 @@ fn fold_shuffled_keyed_stream() {
 }
 
 
+#[cfg(feature = "persist-state")]
 #[test]
 #[serial]
 fn fold_keyed_stream_persistency() {
@@ -133,6 +134,7 @@ fn fold_keyed_stream_persistency() {
 }
 
 
+#[cfg(feature = "persist-state")]
 #[test]
 #[serial]
 fn fold_shuffled_keyed_stream_persistency() {

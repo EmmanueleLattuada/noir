@@ -2,15 +2,20 @@ use std::fmt::Display;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-
+#[cfg(feature = "persist-state")]
 use serde::{Serialize, Deserialize};
 
 use crate::block::{BlockStructure, Connection, NextStrategy, OperatorStructure, Replication};
 use crate::network::{NetworkMessage, NetworkSender, OperatorCoord};
 use crate::operator::iteration::{IterationResult, StateFeedback};
-use crate::operator::source::{Source, SnapshotGenerator};
+use crate::operator::source::Source;
+#[cfg(feature = "persist-state")]
+use crate::operator::source::SnapshotGenerator;
 use crate::operator::start::{SimpleStartOperator, Start, StartReceiver};
-use crate::operator::{ExchangeData, Operator, StreamElement, SnapshotId};
+use crate::operator::{ExchangeData, Operator, StreamElement};
+#[cfg(feature = "persist-state")]
+use crate::operator::SnapshotId;
+#[cfg(feature = "persist-state")]
 use crate::persistency::persistency_service::PersistencyService;
 use crate::profiler::{get_profiler, Profiler};
 use crate::scheduler::{BlockId, ExecutionMetadata, OperatorId};
@@ -25,8 +30,8 @@ use crate::scheduler::{BlockId, ExecutionMetadata, OperatorId};
 /// "iteration blocks" (i.e. the blocks that manage the body of the iteration). When all the
 /// iterations have been completed this block will produce the final state of the iteration,
 /// followed by a `StreamElement::FlushAndReset`.
-#[derive(Derivative)]
-#[derivative(Clone, Debug)]
+//#[derive(Derivative)]
+#[derive(Clone, Debug)]
 pub struct IterationLeader<StateUpdate: ExchangeData, State: ExchangeData, Global, LoopCond>
 where
     Global: Fn(&mut State, StateUpdate) + Send + Clone,
@@ -73,24 +78,30 @@ where
     flush_and_restart: bool,
 
     /// The function that combines the global state with a delta update.
-    #[derivative(Debug = "ignore")]
+    //#[derivative(Debug = "ignore")]
     global_fold: Global,
     /// A function that, given the global state, checks whether the iteration should continue.
-    #[derivative(Debug = "ignore")]
+    //#[derivative(Debug = "ignore")]
     loop_condition: LoopCond,
 
+    #[cfg(feature = "persist-state")]
     /// Persistency service
     persistency_service: Option<PersistencyService<IterationLeaderState<State>>>, 
+    #[cfg(feature = "persist-state")]
     /// Snapshot generator 
     snapshot_generator: SnapshotGenerator,
+    #[cfg(feature = "persist-state")]
     /// Max snap id
     max_snap_id: Option<SnapshotId>,
+    #[cfg(feature = "persist-state")]
     /// Iteration level
     iter_stack_level: usize,
+    #[cfg(feature = "persist-state")]
     /// Pending snapshot
     pending_snapshot: Option<SnapshotId>,
 }
 
+#[cfg(feature = "persist-state")]
 #[derive(Clone, Serialize, Deserialize, Debug)]
 struct IterationLeaderState<State> {
     state: Option<State>,
@@ -122,10 +133,13 @@ where
         global_fold: Global,
         loop_condition: LoopCond,
         feedback_block_id: Arc<AtomicUsize>,
+        #[cfg(feature = "persist-state")]
         iter_stack_level: usize,
     ) -> Self {
-        let mut snap_gen = SnapshotGenerator::new();
-        snap_gen.set_iter_stack(iter_stack_level);
+        #[cfg(feature = "persist-state")] {
+            let mut snap_gen = SnapshotGenerator::new();
+            snap_gen.set_iter_stack(iter_stack_level);
+        }
         Self {
             // these fields will be set inside the `setup` method
             state_update_receiver: None,
@@ -134,6 +148,7 @@ where
             missing_state_updates: 0,
             // This the second block in the chain
             operator_coord: OperatorCoord::new(0, 0, 0, 1),
+            #[cfg(feature = "persist-state")]
             persistency_service: None,
 
             max_iterations: num_iterations,
@@ -144,9 +159,13 @@ where
             flush_and_restart: false,
             global_fold,
             loop_condition,
+            #[cfg(feature = "persist-state")]
             snapshot_generator: snap_gen,
+            #[cfg(feature = "persist-state")]
             iter_stack_level,
+            #[cfg(feature = "persist-state")]
             max_snap_id: None,
+            #[cfg(feature = "persist-state")]
             pending_snapshot: None,
         }
     }
@@ -165,6 +184,7 @@ where
             }
             StreamElement::Terminate => {
                 log::trace!("iter_leader terminate {}", self.operator_coord.get_coord());
+                #[cfg(feature = "persist-state")]
                 if self.persistency_service.is_some() {
                     let state = IterationLeaderState {
                         state: self.state.clone(),
@@ -183,6 +203,7 @@ where
                 return Some(StreamElement::Terminate);
             }
             StreamElement::FlushAndRestart | StreamElement::FlushBatch => {}
+            #[cfg(feature = "persist-state")]
             StreamElement::Snapshot(mut snap_id) => {
                 if self.iteration_index == 0 && snap_id.iteration_stack.last() == Some(&0) {
                     // take the latest snapshot id generated by an operator before the replay                   
@@ -270,6 +291,7 @@ where
         self.missing_state_updates = self.num_receivers;
 
         // Setup persistency
+        #[cfg(feature = "persist-state")]
         if let Some(pb) = metadata.persistency_builder {
             let p_service = pb.generate_persistency_service::<IterationLeaderState<State>>(); 
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
@@ -325,6 +347,7 @@ where
             self.iteration_index += 1;
             let result = self.final_result();
 
+            #[cfg(feature = "persist-state")]
             if self.persistency_service.is_some() {
                 if self.iteration_index == 1 {
                     // Initialize the snapshot generator to the max snapshot id receiver
@@ -338,11 +361,21 @@ where
                 }
             }
             
-            let state_feedback = (
-                IterationResult::from_condition(result.is_none()),
-                self.state.clone().unwrap(),
-                self.pending_snapshot.clone(),
-            );
+            let state_feedback;
+            #[cfg(feature = "persist-state")] {
+                state_feedback = (
+                    IterationResult::from_condition(result.is_none()),
+                    self.state.clone().unwrap(),
+                    self.pending_snapshot.clone(),
+                );
+            }
+            #[cfg(not(feature = "persist-state"))] {
+                state_feedback = (
+                    IterationResult::from_condition(result.is_none()),
+                    self.state.clone().unwrap(),
+                );
+            }
+
             for sender in &self.feedback_senders {
                 let message = NetworkMessage::new_single(
                     StreamElement::Item(state_feedback.clone()),
@@ -357,6 +390,7 @@ where
                 return StreamElement::Item(state);
             }
 
+            #[cfg(feature = "persist-state")]
             if let Some(snap_id) = self.pending_snapshot.take() {                    
                 // save state
                 let state = IterationLeaderState {
@@ -398,6 +432,7 @@ where
         self.operator_coord.operator_id
     }
 
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
         // This operator is stateful
         // It will have a Start with op_id = 0 

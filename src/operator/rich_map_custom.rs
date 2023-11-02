@@ -4,8 +4,8 @@ use std::marker::PhantomData;
 use crate::block::{BlockStructure, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::{Data, Operator, StreamElement};
-use crate::scheduler::{ExecutionMetadata, OperatorId};
-
+use crate::scheduler::ExecutionMetadata;
+use crate::scheduler::OperatorId;
 
 pub struct ElementGenerator<'a, Out, Op> {
     inner: &'a mut Op,
@@ -62,7 +62,7 @@ where
     OperatorChain: Operator<Out>,
 {
     pub(super) fn new(prev: OperatorChain, f: F) -> Self {
-        let op_id = prev.get_op_id() + 1;
+        let op_id = prev.get_op_id() + 1; 
         Self {
             prev,
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
@@ -103,6 +103,7 @@ where
         self.operator_coord.operator_id
     }
 
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
         // This operator is stateless
         self.prev.get_stateful_operators()

@@ -1,16 +1,18 @@
 use std::fmt::Display;
 use std::ops::Range;
 
+#[cfg(feature = "persist-state")]
 use serde::{Serialize, Deserialize};
 
 use crate::block::{BlockStructure, OperatorKind, OperatorStructure, Replication};
 use crate::network::OperatorCoord;
 use crate::operator::source::Source;
 use crate::operator::{Data, Operator, StreamElement};
+#[cfg(feature = "persist-state")]
 use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 use crate::{CoordUInt, Stream};
-
+#[cfg(feature = "persist-state")]
 use super::SnapshotGenerator;
 
 pub trait IntoParallelSource: Clone + Send {
@@ -157,8 +159,11 @@ where
     last_index: Option<u64>,
     terminated: bool,
     operator_coord: OperatorCoord,
+    #[cfg(feature = "persist-state")]
     snapshot_generator: SnapshotGenerator,
+    #[cfg(feature = "persist-state")]
     snapshot_before_flush: bool,
+    #[cfg(feature = "persist-state")]
     persistency_service: Option<PersistencyService<ParallelIteratorSourceState>>,
 }
 
@@ -215,8 +220,11 @@ where
             // This is the first operator in the chain so operator_id = 0
             // Other fields will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, 0),
+            #[cfg(feature = "persist-state")]
             snapshot_generator: SnapshotGenerator::new(),
+            #[cfg(feature = "persist-state")]
             snapshot_before_flush: false,
+            #[cfg(feature = "persist-state")]
             persistency_service: None,
         }
     }
@@ -233,6 +241,7 @@ where
     }
 }
 
+#[cfg(feature = "persist-state")]
 #[derive(Clone, Serialize, Deserialize, Debug)]
 struct ParallelIteratorSourceState {
     last_index: Option<u64>,
@@ -256,6 +265,7 @@ where
         );
 
         self.operator_coord.setup_coord(metadata.coord);
+        #[cfg(feature = "persist-state")]
         if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<ParallelIteratorSourceState>();
             let mut set_snap_gen =  true;
@@ -294,6 +304,7 @@ where
 
     fn next(&mut self) -> StreamElement<Source::Item> {
         if self.terminated {
+            #[cfg(feature = "persist-state")]
             if self.persistency_service.is_some() {
                 // Save terminated state
                 let state = ParallelIteratorSourceState{
@@ -304,6 +315,7 @@ where
             } 
             return StreamElement::Terminate;                       
         }
+        #[cfg(feature = "persist-state")]
         if self.persistency_service.is_some(){
             // Check snapshot generator
             let snapshot = self.snapshot_generator.get_snapshot_marker();
@@ -328,6 +340,7 @@ where
                 StreamElement::Item(t) 
             }
             None => {
+                #[cfg(feature = "persist-state")]
                 if self.snapshot_before_flush {
                     self.snapshot_before_flush = false;
                     // Save state and forward snapshot this is used for iterations
@@ -339,6 +352,10 @@ where
                     self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snap_id.clone(), state);
                     StreamElement::Snapshot(snap_id)
                 } else {
+                    self.terminated = true;
+                    StreamElement::FlushAndRestart
+                }
+                #[cfg(not(feature = "persist-state"))] {
                     self.terminated = true;
                     StreamElement::FlushAndRestart
                 }
@@ -358,6 +375,7 @@ where
         self.operator_coord.operator_id
     }
 
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
         // This operator is stateful
         vec![self.operator_coord.operator_id]
@@ -375,8 +393,11 @@ where
             last_index: self.last_index,
             terminated: false,
             operator_coord: self.operator_coord,
+            #[cfg(feature = "persist-state")]
             snapshot_generator: self.snapshot_generator.clone(),
+            #[cfg(feature = "persist-state")]
             snapshot_before_flush: self.snapshot_before_flush,
+            #[cfg(feature = "persist-state")]
             persistency_service: self.persistency_service.clone(),
         }
     }

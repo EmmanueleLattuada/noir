@@ -11,10 +11,15 @@ use crate::{
     network::OperatorCoord,
     operator::{
         BinaryElement, BinaryStartOperator, Data, DataKey, ExchangeData, Operator, Start,
-        StreamElement, SnapshotId,
+        StreamElement,
     },
-    KeyedStream, scheduler::OperatorId, persistency::persistency_service::PersistencyService,
+    KeyedStream, scheduler::OperatorId,
 };
+
+#[cfg(feature = "persist-state")]
+use crate::operator::SnapshotId;
+#[cfg(feature = "persist-state")]
+use crate::persistency::persistency_service::PersistencyService;
 
 use super::{InnerJoinTuple, JoinVariant, OuterJoinTuple};
 
@@ -52,6 +57,7 @@ impl<Key: DataKey, Out> Default for SideHashMap<Key, Out> {
 struct JoinKeyedOuter<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> {
     prev: BinaryStartOperator<(K, V1), (K, V2)>,
     operator_coord: OperatorCoord,
+    #[cfg(feature = "persist-state")]
     persistency_service: Option<PersistencyService<JoinKeyedOuterState<K, V1, V2>>>,
     variant: JoinVariant,
     _k: PhantomData<K>,
@@ -73,6 +79,7 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> JoinKeyedOut
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
+            #[cfg(feature = "persist-state")]
             persistency_service: None,
             variant,
             _k: PhantomData,
@@ -185,6 +192,7 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> JoinKeyedOut
         }
     }
 
+    #[cfg(feature = "persist-state")]
     /// Save state for snapshot
     fn save_snap(&mut self, snapshot_id: SnapshotId) {
         let state = JoinKeyedOuterState{
@@ -193,6 +201,7 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> JoinKeyedOut
         };
         self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id, state);        
     }
+    #[cfg(feature = "persist-state")]
     /// Save terminated state
     fn save_terminate(&mut self) {
         let state = JoinKeyedOuterState{
@@ -231,6 +240,7 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
         self.prev.setup(metadata);
         
         self.operator_coord.setup_coord(metadata.coord);
+        #[cfg(feature = "persist-state")]
         if let Some(pb) = metadata.persistency_builder {
             let p_service = pb.generate_persistency_service::<JoinKeyedOuterState<K, V1, V2>>();
                     
@@ -271,12 +281,14 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
                     return StreamElement::FlushAndRestart;
                 }
                 StreamElement::Terminate => {
+                    #[cfg(feature = "persist-state")]
                     if self.persistency_service.is_some() {
                         self.save_terminate();
                     }
                     return StreamElement::Terminate;
                 }
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
+                #[cfg(feature = "persist-state")]
                 StreamElement::Snapshot(snapshot_id) => {
                     self.save_snap(snapshot_id.clone());
                     return StreamElement::Snapshot(snapshot_id);
@@ -302,6 +314,7 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
         self.operator_coord.operator_id
     }
 
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
         let mut res = self.prev.get_stateful_operators();
         // This operator is stateful
@@ -314,6 +327,7 @@ impl<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData>
 struct JoinKeyedInner<K: DataKey + ExchangeData, V1: ExchangeData, V2: ExchangeData> {
     prev: BinaryStartOperator<(K, V1), (K, V2)>,
     operator_coord: OperatorCoord,
+    #[cfg(feature = "persist-state")]
     persistency_service: Option<PersistencyService<JoinKeyedInnerState<K, V1, V2>>>,
     _k: PhantomData<K>,
     _v1: PhantomData<V1>,
@@ -354,6 +368,7 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
+            #[cfg(feature = "persist-state")]
             persistency_service: None,
             _k: PhantomData,
             _v1: PhantomData,
@@ -407,6 +422,7 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
         }
     }
 
+    #[cfg(feature = "persist-state")]
     /// Save state for snapshot
     fn save_snap(&mut self, snapshot_id: SnapshotId){
         let state = JoinKeyedInnerState{
@@ -417,6 +433,7 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
         };
         self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id, state);
     }
+    #[cfg(feature = "persist-state")]
     /// Save terminated state
     fn save_terminate(&mut self){
         let state = JoinKeyedInnerState{
@@ -445,6 +462,7 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
 
         self.operator_coord.setup_coord(metadata.coord);
 
+        #[cfg(feature = "persist-state")]
         if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<JoinKeyedInnerState<K, V1, V2>>();
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
@@ -480,12 +498,14 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
                     return StreamElement::FlushAndRestart;
                 }
                 StreamElement::Terminate => {
+                    #[cfg(feature = "persist-state")]
                     if self.persistency_service.is_some() {
                         self.save_terminate();
                     }
                     return StreamElement::Terminate;
                 }
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
+                #[cfg(feature = "persist-state")]
                 StreamElement::Snapshot(snapshot_id) => {
                     self.save_snap(snapshot_id.clone());
                     return StreamElement::Snapshot(snapshot_id);
@@ -511,6 +531,7 @@ impl<K: DataKey + ExchangeData + Debug, V1: ExchangeData + Debug, V2: ExchangeDa
         self.operator_coord.operator_id
     }
 
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
         let mut res = self.prev.get_stateful_operators();
         // This operator is stateful

@@ -7,13 +7,17 @@ use itertools::Itertools;
 
 use crate::block::{BatchMode, Block, BlockStructure, JobGraphGenerator, Replication};
 use crate::config::{EnvironmentConfig, ExecutionRuntime, LocalRuntimeConfig, RemoteRuntimeConfig};
-use crate::network::{Coord, NetworkTopology, OperatorCoord};
+use crate::network::{Coord, NetworkTopology};
 use crate::operator::{Data, Operator};
-use crate::persistency::builder::PersistencyBuilder;
 use crate::profiler::{wait_profiler, ProfilerResult};
 use crate::worker::spawn_worker;
 use crate::CoordUInt;
 use crate::TracingData;
+
+#[cfg(feature = "persist-state")]
+use crate::persistency::builder::PersistencyBuilder;
+#[cfg(feature = "persist-state")]
+use crate::network::OperatorCoord;
 
 /// Identifier of a block in the job graph.
 pub type BlockId = CoordUInt;
@@ -43,10 +47,13 @@ pub struct ExecutionMetadata<'a> {
     /// The batching mode to use inside this block.
     pub batch_mode: BatchMode,
     /// Persistency for saving the state
+    #[cfg(feature = "persist-state")]
     pub(crate) persistency_builder: Option<&'a PersistencyBuilder>,
     /// Strategy to align snapshot tokens before iterative operators
+    #[cfg(feature = "persist-state")]
     pub(crate) iterations_snapshot_alignment: bool,
     /// True if the stream contains iterative operators
+    #[cfg(feature = "persist-state")]
     pub(crate) contains_iterative_oper: bool,
 }
 
@@ -64,6 +71,7 @@ struct SchedulerBlockInfo {
     /// Whether this block has `NextStrategy::OnlyOne`.
     is_only_one_strategy: bool,
     /// List with operators id of all stateful operators in the block
+    #[cfg(feature = "persist-state")]
     stateful_op: Vec<OperatorId>,
 }
 
@@ -83,17 +91,22 @@ pub(crate) struct Scheduler {
     /// The network topology that keeps track of all the connections inside the execution graph.
     network: NetworkTopology,
     /// Persistency service
+    #[cfg(feature = "persist-state")]
     persistency_builder: Option<PersistencyBuilder>,
     /// List with coordinates of all operators in the network
+    #[cfg(feature = "persist-state")]
     operators_coordinates: Vec<OperatorCoord>,
     /// If true, sources of the stream will produce just 1 Snapshot token before FlushAndRestart
     /// If false, in case of iterations the snapshot alignment is done with a special block
+    #[cfg(feature = "persist-state")]
     pub(crate) iterations_snapshot_alignment: bool,
     /// Keep track of the number of iterative operators (not the nested ones)
+    #[cfg(feature = "persist-state")]
     pub(crate) iterative_operators_counter: u64,
 }
 
 impl Scheduler {
+    #[cfg(feature = "persist-state")]
     pub fn new(config: EnvironmentConfig) -> Self {
         let pers_conf = config.persistency_configuration.clone();
         let mut pers_builder = None;
@@ -113,6 +126,17 @@ impl Scheduler {
             operators_coordinates: Default::default(),
             iterations_snapshot_alignment: isa,
             iterative_operators_counter: 0,
+        }
+    }
+    #[cfg(not(feature = "persist-state"))]
+    pub fn new(config: EnvironmentConfig) -> Self {
+        Self {
+            next_blocks: Default::default(),
+            prev_blocks: Default::default(),
+            block_info: Default::default(),
+            block_init: Default::default(),
+            network: NetworkTopology::new(config.clone()),
+            config,
         }
     }
 
@@ -137,6 +161,7 @@ impl Scheduler {
             // info
         );
 
+        #[cfg(feature = "persist-state")]
         if self.persistency_builder.is_some() {
             self.compute_coordinates(self.block_info(&block), block_id);
         }
@@ -169,6 +194,7 @@ impl Scheduler {
 
     // Compute and add operators coordinates of given block to operators_coordinates
     // If persistency is not configured, this is skipped
+    #[cfg(feature = "persist-state")]
     fn compute_coordinates(&mut self, info: SchedulerBlockInfo, block_id: BlockId){
         let stateful_ops = info.stateful_op.clone();
         let num_of_hosts = match &self.config.runtime {
@@ -228,17 +254,30 @@ impl Scheduler {
             let block_info = &self.block_info[&coord.block_id];
             let replicas = block_info.replicas.values().flatten().cloned().collect();
             let global_id = block_info.global_ids[&coord];
-            let mut metadata = ExecutionMetadata {
-                coord,
-                replicas,
-                global_id,
-                prev: self.network.prev(coord),
-                network: &mut self.network,
-                batch_mode: block_info.batch_mode,
-                persistency_builder: self.persistency_builder.as_ref(),
-                iterations_snapshot_alignment: self.iterations_snapshot_alignment,
-                contains_iterative_oper: self.iterative_operators_counter > 0,
-            };
+            let mut metadata;
+            #[cfg(feature = "persist-state")]{
+                metadata = ExecutionMetadata {
+                    coord,
+                    replicas,
+                    global_id,
+                    prev: self.network.prev(coord),
+                    network: &mut self.network,
+                    batch_mode: block_info.batch_mode,
+                    persistency_builder: self.persistency_builder.as_ref(),
+                    iterations_snapshot_alignment: self.iterations_snapshot_alignment,
+                    contains_iterative_oper: self.iterative_operators_counter > 0,
+                };
+            }
+            #[cfg(not(feature = "persist-state"))]{
+                metadata = ExecutionMetadata {
+                    coord,
+                    replicas,
+                    global_id,
+                    prev: self.network.prev(coord),
+                    network: &mut self.network,
+                    batch_mode: block_info.batch_mode,
+                };
+            }
             let (handle, structure) = init_fn(&mut metadata);
             join.push(handle);
             block_structures.push((coord, structure.clone()));
@@ -300,6 +339,7 @@ impl Scheduler {
         );
 
         // If set, try to restart from a snapshot
+        #[cfg(feature = "persist-state")]
         if let Some(persistency_conf) = self.config.persistency_configuration.clone(){
             if persistency_conf.try_restart {
                 self.persistency_builder.as_mut().unwrap().find_snapshot(self.operators_coordinates.clone(), persistency_conf.restart_from);
@@ -338,6 +378,7 @@ impl Scheduler {
 
             self.network.stop_and_wait();
 
+            #[cfg(feature = "persist-state")]
             if let Some(persistency_conf) = self.config.persistency_configuration{
                     // Stop state_saver
                     self.persistency_builder.as_mut().unwrap().stop_actual_sender();
@@ -465,6 +506,7 @@ impl Scheduler {
             global_ids: global_ids.into_iter().collect(),
             batch_mode: block.batch_mode,
             is_only_one_strategy: block.is_only_one_strategy,
+            #[cfg(feature = "persist-state")]
             stateful_op: block.operators.get_stateful_operators(),
         }
     }
@@ -536,6 +578,7 @@ impl Scheduler {
             global_ids,
             batch_mode: block.batch_mode,
             is_only_one_strategy: block.is_only_one_strategy,
+            #[cfg(feature = "persist-state")]
             stateful_op: block.operators.get_stateful_operators(),
         }
     }

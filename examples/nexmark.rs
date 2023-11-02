@@ -267,6 +267,7 @@ impl Q4Unary {
                     self.closing = true;
                     continue;
                 }
+                #[cfg(feature = "persist-state")]
                 StreamElement::Snapshot(_) => todo!()
             }
         }

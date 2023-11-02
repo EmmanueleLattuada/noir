@@ -7,9 +7,11 @@ use serde::{Serialize, Deserialize};
 use crate::block::{BlockStructure, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::{ExchangeData, Operator, StreamElement, Timestamp};
+#[cfg(feature = "persist-state")]
 use crate::persistency::persistency_service::PersistencyService;
-use crate::scheduler::{ExecutionMetadata, OperatorId};
-
+use crate::scheduler::ExecutionMetadata;
+use crate::scheduler::OperatorId;
+#[cfg(feature = "persist-state")]
 use super::SnapshotId;
 
 
@@ -50,6 +52,7 @@ where
     last_watermark: Option<Timestamp>,
     prev: PreviousOperators,
     operator_coord: OperatorCoord,
+    #[cfg(feature = "persist-state")]
     persistency_service: Option<PersistencyService<ReorderState<Out>>>,
     received_end: bool,
 }
@@ -81,12 +84,14 @@ where
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
+            #[cfg(feature = "persist-state")]
             persistency_service: None,
             received_end: false,
         }
     }
 
     /// Save state for snapshot
+    #[cfg(feature = "persist-state")]
     fn save_snap(&mut self, snapshot_id: SnapshotId){
          let state = ReorderState {
             buffer: self.buffer.clone(),
@@ -97,6 +102,7 @@ where
         self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id, state);
     }
     /// Save terminated state
+    #[cfg(feature = "persist-state")]
     fn save_terminate(&mut self){
          let state = ReorderState {
             buffer: self.buffer.clone(),
@@ -108,6 +114,7 @@ where
     }
 }
 
+#[cfg(feature = "persist-state")]
 #[derive(Clone, Serialize, Deserialize)]
 struct ReorderState<O> {
     buffer: VecDeque<TimestampedItem<O>>,
@@ -124,6 +131,7 @@ where
         self.prev.setup(metadata);
 
         self.operator_coord.setup_coord(metadata.coord);
+        #[cfg(feature = "persist-state")]
         if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<ReorderState<Out>>();
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
@@ -161,11 +169,13 @@ where
                     glidesort::sort_with_vec(self.buffer.make_contiguous(), &mut self.scratch);
                 }
                 StreamElement::Terminate => {
+                    #[cfg(feature = "persist-state")]
                     if self.persistency_service.is_some(){
                         self.save_terminate();
                     }
                     return StreamElement::Terminate;
                 }
+                #[cfg(feature = "persist-state")]
                 StreamElement::Snapshot(snap_id) => {
                     self.save_snap(snap_id.clone());
                     return StreamElement::Snapshot(snap_id);
@@ -207,6 +217,7 @@ where
         self.operator_coord.operator_id
     }
 
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
         let mut res = self.prev.get_stateful_operators();
         // This operator is stateful

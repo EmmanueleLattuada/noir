@@ -5,7 +5,9 @@ use crate::block::{BlockStructure, OperatorReceiver, OperatorStructure};
 use crate::channel::RecvTimeoutError;
 use crate::network::{Coord, NetworkMessage, NetworkReceiver, ReceiverEndpoint};
 use crate::operator::start::StartReceiver;
-use crate::operator::{ExchangeData, SnapshotId};
+use crate::operator::ExchangeData;
+#[cfg(feature = "persist-state")]
+use crate::operator::SnapshotId;
 use crate::scheduler::{BlockId, ExecutionMetadata};
 
 /// This will receive the data from a single previous block.
@@ -74,15 +76,19 @@ impl<Out: ExchangeData> StartReceiver<Out> for SimpleStartReceiver<Out> {
     }
 
     // Void type: get_state return always None
+    #[cfg(feature = "persist-state")]
     type ReceiverState = ();
 
+    #[cfg(feature = "persist-state")]
     fn get_state(&mut self, _snap_id: SnapshotId) -> Option<Self::ReceiverState> {
         // No state to be persisted
         None
     }
+    #[cfg(feature = "persist-state")]
     fn keep_msg_queue(&self) -> bool {
         false
     }
+    #[cfg(feature = "persist-state")]
     fn set_state(&mut self, _receiver_state: Self::ReceiverState) {}
 }
 

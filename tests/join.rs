@@ -51,7 +51,6 @@ macro_rules! run_test {
         build_expected_outer($n1, $n2, $m)
     }};
 }
-
 macro_rules! run_test_shortcut {
     ($env:expr, $n1:expr, $n2:expr, $m:expr, $variant:tt) => {{
         let s1 = $env.stream(IteratorSource::new(0..$n1));

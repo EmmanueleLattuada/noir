@@ -4,8 +4,8 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "persist-state")]
 use super::SnapshotId;
-
 mod iterate;
 mod iterate_delta;
 mod iteration_end;
@@ -34,7 +34,10 @@ impl IterationResult {
 ///
 /// - a boolean indicating if a new iteration should start
 /// - the new state for the next iteration
+#[cfg(feature = "persist-state")]
 pub(crate) type StateFeedback<State> = (IterationResult, State, Option<SnapshotId>);
+#[cfg(not(feature = "persist-state"))]
+pub(crate) type StateFeedback<State> = (IterationResult, State);
 
 /// A shared reference to the state of an iteration,
 ///

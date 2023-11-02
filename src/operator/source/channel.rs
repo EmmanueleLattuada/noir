@@ -6,9 +6,11 @@ use crate::block::{BlockStructure, OperatorKind, OperatorStructure, Replication}
 use crate::network::OperatorCoord;
 use crate::operator::source::Source;
 use crate::operator::{Data, Operator, StreamElement};
+#[cfg(feature = "persist-state")]
 use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::{ExecutionMetadata, OperatorId};
 
+#[cfg(feature = "persist-state")]
 use super::SnapshotGenerator;
 
 const MAX_RETRY: u8 = 8;
@@ -17,15 +19,17 @@ const MAX_RETRY: u8 = 8;
 ///
 /// The iterator will be consumed **only from one replica**, therefore this source is not parallel.
 
-#[derive(Derivative)]
-#[derivative(Debug)]
+#[derive(Debug)]
+//#[derivative(Debug)]
 pub struct ChannelSource<Out: Data> {
-    #[derivative(Debug = "ignore")]
+    //#[derivative(Debug = "ignore")]
     rx: Receiver<Out>,
     terminated: bool,
     retry_count: u8,
     operator_coord: OperatorCoord,
+    #[cfg(feature = "persist-state")]
     snapshot_generator: SnapshotGenerator,
+    #[cfg(feature = "persist-state")]
     persistency_service: Option<PersistencyService<()>>,
 }
 
@@ -63,7 +67,9 @@ impl<Out: Data> ChannelSource<Out> {
             // This is the first operator in the chain so operator_id = 0
             // Other fields will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, 0),
+            #[cfg(feature = "persist-state")]
             snapshot_generator: SnapshotGenerator::new(),
+            #[cfg(feature = "persist-state")]
             persistency_service: None,
         };
 
@@ -80,6 +86,7 @@ impl<Out: Data + core::fmt::Debug> Source<Out> for ChannelSource<Out> {
 impl<Out: Data + core::fmt::Debug> Operator<Out> for ChannelSource<Out> {
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.operator_coord.setup_coord(metadata.coord);
+        #[cfg(feature = "persist-state")]
         if let Some(pb) = metadata.persistency_builder {
             let p_service = pb.generate_persistency_service::<()>();
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
@@ -108,12 +115,14 @@ impl<Out: Data + core::fmt::Debug> Operator<Out> for ChannelSource<Out> {
     fn next(&mut self) -> StreamElement<Out> {
         loop {
             if self.terminated {
+                #[cfg(feature = "persist-state")]
                 if self.persistency_service.is_some(){
                     // Save terminated state
                     self.persistency_service.as_mut().unwrap().save_terminated_state(self.operator_coord, ());
                 } 
                 return StreamElement::Terminate;
             }
+            #[cfg(feature = "persist-state")]
             if self.persistency_service.is_some() {
                 // Check snapshot generator
                 let snapshot = self.snapshot_generator.get_snapshot_marker();
@@ -175,6 +184,7 @@ impl<Out: Data + core::fmt::Debug> Operator<Out> for ChannelSource<Out> {
         self.operator_coord.operator_id
     }
 
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
         // This operator is stateful
         vec![self.operator_coord.operator_id]

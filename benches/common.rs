@@ -1,7 +1,9 @@
 #![allow(unused)]
 
 use criterion::{black_box, Bencher};
-use noir::config::{ExecutionRuntime, RemoteHostConfig, RemoteRuntimeConfig, PersistencyConfig};
+use noir::config::{ExecutionRuntime, RemoteHostConfig, RemoteRuntimeConfig};
+#[cfg(feature = "persist-state")]
+use noir::config::PersistencyConfig;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
@@ -21,6 +23,7 @@ pub const REDIS_BENCH_CONFIGURATION: &str ="redis://127.0.0.1";
 pub fn remote_loopback_deploy(
     num_hosts: CoordUInt,
     cores_per_host: CoordUInt,
+    #[cfg(feature = "persist-state")]
     persistency_config: Option<PersistencyConfig>,
     body: impl Fn(&mut StreamEnvironment) + Send + Sync + 'static,
 ) {
@@ -51,6 +54,7 @@ pub fn remote_loopback_deploy(
             runtime: runtime.clone(),
             host_id: Some(host_id),
             skip_single_remote_check: true,
+            #[cfg(feature = "persist-state")]
             persistency_configuration: persistency_config.clone(),
         };
         let body = body.clone();
@@ -72,6 +76,7 @@ pub fn remote_loopback_deploy(
     }
 }
 
+#[cfg(feature = "persist-state")]
 pub struct PersistentBenchBuilder<F, G, R>
 where
     F: Fn() -> StreamEnvironment,
@@ -85,6 +90,7 @@ where
     run_count: u64,
 }
 
+#[cfg(feature = "persist-state")]
 impl<F, G, R> PersistentBenchBuilder<F, G, R>
 where
     F: Fn() -> StreamEnvironment,
@@ -127,6 +133,7 @@ where
     }
 }
 
+#[cfg(feature = "persist-state")]
 pub fn persist_interval(
     interval: Duration,
 ) -> PersistencyConfig {
@@ -141,6 +148,7 @@ pub fn persist_interval(
     }
 }
 
+#[cfg(feature = "persist-state")]
 pub fn persist_count(
     count: u64,
 ) -> PersistencyConfig {
@@ -155,6 +163,7 @@ pub fn persist_count(
     }
 }
 
+#[cfg(feature = "persist-state")]
 pub fn persist_none() -> PersistencyConfig {
     PersistencyConfig {
         server_addr: String::from(REDIS_BENCH_CONFIGURATION),

@@ -1,4 +1,7 @@
+
+#[cfg(feature = "persist-state")]
 use noir::StreamEnvironment;
+#[cfg(feature = "persist-state")]
 use serial_test::serial;
 use std::time::Duration;
 
@@ -32,6 +35,7 @@ fn tumbling_processing_time() {
     });
 }
 
+#[cfg(feature = "persist-state")]
 #[test]
 #[serial]
 fn tumbling_processing_time_persistency() {

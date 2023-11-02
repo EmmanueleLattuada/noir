@@ -1,6 +1,8 @@
+#[cfg(feature = "persist-state")]
 use std::collections::VecDeque;
 use std::time::Duration;
 
+#[cfg(feature = "persist-state")]
 use hashbrown::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
@@ -8,7 +10,9 @@ use crate::block::{BlockStructure, OperatorReceiver, OperatorStructure};
 use crate::channel::{RecvTimeoutError, SelectResult};
 use crate::network::{Coord, NetworkMessage};
 use crate::operator::start::{SimpleStartReceiver, StartReceiver};
-use crate::operator::{Data, ExchangeData, StreamElement, SnapshotId};
+use crate::operator::{Data, ExchangeData, StreamElement};
+#[cfg(feature = "persist-state")]
+use crate::operator::SnapshotId;
 use crate::scheduler::{BlockId, ExecutionMetadata};
 
 /// This enum is an _either_ type, it contain either an element from the left part or an element
@@ -127,18 +131,28 @@ pub(crate) struct BinaryStartReceiver<OutL: ExchangeData, OutR: ExchangeData> {
     right: SideReceiver<OutR, BinaryElement<OutL, OutR>>,
     first_message: bool,
 
+    #[cfg(feature = "persist-state")]
     persistency_active: bool,
+    #[cfg(feature = "persist-state")]
     on_going_snapshots: HashMap<SnapshotId, (BinaryReceiverState<OutL, OutR>, HashSet<Coord>)>,
+    #[cfg(feature = "persist-state")]
     persisted_message_queue_left: VecDeque<NetworkMessage<OutL>>,
+    #[cfg(feature = "persist-state")]
     persisted_message_queue_right: VecDeque<NetworkMessage<OutR>>,
+    #[cfg(feature = "persist-state")]
     terminated_replicas: Vec<Coord>,
+    #[cfg(feature = "persist-state")]
     last_snapshots: HashMap<Coord, SnapshotId>,
+    #[cfg(feature = "persist-state")]
     iteration_stack_level: usize,
+    #[cfg(feature = "persist-state")]
     iteration_index: Option<u64>,
+    #[cfg(feature = "persist-state")]
     should_flush_cached_side: bool,
 }
 
 impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
+    #[cfg(feature = "persist-state")]
     pub(super) fn new(
         left_block_id: BlockId,
         right_block_id: BlockId,
@@ -166,6 +180,23 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
             should_flush_cached_side: false,
         }
     }
+    #[cfg(not(feature = "persist-state"))]
+    pub(super) fn new(
+        left_block_id: BlockId,
+        right_block_id: BlockId,
+        left_cache: bool,
+        right_cache: bool,
+    ) -> Self {
+        assert!(
+            !(left_cache && right_cache),
+            "At most one of the two sides can be cached"
+        );
+        Self {
+            left: SideReceiver::new(left_block_id, left_cache),
+            right: SideReceiver::new(right_block_id, right_cache),
+            first_message: false,
+        }
+    }
 
     /// Process the incoming batch from left side.
     ///
@@ -183,6 +214,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
         let mut to_return = Vec::new();
 
         for el in message.into_iter() {
+            #[cfg(feature = "persist-state")]
             if self.should_flush_cached_side && self.left.cached{
                 //flush this side untill flushAnd Restart
                 if matches!(el, StreamElement::FlushAndRestart) {
@@ -211,7 +243,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
                         // extend to_return with to_cache
                         to_return.extend(to_cache);
                         to_cache = Vec::new();
-
+                        #[cfg(feature = "persist-state")]
                         if self.persistency_active {
                             // put previous msgs in all partial snapshot that have sender in the set
                             let last_msgs = NetworkMessage::new_batch(to_persist, sender);
@@ -224,6 +256,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
                         }
                     }
                 }
+                #[cfg(feature = "persist-state")]
                 StreamElement::Snapshot(mut snap_id) => {
                     // Set the iteration stack accordingly to iteration stack level
                     while snap_id.iteration_stack.len() < self.iteration_stack_level {
@@ -267,6 +300,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
         }
         // extend to_return with to_cache
         to_return.extend(to_cache);
+        #[cfg(feature = "persist-state")]
         if self.persistency_active {
             // put previous msgs in all partial snapshot that have sender in the set
             let last_msgs = NetworkMessage::new_batch(to_persist, sender);
@@ -290,6 +324,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
         let mut to_return = Vec::new();
 
         for el in message.into_iter() {
+            #[cfg(feature = "persist-state")]
             if self.should_flush_cached_side && self.right.cached{
                 //flush this side untill flushAnd Restart
                 if matches!(el, StreamElement::FlushAndRestart) {
@@ -317,7 +352,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
                         // extend to_return with to_cache
                         to_return.extend(to_cache);
                         to_cache = Vec::new();
-
+                        #[cfg(feature = "persist-state")]
                         if self.persistency_active {
                             // put previous msgs in all partial snapshot that have sender in the set
                             let last_msgs = NetworkMessage::new_batch(to_persist, sender);
@@ -330,6 +365,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
                         }
                     }
                 }
+                #[cfg(feature = "persist-state")]
                 StreamElement::Snapshot(mut snap_id) => {
                     // Set the iteration stack accordingly to iteration stack level
                     while snap_id.iteration_stack.len() < self.iteration_stack_level {
@@ -373,6 +409,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
         }
         // extend to_return with to_cache
         to_return.extend(to_cache);
+        #[cfg(feature = "persist-state")]
         if self.persistency_active {
             // put previous msgs in all partial snapshot that have sender in the set
             let last_msgs = NetworkMessage::new_batch(to_persist, sender);
@@ -384,6 +421,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
         NetworkMessage::new_batch(to_return, sender)
     }
 
+    #[cfg(feature = "persist-state")]
     fn state_copy(&mut self) -> BinaryReceiverState<OutL, OutR> {
         let left = SideReceiverState {
             missing_flush_and_restart: self.left.missing_flush_and_restart as u64,
@@ -411,6 +449,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
         }
     }
 
+    #[cfg(feature = "persist-state")]
     fn process_snapshot(&mut self, snap_id: SnapshotId, sender: Coord) {
         // Update last snapshots map
         self.last_snapshots.insert(sender, snap_id.clone());
@@ -435,7 +474,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
         }
     }
 
-
+    #[cfg(feature = "persist-state")]
     fn add_left_item_to_snapshot(&mut self, item: NetworkMessage<OutL>) {
         // Add item to message queue state 
         for entry in self.on_going_snapshots.iter_mut() {
@@ -444,7 +483,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
             }
         }
     }
-
+    #[cfg(feature = "persist-state")]
     fn add_right_item_to_snapshot(&mut self, item: NetworkMessage<OutR>) {
         // Add item to message queue state 
         for entry in self.on_going_snapshots.iter_mut() {
@@ -453,7 +492,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
             }
         }
     }
-
+    #[cfg(feature = "persist-state")]
     fn process_terminate(&mut self, sender: Coord) {
         // Be sure that is the first Terminate from this sender
         let mut snapshot_id = self.last_snapshots.get(&sender)
@@ -474,7 +513,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
             self.on_going_snapshots.get_mut(&partial_snapshot).unwrap().1.remove(&sender);
         }
     }
-
+    #[cfg(feature = "persist-state")]
     fn prev_replicas_for_snapshot(&self) -> Vec<Coord> {
         let mut previous = Vec::new();
         if !(self.left.cached && self.left.cache_full) {
@@ -498,11 +537,13 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
         // been emitted
         if self.left.is_terminated() && self.right.is_terminated() {
             let num_terminates = if self.left.cached {
+                #[cfg(feature = "persist-state")]
                 for sender in self.left.receiver.prev_replicas() {
                     self.process_terminate(sender);
                 }
                 self.left.instances
             } else if self.right.cached {
+                #[cfg(feature = "persist-state")]
                 for sender in self.right.receiver.prev_replicas() {
                     self.process_terminate(sender);
                 }
@@ -543,7 +584,9 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
             debug_assert!(!self.left.cached || self.left.cache_full);
             debug_assert!(!self.right.cached || self.right.cache_full);
             self.first_message = false;
+            #[cfg(feature = "persist-state")]
             if self.left.cached {
+                
                 if let Some(p_data) = self.persisted_message_queue_right.pop_front() {
                     Side::Right(Ok(p_data))
                 } else {
@@ -554,6 +597,8 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
             } else {
                 Side::Left(self.left.recv(timeout))
             }
+            #[cfg(not(feature = "persist-state"))]
+            Side::Left(self.left.recv(timeout))
         } else if self.left.cached && self.left.cache_full && !self.left.cache_finished() {
             // The left side is cached, therefore we can access it immediately
             return Ok(self.left.next_cached_item());
@@ -563,26 +608,67 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
         } else if self.left.is_ended() {
             // There is nothing more to read from the left side (if cached, all the cache has
             // already been read).
+            #[cfg(feature = "persist-state")]
             if let Some(p_data) = self.persisted_message_queue_right.pop_front() {
                 Side::Right(Ok(p_data))
             } else {
                 Side::Right(self.right.recv(timeout))
             }
+            #[cfg(not(feature = "persist-state"))]
+            Side::Right(self.right.recv(timeout))
         } else if self.right.is_ended() {
             // There is nothing more to read from the right side (if cached, all the cache has
             // already been read).
+            #[cfg(feature = "persist-state")]
             if let Some(p_data) = self.persisted_message_queue_left.pop_front() {
                 Side::Left(Ok(p_data))
             } else {
                 Side::Left(self.left.recv(timeout))
             }
+            #[cfg(not(feature = "persist-state"))]
+            Side::Left(self.left.recv(timeout))
         } else {
             // Get msg form persisted queues if any
+            #[cfg(feature = "persist-state")]
             if let Some(p_data) = self.persisted_message_queue_left.pop_front() {
                 Side::Left(Ok(p_data))
             } else if let Some(p_data) = self.persisted_message_queue_right.pop_front() {
                 Side::Right(Ok(p_data))
             } else {
+                let left_terminated = self.left.is_terminated();
+                let right_terminated = self.right.is_terminated();
+                let left = self.left.receiver.receiver.as_mut().unwrap();
+                let right = self.right.receiver.receiver.as_mut().unwrap();
+
+                let data = match (left_terminated, right_terminated, timeout) {
+                    (false, false, Some(timeout)) => left.select_timeout(right, timeout),
+                    (false, false, None) => Ok(left.select(right)),
+
+                    (true, false, Some(timeout)) => {
+                        right.recv_timeout(timeout).map(|r| SelectResult::B(Ok(r)))
+                    }
+                    (false, true, Some(timeout)) => {
+                        left.recv_timeout(timeout).map(|r| SelectResult::A(Ok(r)))
+                    }
+
+                    (true, false, None) => Ok(SelectResult::B(right.recv())),
+                    (false, true, None) => Ok(SelectResult::A(left.recv())),
+
+                    (true, true, _) => Err(RecvTimeoutError::Disconnected),
+                };
+
+                match data {
+                    Ok(SelectResult::A(left)) => {
+                        Side::Left(left.map_err(|_| RecvTimeoutError::Disconnected))
+                    }
+                    Ok(SelectResult::B(right)) => {
+                        Side::Right(right.map_err(|_| RecvTimeoutError::Disconnected))
+                    }
+                    // timeout
+                    Err(e) => Side::Left(Err(e)),
+                }
+            }
+            #[cfg(not(feature = "persist-state"))] {
                 let left_terminated = self.left.is_terminated();
                 let right_terminated = self.right.is_terminated();
                 let left = self.left.receiver.receiver.as_mut().unwrap();
@@ -636,7 +722,9 @@ impl<OutL: ExchangeData, OutR: ExchangeData> StartReceiver<BinaryElement<OutL, O
     fn setup(&mut self, metadata: &mut ExecutionMetadata) {
         self.left.setup(metadata);
         self.right.setup(metadata);
-        self.persistency_active = metadata.persistency_builder.is_some();
+        #[cfg(feature = "persist-state")] {
+            self.persistency_active = metadata.persistency_builder.is_some();
+        }
     }
 
     fn prev_replicas(&self) -> Vec<Coord> {
@@ -681,8 +769,10 @@ impl<OutL: ExchangeData, OutR: ExchangeData> StartReceiver<BinaryElement<OutL, O
         BlockStructure::default().add_operator(operator)
     }
 
+    #[cfg(feature = "persist-state")]
     type ReceiverState = BinaryReceiverState<OutL, OutR>;
 
+    #[cfg(feature = "persist-state")]
     fn get_state(&mut self, snap_id: SnapshotId) -> Option<Self::ReceiverState> {
         let entry = self.on_going_snapshots.get(&snap_id);
         if let Some((_, missing_rep)) = entry {
@@ -697,10 +787,12 @@ impl<OutL: ExchangeData, OutR: ExchangeData> StartReceiver<BinaryElement<OutL, O
 
     }
 
+    #[cfg(feature = "persist-state")]
     fn keep_msg_queue(&self) -> bool {
         true
     }
 
+    #[cfg(feature = "persist-state")]
     fn set_state(&mut self, receiver_state: Self::ReceiverState) {
         self.first_message = receiver_state.first_message;
         self.should_flush_cached_side = receiver_state.should_flush_cached_side;
@@ -725,6 +817,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> StartReceiver<BinaryElement<OutL, O
 
 
 
+#[cfg(feature = "persist-state")]
 #[derive(Clone, Serialize, Deserialize)]
 pub (crate) struct SideReceiverState<Item> {
     missing_flush_and_restart: u64,
@@ -735,6 +828,7 @@ pub (crate) struct SideReceiverState<Item> {
     cache_pointer: u64,
 }
 
+#[cfg(feature = "persist-state")]
 #[derive(Clone, Serialize, Deserialize)]
 pub (crate) struct BinaryReceiverState<OutL: Data, OutR: Data>{
     left: SideReceiverState<BinaryElement<OutL, OutR>>,
@@ -745,7 +839,7 @@ pub (crate) struct BinaryReceiverState<OutL: Data, OutR: Data>{
     should_flush_cached_side: bool,
 }
 
-
+#[cfg(feature = "persist-state")]
 impl<OutL: ExchangeData, OutR: ExchangeData> std::fmt::Debug for BinaryReceiverState<OutL, OutR>{
     fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         todo!()
@@ -753,6 +847,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> std::fmt::Debug for BinaryReceiverS
 }
 
 
+#[cfg(feature = "persist-state")]
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;

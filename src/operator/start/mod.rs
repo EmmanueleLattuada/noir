@@ -1,3 +1,4 @@
+#[cfg(feature = "persist-state")]
 use std::collections::{HashSet, HashMap, VecDeque};
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
@@ -5,20 +6,25 @@ use std::time::Duration;
 
 pub(crate) use binary::*;
 pub(crate) use simple::*;
+#[cfg(feature = "persist-state")]
 use serde::{Serialize, Deserialize};
 
+#[cfg(feature = "persist-state")]
 use super::SnapshotId;
 #[cfg(feature = "timestamp")]
 use super::Timestamp;
 use crate::block::{BlockStructure, Replication};
 use crate::channel::RecvTimeoutError;
-use crate::network::{Coord, NetworkDataIterator, NetworkMessage, OperatorCoord};
+use crate::network::{Coord, NetworkDataIterator, NetworkMessage};
+use crate::network::OperatorCoord;
 use crate::operator::iteration::IterationStateLock;
 use crate::operator::source::Source;
 use crate::operator::start::watermark_frontier::WatermarkFrontier;
 use crate::operator::{ExchangeData, Operator, StreamElement};
+#[cfg(feature = "persist-state")]
 use crate::persistency::persistency_service::PersistencyService;
-use crate::scheduler::{BlockId, ExecutionMetadata, OperatorId};
+use crate::scheduler::{ExecutionMetadata, BlockId};
+use crate::scheduler::OperatorId;
 
 mod binary;
 mod simple;
@@ -49,11 +55,15 @@ pub(crate) trait StartReceiver<Out>: Clone {
     fn structure(&self) -> BlockStructure;
 
     /// Type of the state of the receiver
+    #[cfg(feature = "persist-state")]
     type ReceiverState: ExchangeData + Debug;
+    #[cfg(feature = "persist-state")]
     /// Get the state of the receiver
     fn get_state(&mut self, snap_id: SnapshotId) -> Option<Self::ReceiverState>;
+    #[cfg(feature = "persist-state")]
     /// True if receiver keep snapshot message queue, false if not
     fn keep_msg_queue(&self) -> bool;
+    #[cfg(feature = "persist-state")]
     /// Set the state of the receiver
     fn set_state(&mut self, receiver_state: Self::ReceiverState);
 }
@@ -78,13 +88,17 @@ pub(crate) type SimpleStartOperator<Out> = Start<Out, SimpleStartReceiver<Out>>;
 pub(crate) struct Start<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> {
     /// Execution metadata of this block.
     max_delay: Option<Duration>,
-
     operator_coord: OperatorCoord,
+    #[cfg(feature = "persist-state")]
     persistency_service: Option<PersistencyService<StartState<Out, Receiver>>>,
     // Used to keep the on-going snapshots
+    #[cfg(feature = "persist-state")]
     on_going_snapshots: HashMap<SnapshotId, (StartState<Out, Receiver>, HashSet<Coord>)>,
+    #[cfg(feature = "persist-state")]
     persisted_message_queue: VecDeque<(Coord, StreamElement<Out>)>,
+    #[cfg(feature = "persist-state")]
     terminated_replicas: Vec<Coord>,
+    #[cfg(feature = "persist-state")]
     last_snapshots: HashMap<Coord, SnapshotId>,
 
     /// The actual receiver able to fetch messages from the network.
@@ -143,7 +157,9 @@ impl<OutL: ExchangeData, OutR: ExchangeData>
         left_cache: bool,
         right_cache: bool,
         state_lock: Option<Arc<IterationStateLock>>,
+        #[cfg(feature = "persist-state")]
         iteration_stack_level: usize,
+        #[cfg(feature = "persist-state")]
         iteration_index: Option<u64>
     ) -> BinaryStartOperator<OutL, OutR> {
         Start::new(
@@ -152,7 +168,9 @@ impl<OutL: ExchangeData, OutR: ExchangeData>
                 previous_block_id2,
                 left_cache,
                 right_cache,
+                #[cfg(feature = "persist-state")]
                 iteration_stack_level,
+                #[cfg(feature = "persist-state")]
                 iteration_index,
             ),
             state_lock,
@@ -168,10 +186,15 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
             // This is the first operator in the chain so operator_id is 0
             // Other fields will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, 0),
+            #[cfg(feature = "persist-state")]
             persistency_service: None,
+            #[cfg(feature = "persist-state")]
             on_going_snapshots: HashMap::new(),
+            #[cfg(feature = "persist-state")]
             persisted_message_queue: VecDeque::new(),
+            #[cfg(feature = "persist-state")]
             terminated_replicas: Vec::new(),
+            #[cfg(feature = "persist-state")]
             last_snapshots: HashMap::new(),
 
             receiver,
@@ -197,6 +220,7 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
 
     // return true -> forward snapshot token
     // return false -> don't forward
+    #[cfg(feature = "persist-state")]
     fn process_snapshot(&mut self, snap_id: &SnapshotId, sender: Coord) -> bool {
         // Update last snapshots map
         self.last_snapshots.insert(sender, snap_id.clone());
@@ -271,6 +295,7 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
         }
     }
 
+    #[cfg(feature = "persist-state")]
     fn add_item_to_snapshot(&mut self, item: &StreamElement<Out>, sender: Coord) {
         if !self.on_going_snapshots.is_empty() && !self.receiver.keep_msg_queue() {
             // Add item to message queue state 
@@ -282,6 +307,7 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
         }
     }
 
+    #[cfg(feature = "persist-state")]
     fn process_terminate(&mut self, sender: Coord){
         // Be sure this is the first Terminate we receive 
         let mut snapshot_id = self.last_snapshots.get(&sender)
@@ -319,6 +345,7 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
         }
     }
 
+    #[cfg(feature = "persist-state")]
     fn process_persisted_message_queue(&mut self) -> Option<StreamElement<Out>> {
         let (sender, item) = self.persisted_message_queue.pop_front().unwrap();
         let to_return = match item {
@@ -346,6 +373,7 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
     }
 }
 
+#[cfg(feature = "persist-state")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StartState<Out, Receiver: StartReceiver<Out>> {
     missing_flush_and_restart: u64,
@@ -382,6 +410,7 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Operator<
         self.max_delay = metadata.batch_mode.max_delay();
 
         self.operator_coord.setup_coord(metadata.coord);
+        #[cfg(feature = "persist-state")]
         if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<StartState<Out, Receiver>>();
             let snapshot_id =p_service.restart_from_snapshot(self.operator_coord);
@@ -417,6 +446,7 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Operator<
             // all the previous blocks sent an end: we're done
             if self.missing_terminate == 0 {
                 // If persistency is on, save terminate state
+                #[cfg(feature = "persist-state")]
                 if self.persistency_service.is_some() {
                     let state: StartState<Out, Receiver>= StartState{
                         missing_flush_and_restart: self.missing_flush_and_restart as u64,
@@ -442,6 +472,7 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Operator<
                 return StreamElement::FlushAndRestart;
             }
             // Process persisted message queue, if any
+            #[cfg(feature = "persist-state")]
             if !self.persisted_message_queue.is_empty() {
                 if let Some(to_return) = self.process_persisted_message_queue() {
                     return to_return;
@@ -461,6 +492,7 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Operator<
                     Some(item) => {
                         match item {
                             StreamElement::Watermark(ts) => {
+                                #[cfg(feature = "persist-state")]
                                 if self.persistency_service.is_some(){
                                     self.add_item_to_snapshot(&item, sender);
                                 }
@@ -471,6 +503,7 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Operator<
                                 }
                             }
                             StreamElement::FlushAndRestart => {
+                                #[cfg(feature = "persist-state")]
                                 if self.persistency_service.is_some(){
                                     self.add_item_to_snapshot(&item, sender);
                                 }
@@ -490,11 +523,13 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Operator<
                                     self.missing_terminate
                                 );
                                 // If persistency is on, process_terminate. This may return a Snapshot marker 
+                                #[cfg(feature = "persist-state")]
                                 if self.persistency_service.is_some() {
                                     self.process_terminate(sender);
                                 } 
                                 continue;
                             }
+                            #[cfg(feature = "persist-state")]
                             StreamElement::Snapshot(snapshot_id) => {
                                 if self.process_snapshot(&snapshot_id, sender) {
                                     StreamElement::Snapshot(snapshot_id)
@@ -503,6 +538,7 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Operator<
                                 }
                             }
                             _ => {
+                                #[cfg(feature = "persist-state")]
                                 self.add_item_to_snapshot(&item, sender);
                                 item
                             },
@@ -559,6 +595,7 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Operator<
         self.operator_coord.operator_id
     }
 
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
         // This operator is stateful
         vec![self.operator_coord.operator_id]
@@ -571,6 +608,7 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Source<Ou
     }
 }
 
+#[cfg(feature = "persist-state")]
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;

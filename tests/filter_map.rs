@@ -39,7 +39,7 @@ fn filter_map_keyed_stream() {
     });
 }
 
-
+#[cfg(feature = "persist-state")]
 #[test]
 #[serial]
 fn filter_map_keyed_stream_persistency() {

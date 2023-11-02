@@ -123,6 +123,7 @@ where
         // Clone parameters for new block
         let batch_mode = block.batch_mode;
         let iteration_ctx = block.iteration_ctx.clone();
+        #[cfg(feature = "persist-state")]
         let iteration_index = block.iteration_index;
         // Add end operator
         let mut block =
@@ -134,7 +135,11 @@ where
         let prev_id = env_lock.close_block(block);
         // Create new block
         let source = Start::single(prev_id, iteration_ctx.last().cloned());
+        #[cfg(feature = "persist-state")]
         let new_block = env_lock.new_block(source, batch_mode, iteration_ctx, iteration_index);
+        #[cfg(not(feature = "persist-state"))]
+        let new_block = env_lock.new_block(source, batch_mode, iteration_ctx);
+
         // Connect blocks
         env_lock.connect_blocks::<I>(prev_id, new_block.id);
 
@@ -156,6 +161,7 @@ where
     /// The start operator of the new block must support multiple inputs: the provided function
     /// will be called with the ids of the 2 input blocks and should return the new start operator
     /// of the new block.
+    #[cfg(feature = "persist-state")]
     pub(crate) fn binary_connection<I2, Op2, O, S, Fs, Fi, Fj>(
         self,
         oth: Stream<I2, Op2>,
@@ -236,6 +242,112 @@ where
         );
 
         let mut new_block = env_lock.new_block(source, batch_mode, iteration_ctx, iteration_index);
+        let id_new = new_block.id;
+
+        env_lock.connect_blocks::<I>(id_1, id_new);
+        env_lock.connect_blocks::<I2>(id_2, id_new);
+
+        drop(env_lock);
+
+        // make sure the new block has the same parallelism of the previous one with OnlyOne
+        // strategy
+        new_block.scheduler_requirements = match (is_one_1, is_one_2) {
+            (true, _) => sched_1,
+            (_, true) => sched_2,
+            _ => SchedulerRequirements::default(),
+        };
+
+        Stream {
+            block: new_block,
+            env,
+        }
+    }
+
+    /// Similar to `.add_block`, but with 2 incoming blocks.
+    ///
+    /// This will add a new Y connection between two blocks. The two incoming blocks will be closed
+    /// and a new one will be created with the 2 previous ones coming into it.
+    ///
+    /// This won't add any network shuffle, hence the next strategy will be `OnlyOne`. For this
+    /// reason the 2 input streams must have the same parallelism, otherwise this function panics.
+    ///
+    /// The start operator of the new block must support multiple inputs: the provided function
+    /// will be called with the ids of the 2 input blocks and should return the new start operator
+    /// of the new block.
+    #[cfg(not(feature = "persist-state"))]
+    pub(crate) fn binary_connection<I2, Op2, O, S, Fs, Fi, Fj>(
+        self,
+        oth: Stream<I2, Op2>,
+        get_start_operator: Fs,
+        next_strategy1: NextStrategy<I, Fi>,
+        next_strategy2: NextStrategy<I2, Fj>,
+    ) -> Stream<O, S>
+    where
+        I: ExchangeData,
+        I2: ExchangeData,
+        Fi: KeyerFn<u64, I>,
+        Fj: KeyerFn<u64, I2>,
+        Op2: Operator<I2> + 'static,
+        O: Data,
+        S: Operator<O> + Source<O>,
+        Fs: FnOnce(BlockId, BlockId, bool, bool, Option<Arc<IterationStateLock>>) -> S,
+    {
+        let Stream { block: b1, env } = self;
+        let Stream { block: b2, .. } = oth;
+
+        let batch_mode = b1.batch_mode;
+        let is_one_1 = matches!(next_strategy1, NextStrategy::OnlyOne);
+        let is_one_2 = matches!(next_strategy2, NextStrategy::OnlyOne);
+        let sched_1 = b1.scheduler_requirements.clone();
+        let sched_2 = b2.scheduler_requirements.clone();
+        if is_one_1 && is_one_2 && sched_1.replication != sched_2.replication {
+            panic!(
+                "The parallelism of the 2 blocks coming inside a Y connection must be equal. \
+                On the left ({}) is {:?}, on the right ({}) is {:?}",
+                b1, sched_1.replication, b2, sched_2.replication
+            );
+        }
+
+        let iter_ctx_1 = b1.iteration_ctx();
+        let iter_ctx_2 = b2.iteration_ctx();
+        let (iteration_ctx, left_cache, right_cache) = if iter_ctx_1 == iter_ctx_2 {
+            (b1.iteration_ctx.clone(), false, false)
+        } else {
+            if !iter_ctx_1.is_empty() && !iter_ctx_2.is_empty() {
+                panic!("Side inputs are supported only if one of the streams is coming from outside any iteration");
+            }
+            if iter_ctx_1.is_empty() {
+                // self is the side input, cache it
+                (b2.iteration_ctx.clone(), true, false)
+            } else {
+                // oth is the side input, cache it
+                (b1.iteration_ctx.clone(), false, true)
+            }
+        };
+
+        // close previous blocks
+
+        let mut b1 = b1.add_operator(|prev| End::new(prev, next_strategy1, batch_mode));
+        let mut b2 = b2.add_operator(|prev| End::new(prev, next_strategy2, batch_mode));
+        b1.is_only_one_strategy = is_one_1;
+        b2.is_only_one_strategy = is_one_2;
+
+        let mut env_lock = env.lock();
+        let id_1 = b1.id;
+        let id_2 = b2.id;
+
+        env_lock.close_block(b1);
+        env_lock.close_block(b2);
+
+        let source = get_start_operator(
+            id_1,
+            id_2,
+            left_cache,
+            right_cache,
+            iteration_ctx.last().cloned(),
+        );
+
+        let mut new_block = env_lock.new_block(source, batch_mode, iteration_ctx);
         let id_new = new_block.id;
 
         env_lock.connect_blocks::<I>(id_1, id_new);

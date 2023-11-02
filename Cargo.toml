@@ -18,6 +18,7 @@ timestamp = []
 ssh = ["ssh2", "whoami", "shell-escape", "sha2", "base64"]
 async-tokio = ["tokio", "flume", "futures", "tokio/net", "tokio/io-util", "tokio/time", "tokio/rt-multi-thread", "tokio/macros"]
 profiler = []
+persist-state = []
 
 [dependencies]
 # for logging to the console
@@ -154,15 +155,19 @@ harness = false
 [[bench]]
 name = "wordcount_persistency"
 harness = false
+required-features = ["persist-state"]
 [[bench]]
 name = "wordcount_persistency_2"
 harness = false
+required-features = ["persist-state"]
 [[bench]]
 name = "nexmark_persistency"
 harness = false
+required-features = ["persist-state"]
 [[bench]]
 name = "iterations_persistency"
 harness = false
+required-features = ["persist-state"]
 
 [profile.release]
 lto = true

@@ -11,12 +11,13 @@ use serde::{Serialize, Deserialize};
 
 use crate::block::{GroupHasherBuilder, OperatorStructure, Replication};
 use crate::network::OperatorCoord;
-use crate::operator::{Data, DataKey, ExchangeData, Operator, StreamElement, Timestamp};
+use crate::operator::{Data, DataKey, ExchangeData, ExchangeDataKey, Operator, StreamElement, Timestamp};
+#[cfg(feature = "persist-state")]
 use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::OperatorId;
 use crate::stream::{KeyedStream, Stream, WindowedStream};
-
-use super::{ExchangeDataKey, SnapshotId};
+#[cfg(feature = "persist-state")]
+use super::SnapshotId;
 
 mod aggr;
 mod descr;
@@ -147,6 +148,7 @@ where
     prev: Prev,
     /// Operator coordinate
     operator_coord: OperatorCoord,
+    #[cfg(feature = "persist-state")]
     /// Persistency service
     persistency_service: Option<PersistencyService<WindowOperatorState<Key, W::ManagerState>>>,
     /// The name of the actual operator that this one abstracts.
@@ -202,6 +204,7 @@ where
         self.prev.setup(metadata);
 
         self.operator_coord.setup_coord(metadata.coord);
+        #[cfg(feature = "persist-state")]
         if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<WindowOperatorState<Key, W::ManagerState>>();
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
@@ -231,6 +234,7 @@ where
     fn next(&mut self) -> StreamElement<(Key, Out)> {
         loop {
             if let Some(item) = self.output_buffer.pop_front() {
+                #[cfg(feature = "persist-state")]
                 if matches!(item, StreamElement::Terminate) && self.persistency_service.is_some(){
                     self.save_terminate();
                 }
@@ -256,6 +260,7 @@ where
                     );
                 }
                 StreamElement::FlushBatch => return StreamElement::FlushBatch,
+                #[cfg(feature = "persist-state")]
                 StreamElement::Snapshot(snap_id) => {
                     self.save_snap(snap_id.clone());
                     self.output_buffer.push_back(StreamElement::Snapshot(snap_id));
@@ -299,6 +304,7 @@ where
         self.operator_coord.operator_id
     }
 
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
         let mut res = self.prev.get_stateful_operators();
         // This operator is stateful
@@ -325,6 +331,7 @@ where
             prev,  
             // This will be set in setup method          
             operator_coord: OperatorCoord::new(0, 0, 0, op_id),
+            #[cfg(feature = "persist-state")]
             persistency_service: None,
             name,
             manager,
@@ -332,6 +339,7 @@ where
         }
     }
 
+    #[cfg(feature = "persist-state")]
     /// Save state for snapshot
     fn save_snap(&mut self, snapshot_id: SnapshotId){
         let windows = HashMap::from_iter(
@@ -348,6 +356,7 @@ where
         };
         self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id, state);
     }
+    #[cfg(feature = "persist-state")]
     /// Save terminated state
     fn save_terminate(&mut self){
         let windows = HashMap::from_iter(

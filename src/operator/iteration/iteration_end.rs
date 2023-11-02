@@ -1,8 +1,11 @@
 use crate::block::{BlockStructure, Connection, NextStrategy, OperatorStructure};
-use crate::network::{NetworkMessage, NetworkSender, ReceiverEndpoint, OperatorCoord};
+use crate::network::{NetworkMessage, NetworkSender, ReceiverEndpoint};
+use crate::network::OperatorCoord;
 use crate::operator::{ExchangeData, Operator, StreamElement};
+#[cfg(feature = "persist-state")]
 use crate::persistency::persistency_service::PersistencyService;
-use crate::scheduler::{BlockId, ExecutionMetadata, OperatorId};
+use crate::scheduler::{BlockId, ExecutionMetadata};
+use crate::scheduler::OperatorId;
 
 /// Similar to `End`, but tied specifically for the iterations.
 ///
@@ -32,6 +35,7 @@ where
     /// The sender that points to the `IterationLeader` for sending the `DeltaUpdate` messages.
     leader_sender: Option<NetworkSender<DeltaUpdate>>,
     /// PersistencyService
+    #[cfg(feature = "persist-state")]
     persistency_service: Option<PersistencyService<bool>>,
 }
 
@@ -63,6 +67,7 @@ where
             has_received_item: false,
             leader_block_id,
             leader_sender: None,
+            #[cfg(feature = "persist-state")]
             persistency_service: None,
         }
     }
@@ -90,9 +95,11 @@ where
         self.leader_sender = Some(sender);
 
         self.operator_coord.setup_coord(metadata.coord);
+
         self.prev.setup(metadata);
 
         // Setup persistency
+        #[cfg(feature = "persist-state")]
         if let Some(pb) = metadata.persistency_builder {
             let p_service = pb.generate_persistency_service::<bool>(); 
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
@@ -135,6 +142,7 @@ where
             StreamElement::Terminate => {
                 let message = NetworkMessage::new_single(StreamElement::Terminate, self.operator_coord.get_coord());
                 self.leader_sender.as_ref().unwrap().send(message).unwrap();
+                #[cfg(feature = "persist-state")]
                 if self.persistency_service.is_some() {
                     let state = self.has_received_item;
                     self.persistency_service
@@ -148,6 +156,7 @@ where
                 StreamElement::Terminate
             }
             StreamElement::FlushBatch => elem.map(|_| unreachable!()),
+            #[cfg(feature = "persist-state")]
             StreamElement::Snapshot(snap_id) => {
                 //save state
                 let state = self.has_received_item;
@@ -181,7 +190,8 @@ where
     fn get_op_id(&self) -> OperatorId {
         self.operator_coord.operator_id
     }
-    
+
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
         let mut res = self.prev.get_stateful_operators();
         // This operator is stateful

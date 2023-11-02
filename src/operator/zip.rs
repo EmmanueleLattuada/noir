@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::fmt::Display;
 use std::sync::Arc;
 
+#[cfg(feature = "persist-state")]
 use serde::{Deserialize, Serialize};
 
 use crate::block::{BlockStructure, OperatorReceiver, OperatorStructure, Replication};
@@ -9,9 +10,12 @@ use crate::network::OperatorCoord;
 use crate::operator::iteration::IterationStateLock;
 use crate::operator::start::{BinaryElement, BinaryStartOperator, Start};
 use crate::operator::{ExchangeData, Operator, StreamElement};
+#[cfg(feature = "persist-state")]
 use crate::persistency::persistency_service::PersistencyService;
-use crate::scheduler::{BlockId, ExecutionMetadata, OperatorId};
+use crate::scheduler::{BlockId, ExecutionMetadata};
+use crate::scheduler::OperatorId;
 
+#[cfg(feature = "persist-state")]
 use super::SnapshotId;
 use super::source::Source;
 
@@ -19,6 +23,7 @@ use super::source::Source;
 pub struct Zip<Out1: ExchangeData, Out2: ExchangeData> {
     prev: BinaryStartOperator<Out1, Out2>,
     operator_coord: OperatorCoord,
+    #[cfg(feature = "persist-state")]
     persistency_service: Option<PersistencyService<ZipState<Out1, Out2>>>,
     stash1: VecDeque<StreamElement<Out1>>,
     stash2: VecDeque<StreamElement<Out2>>,
@@ -44,7 +49,9 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Zip<Out1, Out2> {
         left_cache: bool,
         right_cache: bool,
         state_lock: Option<Arc<IterationStateLock>>,
+        #[cfg(feature = "persist-state")]
         iter_stack_level: usize,
+        #[cfg(feature = "persist-state")]
         iteration_index: Option<u64>,
     ) -> Self {
         Self {
@@ -54,12 +61,15 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Zip<Out1, Out2> {
                 left_cache,
                 right_cache,
                 state_lock,
+                #[cfg(feature = "persist-state")]
                 iter_stack_level,
+                #[cfg(feature = "persist-state")]
                 iteration_index
             ),
             // Since previous operator is the first in the chain, this will have op_id 1
             // Other fields will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, 1),
+            #[cfg(feature = "persist-state")]
             persistency_service: None,
             stash1: Default::default(),
             stash2: Default::default(),
@@ -69,6 +79,7 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Zip<Out1, Out2> {
     }
 
     /// Save state for snapshot
+    #[cfg(feature = "persist-state")]
     fn save_snap(&mut self, snapshot_id: SnapshotId){
         let state = ZipState {
             stash1: self.stash1.clone(),
@@ -77,6 +88,7 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Zip<Out1, Out2> {
         self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id, state);
     }
     /// Save terminated state
+    #[cfg(feature = "persist-state")]
     fn save_terminate(&mut self){
         let state = ZipState {
             stash1: self.stash1.clone(),
@@ -86,6 +98,7 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Zip<Out1, Out2> {
     }
 }
 
+#[cfg(feature = "persist-state")]
 #[derive(Clone, Serialize, Deserialize)]
 struct ZipState<O1, O2> {
     stash1: VecDeque<StreamElement<O1>>,
@@ -98,6 +111,7 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Operator<(Out1, Out2)> for Zip<Out1
         self.prev.setup(metadata);
 
         self.operator_coord.setup_coord(metadata.coord);
+        #[cfg(feature = "persist-state")]
         if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<ZipState<Out1, Out2>>();
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
@@ -154,12 +168,14 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Operator<(Out1, Out2)> for Zip<Out1
                 }
 
                 StreamElement::Terminate => {
+                    #[cfg(feature = "persist-state")]
                     if self.persistency_service.is_some(){
                         self.save_terminate();
                     }
                     return StreamElement::Terminate
                 }
 
+                #[cfg(feature = "persist-state")]
                 StreamElement::Snapshot(snap_id) => {
                     self.save_snap(snap_id.clone());
                     return StreamElement::Snapshot(snap_id);
@@ -195,7 +211,7 @@ impl<Out1: ExchangeData, Out2: ExchangeData> Operator<(Out1, Out2)> for Zip<Out1
     fn get_op_id(&self) -> OperatorId {
         self.operator_coord.operator_id
     }
-
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
         let mut res = self.prev.get_stateful_operators();
         // This operator is stateful
@@ -224,7 +240,14 @@ mod tests {
         let (coord_l, sender_l) = t.senders_mut()[0].pop().unwrap();
         let (coord_r, sender_r) = t.senders_mut()[1].pop().unwrap();
 
-        let mut zip = Zip::<i32, i32>::new(coord_l.block_id, coord_r.block_id, false, false, None, 0, None);
+        let mut zip;
+        #[cfg(feature = "persist-state")]{
+            zip = Zip::<i32, i32>::new(coord_l.block_id, coord_r.block_id, false, false, None, 0, None);
+        }
+        #[cfg(not(feature = "persist-state"))]{
+            zip = Zip::<i32, i32>::new(coord_l.block_id, coord_r.block_id, false, false, None);
+        }
+
         zip.setup(&mut t.metadata());
 
         let send = |sender: &NetworkSender<i32>, from: Coord, data: Vec<StreamElement<i32>>| {

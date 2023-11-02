@@ -376,7 +376,10 @@ fn bench_main(c: &mut Criterion) {
                 |b, size| {
                     let size = *size;
                     b.iter(|| {
+                        #[cfg(feature = "persist-state")]
                         remote_loopback_deploy(4, 4, None, move |env| run_query(env, $q, size));
+                        #[cfg(not(feature = "persist-state"))]
+                        remote_loopback_deploy(4, 4, move |env| run_query(env, $q, size));
                     })
                 },
             );

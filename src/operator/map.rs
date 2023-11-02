@@ -4,7 +4,8 @@ use std::marker::PhantomData;
 use crate::block::{BlockStructure, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::{Data, Operator, StreamElement};
-use crate::scheduler::{ExecutionMetadata, OperatorId};
+use crate::scheduler::ExecutionMetadata;
+use crate::scheduler::OperatorId;
 
 #[derive(Clone, Derivative)]
 #[derivative(Debug)]
@@ -78,6 +79,7 @@ where
             StreamElement::Terminate => StreamElement::Terminate,
             StreamElement::FlushAndRestart => StreamElement::FlushAndRestart,
             StreamElement::FlushBatch => StreamElement::FlushBatch,
+            #[cfg(feature = "persist-state")]
             StreamElement::Snapshot(snap_id) => StreamElement::Snapshot(snap_id),
         }
     }
@@ -90,11 +92,10 @@ where
             .structure()
             .add_operator(operator)
     }
-
     fn get_op_id(&self) -> OperatorId {
         self.operator_coord.operator_id
     }
-
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
         // This operator is stateless
         self.prev.get_stateful_operators()

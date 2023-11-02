@@ -1,8 +1,10 @@
 use itertools::Itertools;
 
+#[cfg(feature = "persist-state")]
 use noir::StreamEnvironment;
 use noir::operator::source::IteratorSource;
 use noir::operator::window::CountWindow;
+#[cfg(feature = "persist-state")]
 use serial_test::serial;
 
 use super::utils::TestHelper;
@@ -192,7 +194,7 @@ fn test_map_window_keyed() {
     });
 }
 
-
+#[cfg(feature = "persist-state")]
 #[test]
 #[serial]
 fn test_first_window_keyed_persistency() {

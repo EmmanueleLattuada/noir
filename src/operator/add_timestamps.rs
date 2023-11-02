@@ -1,14 +1,17 @@
 use std::fmt::Display;
 use std::marker::PhantomData;
 
+#[cfg(feature = "persist-state")]
 use serde::{Serialize, Deserialize};
 
 use crate::block::{BlockStructure, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::{Data, Operator, StreamElement, Timestamp};
+#[cfg(feature = "persist-state")]
 use crate::persistency::persistency_service::PersistencyService;
-use crate::scheduler::{ExecutionMetadata, OperatorId};
-
+use crate::scheduler::ExecutionMetadata;
+use crate::scheduler::OperatorId;
+#[cfg(feature = "persist-state")]
 use super::SnapshotId;
 
 #[derive(Clone)]
@@ -20,6 +23,7 @@ where
 {
     prev: OperatorChain,
     operator_coord : OperatorCoord,
+    #[cfg(feature = "persist-state")]
     persistency_service: Option<PersistencyService<AddTimestampState>>,
     timestamp_gen: TimestampGen,
     watermark_gen: WatermarkGen,
@@ -27,6 +31,7 @@ where
     _out: PhantomData<Out>,
 }
 
+#[cfg(feature = "persist-state")]
 #[derive(Clone, Serialize, Deserialize)]
 struct AddTimestampState{
     pending_watermark: Option<Timestamp>,
@@ -61,6 +66,7 @@ where
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0,0,0,op_id),
+            #[cfg(feature = "persist-state")]
             persistency_service: None,
             timestamp_gen,
             watermark_gen,
@@ -69,11 +75,13 @@ where
         }
     }
     
+    #[cfg(feature = "persist-state")]
     /// Save state for snapshot
     fn save_snap(&mut self, snapshot_id: SnapshotId){
         let state = AddTimestampState{pending_watermark: self.pending_watermark};
         self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id, state);
     }
+    #[cfg(feature = "persist-state")]
     /// Save terminated state
     fn save_terminate(&mut self){
         let state = AddTimestampState{pending_watermark: self.pending_watermark};
@@ -92,6 +100,7 @@ where
         self.prev.setup(metadata);
 
         self.operator_coord.setup_coord(metadata.coord);
+        #[cfg(feature = "persist-state")]
         if let Some(pb) = metadata.persistency_builder {
             let p_service = pb.generate_persistency_service::<AddTimestampState>();
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
@@ -125,11 +134,13 @@ where
             StreamElement::FlushAndRestart
             | StreamElement::FlushBatch => elem,
             StreamElement::Terminate => {
+                #[cfg(feature = "persist-state")]
                 if self.persistency_service.is_some(){
                     self.save_terminate();
                 }
                 StreamElement::Terminate
             }
+            #[cfg(feature = "persist-state")]
             StreamElement::Snapshot(snap_id) => {
                 self.save_snap(snap_id.clone());
                 StreamElement::Snapshot(snap_id)
@@ -151,6 +162,7 @@ where
         self.operator_coord.operator_id
     }
 
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
         let mut res = self.prev.get_stateful_operators();
         // This operator is stateful
@@ -216,6 +228,7 @@ where
             match self.prev.next() {
                 StreamElement::Watermark(_) => continue,
                 StreamElement::Timestamped(item, _) => return StreamElement::Item(item),
+                #[cfg(feature = "persist-state")]
                 StreamElement::Snapshot(snapshot_id) => {
                     // Save void state and forward snapshot marker
                     //self.persistency_service.as_mut().unwrap().save_void_state(self.operator_coord, snapshot_id.clone());
@@ -246,6 +259,7 @@ where
         self.operator_coord.operator_id
     }
 
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
         // This operator is stateless
         self.prev.get_stateful_operators()

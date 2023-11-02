@@ -15,8 +15,11 @@ use crate::operator::iteration::state_handler::IterationStateHandler;
 use crate::operator::iteration::{
     IterationResult, IterationStateHandle, IterationStateLock, StateFeedback,
 };
-use crate::operator::{ExchangeData, Operator, StreamElement, SnapshotId, Start, SimpleStartReceiver};
+use crate::operator::{ExchangeData, Operator, StreamElement, Start, SimpleStartReceiver};
+#[cfg(feature = "persist-state")]
 use crate::persistency::persistency_service::PersistencyService;
+#[cfg(feature = "persist-state")]
+use crate::operator::SnapshotId;
 use crate::scheduler::{BlockId, ExecutionMetadata, OperatorId};
 use crate::stream::Stream;
 
@@ -43,17 +46,22 @@ pub struct Replay<Out: ExchangeData, State: ExchangeData>
     /// Whether the input stream has ended or not.
     input_finished: bool,
 
+    #[cfg(feature = "persist-state")]
     /// Persistency service
     persistency_service: Option<PersistencyService<ReplayState<Out, State>>>,
+    #[cfg(feature = "persist-state")]
     /// Pending snapshot
     pending_snapshot: Option<SnapshotId>,
     /// State recovered from snaphot
+    #[cfg(feature = "persist-state")]
     recovered_state: Option<State>,
+    #[cfg(feature = "persist-state")]
     /// Level of this iterator
     iter_stack_level: usize,
+    #[cfg(feature = "persist-state")]
     /// Index of this iteration loop
     iter_index: u64,
-
+    #[cfg(feature = "persist-state")]
     should_flush: bool,
 }
 
@@ -85,13 +93,16 @@ impl<Out: ExchangeData, State: ExchangeData> Replay<Out, State>
         state_ref: IterationStateHandle<State>,
         leader_block_id: BlockId,
         state_lock: Arc<IterationStateLock>,
+        #[cfg(feature = "persist-state")]
         iter_stack_level: usize,
+        #[cfg(feature = "persist-state")]
         iter_index: u64
     ) -> Self {
         let op_id = prev.get_op_id() + 1;
         Self {
             // these fields will be set inside the `setup` method
             operator_coord: OperatorCoord::new(0 , 0, 0, op_id),
+            #[cfg(feature = "persist-state")]
             persistency_service: None,
 
             prev,
@@ -100,10 +111,15 @@ impl<Out: ExchangeData, State: ExchangeData> Replay<Out, State>
             content_index: 0,
             input_finished: false,
             state: IterationStateHandler::new(leader_block_id, state_ref, state_lock),
+            #[cfg(feature = "persist-state")]
             pending_snapshot: None,
+            #[cfg(feature = "persist-state")]
             recovered_state: None,
+            #[cfg(feature = "persist-state")]
             iter_stack_level,
+            #[cfg(feature = "persist-state")]
             iter_index,
+            #[cfg(feature = "persist-state")]
             should_flush: false,
         }
     }
@@ -136,6 +152,7 @@ impl<Out: ExchangeData, State: ExchangeData> Replay<Out, State>
                 el
             }
 
+            #[cfg(feature = "persist-state")]
             // forward snapshot marker but do not put in the queue
             StreamElement::Snapshot(mut snap_id) => {
                 // fix snapshot id
@@ -168,6 +185,7 @@ impl<Out: ExchangeData, State: ExchangeData> Replay<Out, State>
             StreamElement::FlushBatch => StreamElement::FlushBatch,
             StreamElement::Terminate => {
                 log::debug!("Replay at {} is terminating", self.operator_coord.get_coord());
+                #[cfg(feature = "persist-state")]
                 if self.persistency_service.is_some() {
                     let state = ReplayState {
                         state: self.state.state_ref.get().clone(),
@@ -202,8 +220,13 @@ impl<Out: ExchangeData, State: ExchangeData> Replay<Out, State>
             assert!(message.num_items() == 1);
 
             match message.into_iter().next().unwrap() {
+                #[cfg(feature = "persist-state")]
                 StreamElement::Item((should_continue, new_state, opt_snap)) => {
                     return (should_continue, new_state, opt_snap);
+                }
+                #[cfg(not(feature = "persist-state"))]
+                StreamElement::Item((should_continue, new_state)) => {
+                    return (should_continue, new_state);
                 }
                 StreamElement::FlushBatch => {}
                 StreamElement::FlushAndRestart => {}
@@ -224,6 +247,7 @@ impl<Out: ExchangeData, State: ExchangeData + Sync> Operator<Out>
         self.prev.setup(metadata);
         self.state.setup(metadata);
 
+        #[cfg(feature = "persist-state")]
         if let Some(pb) = metadata.persistency_builder {
             let p_service = pb.generate_persistency_service::<ReplayState<Out, State>>();
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
@@ -248,12 +272,14 @@ impl<Out: ExchangeData, State: ExchangeData + Sync> Operator<Out>
 
     fn next(&mut self) -> StreamElement<Out> {
         // recover state if needed
+        #[cfg(feature = "persist-state")]
         if let Some(r_state) = self.recovered_state.take(){
             let recovery_update = (IterationResult::Continue, r_state, None);
             self.state.lock();
             self.state.wait_sync_state(recovery_update);
         }
         // if i restart from a snap with 0 at this level of iter stack i need to flush all input
+        #[cfg(feature = "persist-state")]
         if self.should_flush {
             loop {
                 if let StreamElement::FlushAndRestart = self.prev.next() {
@@ -265,6 +291,7 @@ impl<Out: ExchangeData, State: ExchangeData + Sync> Operator<Out>
         loop {
             // Snapshot if required
             // The snapshot must be done at the start of the iteration
+            #[cfg(feature = "persist-state")]
             if let Some(snap_id) = self.pending_snapshot.take() {
                 //save state
                 let state = ReplayState {
@@ -306,7 +333,9 @@ impl<Out: ExchangeData, State: ExchangeData + Sync> Operator<Out>
             let state_update = self.wait_update();
 
             // Get snapshot id to be used at next iteration snapshot
-            self.pending_snapshot = state_update.2.clone();
+            #[cfg(feature = "persist-state")] {
+                self.pending_snapshot = state_update.2.clone();
+            }
 
             if let IterationResult::Finished = self.state.wait_sync_state(state_update) {
                 log::debug!("Replay block at {} ended the iteration", self.operator_coord.get_coord());
@@ -336,6 +365,7 @@ impl<Out: ExchangeData, State: ExchangeData + Sync> Operator<Out>
         self.operator_coord.operator_id
     }
 
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
         let mut res = self.prev.get_stateful_operators();
         // This operator is stateful
@@ -348,6 +378,7 @@ impl<Out: ExchangeData, OperatorChain> Stream<Out, OperatorChain>
 where
     OperatorChain: Operator<Out> + 'static,
 {
+    #[cfg(feature = "persist-state")]
     /// Construct an iterative dataflow where the input stream is repeatedly fed inside a cycle,
     /// i.e. what comes into the cycle is _replayed_ at every iteration.
     ///
@@ -551,6 +582,195 @@ where
         } else {
             scheduler.schedule_block(allign_block.unwrap());
         }
+        scheduler.connect_blocks(input_block_id, replay_block_id, TypeId::of::<Out>());
+        // connect the IterationEnd to the IterationLeader
+        scheduler.connect_blocks(
+            iteration_end_block_id,
+            leader_block_id,
+            TypeId::of::<DeltaUpdate>(),
+        );
+        scheduler.connect_blocks(
+            leader_block_id,
+            replay_block_id,
+            TypeId::of::<StateFeedback<State>>(),
+        );
+        drop(env);
+
+        // store the id of the block containing the IterationEnd
+        feedback_block_id.store(iteration_end_block_id as usize, Ordering::Release);
+
+        // TODO: check parallelism and make sure the blocks are spawned on the same replicas
+
+        // FIXME: this add_block is here just to make sure that the NextStrategy of output_stream
+        //        is not changed by the following operators. This because the next strategy affects
+        //        the connections made by the scheduler and if accidentally set to OnlyOne will
+        //        break the connections.
+        output_stream.split_block(End::new, NextStrategy::random())
+    }
+
+    #[cfg(not(feature = "persist-state"))]
+    /// Construct an iterative dataflow where the input stream is repeatedly fed inside a cycle,
+    /// i.e. what comes into the cycle is _replayed_ at every iteration.
+    ///
+    /// This iteration is stateful, this means that all the replicas have a read-only access to the
+    /// _iteration state_. The initial value of the state is given as parameter. When an iteration
+    /// ends all the elements are reduced locally at each replica producing a `DeltaUpdate`. Those
+    /// delta updates are later reduced on a single node that, using the `global_fold` function will
+    /// compute the state for the next iteration. This state is also used in `loop_condition` to
+    /// check whether the next iteration should start or not. `loop_condition` is also allowed to
+    /// mutate the state.
+    ///
+    /// The initial value of `DeltaUpdate` is initialized with [`Default::default()`].
+    ///
+    /// The content of the loop has a new scope: it's defined by the `body` function that takes as
+    /// parameter the stream of data coming inside the iteration and a reference to the state. This
+    /// function should return the stream of the data that exits from the loop (that will be fed
+    /// back).
+    ///
+    /// This construct produces a single stream with a single element: the final state of the
+    /// iteration.
+    ///
+    /// **Note**: due to an internal limitation, it's not currently possible to add an iteration
+    /// operator when the stream has limited parallelism. This means, for example, that after a
+    /// non-parallel source you have to add a shuffle.
+    ///
+    /// **Note**: this operator will split the current block.
+    ///
+    /// ## Example
+    /// ```
+    /// # use noir::{StreamEnvironment, EnvironmentConfig};
+    /// # use noir::operator::source::IteratorSource;
+    /// # let mut env = StreamEnvironment::new(EnvironmentConfig::local(1));
+    /// let s = env.stream(IteratorSource::new(0..3)).shuffle();
+    /// let state = s.replay(
+    ///     3, // at most 3 iterations
+    ///     0, // the initial state is zero
+    ///     |s, state| s.map(|n| n + 10),
+    ///     |delta: &mut i32, n| *delta += n,
+    ///     |state, delta| *state += delta,
+    ///     |_state| true,
+    /// );
+    /// let state = state.collect_vec();
+    /// env.execute_blocking();
+    ///
+    /// assert_eq!(state.get().unwrap(), vec![3 * (10 + 11 + 12)]);
+    /// ```
+    pub fn replay<
+        Body,
+        DeltaUpdate: ExchangeData + Default,
+        State: ExchangeData + Sync,
+        OperatorChain2,
+    >(
+        self,
+        num_iterations: usize,
+        initial_state: State,
+        body: Body,
+        local_fold: impl Fn(&mut DeltaUpdate, Out) + Send + Clone + 'static,
+        global_fold: impl Fn(&mut State, DeltaUpdate) + Send + Clone + 'static,
+        loop_condition: impl Fn(&mut State) -> bool + Send + Clone + 'static,
+    ) -> Stream<State, impl Operator<State>>
+    where
+        Body: FnOnce(
+            Stream<Out, Replay<Out, State>>,
+            IterationStateHandle<State>,
+        ) -> Stream<Out, OperatorChain2>,
+        OperatorChain2: Operator<Out> + 'static,
+    {
+        // this is required because if the iteration block is not present on all the hosts, the ones
+        // without it won't receive the state updates.
+        assert!(
+            self.block.scheduler_requirements.replication.is_unlimited(),
+            "Cannot have an iteration block with limited parallelism"
+        );
+
+        let state = IterationStateHandle::new(initial_state.clone());
+        let state_clone = state.clone();
+        let env = self.env.clone();
+
+        // the id of the block where IterationEnd is. At this moment we cannot know it, so we
+        // store a fake value inside this and as soon as we know it we set it to the right value.
+        let feedback_block_id = Arc::new(AtomicUsize::new(0));
+
+               
+        let leader = IterationLeader::new(
+            initial_state,
+            num_iterations,
+            global_fold,
+            loop_condition,
+            feedback_block_id.clone(),
+        );
+        let mut output_stream = StreamEnvironmentInner::stream(
+            env.clone(),
+            leader,
+        );
+        let leader_block_id = output_stream.block.id;
+        // the output stream is outside this loop, so it doesn't have the lock for this state
+        output_stream.block.iteration_ctx = self.block.iteration_ctx.clone();
+
+        // the lock for synchronizing the access to the state of this iteration
+        let state_lock = Arc::new(IterationStateLock::default());
+
+        let batch_mode = self.block.batch_mode;
+        let input_block_id;
+        let iter_ctx = self.block.iteration_ctx.clone();
+
+        let mut input = self.add_operator(|prev| End::new(
+            prev, 
+            NextStrategy::only_one(), 
+            batch_mode
+        ));
+        input.block.is_only_one_strategy = true;
+        input_block_id = input.block.id;
+        let input_b = input.block;
+        
+
+        let replay_block_id = {
+            let mut env = env.lock();
+            env.new_block_id()
+        };
+        let replay_source = Start::single(
+            input_block_id,
+            iter_ctx.last().cloned(),
+        );
+
+        let rep_start = Stream {
+            block: Block::new(
+                replay_block_id,
+                replay_source,
+                batch_mode,
+                iter_ctx,
+            ),
+            env,
+        };       
+        
+        let mut iter_start =
+            rep_start.add_operator(|prev| Replay::new(prev, state, leader_block_id, state_lock.clone()));
+        let replay_block_id = iter_start.block.id;
+
+        // save the stack of the iteration for checking the stream returned by the body
+        iter_start.block.iteration_ctx.push(state_lock);
+        let pre_iter_stack = iter_start.block.iteration_ctx();
+
+        let mut iter_end = body(iter_start, state_clone)
+            .key_by(|_| ())
+            .fold(DeltaUpdate::default(), local_fold)
+            .drop_key();
+
+        let post_iter_stack = iter_end.block.iteration_ctx();
+        if pre_iter_stack != post_iter_stack {
+            panic!("The body of the iteration should return the stream given as parameter");
+        }
+        iter_end.block.iteration_ctx.pop().unwrap();
+
+        let iter_end = iter_end.add_operator(|prev| IterationEnd::new(prev, leader_block_id));
+        let iteration_end_block_id = iter_end.block.id;
+
+        let mut env = iter_end.env.lock();
+        let scheduler = env.scheduler_mut();
+        scheduler.schedule_block(iter_end.block);
+       
+        scheduler.schedule_block(input_b);
+        
         scheduler.connect_blocks(input_block_id, replay_block_id, TypeId::of::<Out>());
         // connect the IterationEnd to the IterationLeader
         scheduler.connect_blocks(

@@ -13,11 +13,12 @@ use crate::block::{BlockStructure, OperatorKind, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::source::Source;
 use crate::operator::{Operator, StreamElement};
+#[cfg(feature = "persist-state")]
 use crate::persistency::persistency_service::PersistencyService;
 use crate::scheduler::ExecutionMetadata;
 use crate::Stream;
 use crate::scheduler::OperatorId;
-
+#[cfg(feature = "persist-state")]
 use super::SnapshotGenerator;
 
 /// Source that reads a text file line-by-line.
@@ -32,8 +33,11 @@ pub struct FileSource {
     end: usize,
     terminated: bool,
     operator_coord: OperatorCoord,
+    #[cfg(feature = "persist-state")]
     snapshot_generator: SnapshotGenerator,
+    #[cfg(feature = "persist-state")]
     snapshot_before_flush: bool,
+    #[cfg(feature = "persist-state")]
     persistency_service: Option<PersistencyService<FileSourceState>>,
 }
 
@@ -75,8 +79,11 @@ impl FileSource {
             // This is the first operator in the chain so operator_id = 0
             // Other fields will be set in setup method
             operator_coord: OperatorCoord::new(0, 0, 0, 0),
+            #[cfg(feature = "persist-state")]
             snapshot_generator: SnapshotGenerator::new(),
+            #[cfg(feature = "persist-state")]
             snapshot_before_flush: false,
+            #[cfg(feature = "persist-state")]
             persistency_service: None,
         }
     }
@@ -100,7 +107,8 @@ impl Operator<String> for FileSource {
         let instances = metadata.replicas.len();
 
         self.operator_coord.setup_coord(metadata.coord);
-        let mut last_position = None;
+        let mut last_position: Option<usize> = None;
+        #[cfg(feature = "persist-state")]
         if let Some(pb) = metadata.persistency_builder {
             let p_service =pb.generate_persistency_service::<FileSourceState>();
             let mut set_snap_gen =  true;
@@ -175,6 +183,7 @@ impl Operator<String> for FileSource {
 
     fn next(&mut self) -> StreamElement<String> {
         if self.terminated {
+            #[cfg(feature = "persist-state")]
             if self.persistency_service.is_some() {
                 // Save terminated state
                 let state = FileSourceState{
@@ -183,9 +192,11 @@ impl Operator<String> for FileSource {
                 }; 
                 self.persistency_service.as_mut().unwrap().save_terminated_state(self.operator_coord, state);            
             }
+            #[cfg(feature = "persist-state")]
             log::trace!("terminate {}", self.operator_coord.get_coord());
             return StreamElement::Terminate;
         }
+        #[cfg(feature = "persist-state")]
         if self.persistency_service.is_some(){
             // Check snapshot generator
             let snapshot = self.snapshot_generator.get_snapshot_marker();
@@ -217,18 +228,25 @@ impl Operator<String> for FileSource {
                 }
                 Err(e) => panic!("Error while reading file: {e:?}",),
             }
-        } else if self.snapshot_before_flush {
-            self.snapshot_before_flush = false;
-            let snap_id = self.snapshot_generator.get_flush_snapshot_marker();            
-            let state = FileSourceState{
-                current: self.current as u64,
-                snapshot_before_flush: false,
-            };
-            self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snap_id.clone(), state);
-            StreamElement::Snapshot(snap_id)
         } else {
-            self.terminated = true;
-            StreamElement::FlushAndRestart            
+            #[cfg(feature = "persist-state")]
+            if self.snapshot_before_flush {
+                self.snapshot_before_flush = false;
+                let snap_id = self.snapshot_generator.get_flush_snapshot_marker();            
+                let state = FileSourceState{
+                    current: self.current as u64,
+                    snapshot_before_flush: false,
+                };
+                self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snap_id.clone(), state);
+                StreamElement::Snapshot(snap_id)
+            } else {
+                self.terminated = true;
+                StreamElement::FlushAndRestart 
+            }     
+            #[cfg(not(feature = "persist-state"))]{
+                self.terminated = true;
+                StreamElement::FlushAndRestart
+            }  
         };
 
         element
@@ -236,8 +254,10 @@ impl Operator<String> for FileSource {
 
     fn structure(&self) -> BlockStructure {
         let mut operator = OperatorStructure::new::<String, _>("FileSource");
-        let op_id = self.operator_coord.operator_id;
-        operator.subtitle = format!("op id: {op_id}");
+        #[cfg(feature = "persist-state")] {
+            let op_id = self.operator_coord.operator_id;
+            operator.subtitle = format!("op id: {op_id}");
+        }
         operator.kind = OperatorKind::Source;
         BlockStructure::default().add_operator(operator)
     }
@@ -246,6 +266,7 @@ impl Operator<String> for FileSource {
         self.operator_coord.operator_id
     }
 
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
         // This operator is stateful
         vec![self.operator_coord.operator_id]
@@ -265,8 +286,11 @@ impl Clone for FileSource {
             end: 0,
             terminated: false,
             operator_coord: OperatorCoord::new(0, 0, 0, 0),
+            #[cfg(feature = "persist-state")]
             snapshot_generator: self.snapshot_generator.clone(),
+            #[cfg(feature = "persist-state")]
             persistency_service: self.persistency_service.clone(),
+            #[cfg(feature = "persist-state")]
             snapshot_before_flush: self.snapshot_before_flush,
         }
     }

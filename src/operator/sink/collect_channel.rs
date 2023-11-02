@@ -68,6 +68,7 @@ where
             }
             StreamElement::FlushBatch => StreamElement::FlushBatch,
             StreamElement::FlushAndRestart => StreamElement::FlushAndRestart,
+            #[cfg(feature = "persist-state")]
             StreamElement::Snapshot(snap_id) => {
                 StreamElement::Snapshot(snap_id)
             }
@@ -86,6 +87,7 @@ where
         self.operator_coord.operator_id
     }
 
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
         // This operator is stateless
         self.prev.get_stateful_operators()

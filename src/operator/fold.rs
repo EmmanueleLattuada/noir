@@ -1,18 +1,24 @@
 use std::fmt::Display;
 use std::marker::PhantomData;
 
+#[cfg(feature = "persist-state")]
 use serde::{Serialize, Deserialize};
 
 use crate::block::{BlockStructure, OperatorStructure};
 use crate::network::OperatorCoord;
 use crate::operator::{Data, ExchangeData, Operator, StreamElement, Timestamp};
+#[cfg(feature = "persist-state")]
 use crate::persistency::persistency_service::PersistencyService;
-use crate::scheduler::{ExecutionMetadata, OperatorId};
+use crate::scheduler::ExecutionMetadata;
+use crate::scheduler::OperatorId;
 
+#[cfg(feature = "persist-state")]
 use super::SnapshotId;
 
-#[derive(Clone, Derivative)]
-#[derivative(Debug)]
+
+//#[derive(Clone, Derivative)]
+//#[derivative(Debug)]
+#[derive(Clone, Debug)]
 pub struct Fold<Out: Data, NewOut: ExchangeData, F, PreviousOperators>
 where
     F: Fn(&mut NewOut, Out) + Send + Clone,
@@ -20,8 +26,9 @@ where
 {
     prev: PreviousOperators,
     operator_coord: OperatorCoord,
+    #[cfg(feature = "persist-state")]
     persistency_service: Option<PersistencyService<FoldState<NewOut>>>,
-    #[derivative(Debug = "ignore")]
+    //#[derivative(Debug = "ignore")]
     fold: F,
     init: NewOut,
     accumulator: Option<NewOut>,
@@ -60,6 +67,7 @@ where
             prev,
             // This will be set in setup method
             operator_coord: OperatorCoord::new(0,0,0,op_id),
+            #[cfg(feature = "persist-state")]
             persistency_service: None,
             fold,
             init,
@@ -72,6 +80,7 @@ where
         }
     }
 
+    #[cfg(feature = "persist-state")]
     /// Save state for snapshot
     fn save_snap(&mut self, snapshot_id: SnapshotId){
         let acc = self.accumulator.clone();
@@ -83,6 +92,7 @@ where
         }; 
         self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snapshot_id, state);
     }
+    #[cfg(feature = "persist-state")]
     /// Save terminated state
     fn save_terminate(&mut self){
         let acc = self.accumulator.clone();
@@ -96,6 +106,7 @@ where
     }
 }
 
+#[cfg(feature = "persist-state")]
 #[derive(Clone, Serialize, Deserialize, Debug)]
 struct FoldState<T> {
     accumulator: Option<T>,
@@ -114,6 +125,7 @@ where
         self.prev.setup(metadata);
 
         self.operator_coord.setup_coord(metadata.coord);
+        #[cfg(feature = "persist-state")]
         if let Some(pb) = metadata.persistency_builder{
             let p_service = pb.generate_persistency_service::<FoldState<NewOut>>();
             let snapshot_id = p_service.restart_from_snapshot(self.operator_coord);
@@ -160,6 +172,7 @@ where
                 }
                 // this block wont sent anything until the stream ends
                 StreamElement::FlushBatch => {}
+                #[cfg(feature = "persist-state")]
                 StreamElement::Snapshot(snap_id) => {
                     self.save_snap(snap_id.clone());
                     return StreamElement::Snapshot(snap_id);
@@ -188,6 +201,7 @@ where
             return StreamElement::FlushAndRestart;
         }
 
+        #[cfg(feature = "persist-state")]
         // Save terminated state before end 
         if self.persistency_service.is_some() { 
             self.save_terminate();
@@ -208,6 +222,7 @@ where
         self.operator_coord.operator_id
     }
 
+    #[cfg(feature = "persist-state")]
     fn get_stateful_operators(&self) -> Vec<OperatorId> {
         let mut res = self.prev.get_stateful_operators();
         // This operator is stateful
@@ -218,13 +233,22 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "persist-state")]
     use serial_test::serial;
-
+    #[cfg(feature = "persist-state")]
     use crate::network::OperatorCoord;
-    use crate::operator::fold::{Fold, FoldState};
-    use crate::operator::{Operator, StreamElement, SnapshotId};
+    use crate::operator::fold::Fold;
+    #[cfg(feature = "persist-state")]
+    use crate::operator::fold::FoldState;
+    use crate::operator::{Operator, StreamElement};
+    #[cfg(feature = "persist-state")]
+    use crate::operator::SnapshotId;
+    #[cfg(feature = "persist-state")]
     use crate::persistency::builder::PersistencyBuilder;
-    use crate::test::{FakeOperator, persistency_config_unit_tests};
+    use crate::test::FakeOperator;
+    #[cfg(feature = "persist-state")]
+    use crate::test::persistency_config_unit_tests;
+
 
     #[test]
     fn test_fold_without_timestamps() {
@@ -274,6 +298,7 @@ mod tests {
         assert_eq!(fold.next(), StreamElement::Terminate);
     }
 
+    #[cfg(feature = "persist-state")]
     #[test]
     #[serial]
     fn test_fold_persistency_save_state() {

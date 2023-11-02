@@ -82,6 +82,7 @@ fn fold_assoc_shuffled_stream() {
     });
 }
 
+#[cfg(feature = "persist-state")]
 #[test]
 #[serial]
 fn fold_stream_persistency() {
@@ -117,6 +118,7 @@ fn fold_stream_persistency() {
 }
 
 
+#[cfg(feature = "persist-state")]
 #[test]
 #[serial]
 fn fold_assoc_shuffled_stream_persistency() {
