@@ -247,6 +247,9 @@ fn wordcount_persistency_bench(c: &mut Criterion) {
             .with(tracing_tracy::TracyLayer::new()),
     ).expect("set up the subscriber");*/
 
+    let mut builder = env_logger::Builder::from_default_env();
+    builder.target(env_logger::Target::Stdout);
+    builder.init();
 
     let mut g = c.benchmark_group("wordcount_persistency");
     g.sample_size(SAMPLES);
@@ -266,15 +269,7 @@ fn wordcount_persistency_bench(c: &mut Criterion) {
     let file_size = file.as_file().metadata().unwrap().len();
     let file_path = file.path();
     g.throughput(Throughput::Bytes(file_size));
-
-    for interval in [10, 100, 1000].map(Duration::from_millis) {
-        let test = format!("{interval:?}");
-        let conf = persist_interval(interval);
-        bench_wc(&mut g, "wc-fast", &test, lines, file_path, &conf);
-        bench_wc(&mut g, "wc-fold-assoc", &test, lines, file_path, &conf);
-        bench_wc(&mut g, "wc-fold", &test, lines, file_path, &conf);
-    }
-
+    
     //snap_by_time vs snap_by_item
     bench_wc(&mut g, "wc-fast", "snap-by-time", lines, file_path, &persist_interval(Duration::from_millis(4)));
     bench_wc(&mut g, "wc-fast", "snap-by-item", lines, file_path, &persist_count((lines/(12*100)) as u64));
@@ -282,19 +277,21 @@ fn wordcount_persistency_bench(c: &mut Criterion) {
     bench_wc(&mut g, "wc-fold-assoc", "snap-by-item", lines, file_path, &persist_count((lines/(12*100)) as u64));
     bench_wc(&mut g, "wc-fold", "snap-by-time", lines, file_path, &persist_interval(Duration::from_millis(25)));
     bench_wc(&mut g, "wc-fold", "snap-by-item", lines, file_path, &persist_count((lines/(12*100)) as u64));
+    
+    
+    for interval in [5, 10, 50, 100].map(Duration::from_millis) {
+        let test = format!("{interval:?}");
+        let conf = persist_interval(interval);
+        bench_wc(&mut g, "wc-fast", &test, lines, file_path, &conf);
+    }
 
-    /*
-    for interval in [10, 100, 1000].map(Duration::from_millis) {
+    for interval in [10, 50, 100, 500].map(Duration::from_millis) {
         let test = format!("{interval:?}");
         let conf = persist_interval(interval);
         bench_wc(&mut g, "wc-fold-assoc", &test, lines, file_path, &conf);
+        bench_wc(&mut g, "wc-fold", &test, lines, file_path, &conf);
     }
 
-    for interval in [2, 4, 5, 10, 30, 3000].map(Duration::from_millis) {
-        let test = format!("{interval:?}");
-        let conf = persist_interval(interval);
-        bench_wc(&mut g, "wc-fold", &test, lines, file_path, &conf);
-    }*/
 
     /*
     for lines in [100_000, 1_000_000] {

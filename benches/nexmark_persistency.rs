@@ -19,7 +19,7 @@ use common::*;
 
 
 const WATERMARK_INTERVAL: usize = 1 << 20;
-const BATCH_SIZE: usize = 16 << 10;
+const BATCH_SIZE: usize = 16 << 6;
 const SECOND_MILLIS: i64 = 1_000;
 
 fn timestamp_gen(e: &Event) -> Timestamp {
@@ -420,6 +420,9 @@ fn nexmark_persistency_bench(c: &mut Criterion) {
             .with(tracing_tracy::TracyLayer::new()),
     ).expect("set up the subscriber");*/
 
+    let mut builder = env_logger::Builder::from_default_env();
+    builder.target(env_logger::Target::Stdout);
+    builder.init();
 
     let mut g = c.benchmark_group("nexmark_persistency");
     g.sample_size(SAMPLES);
@@ -427,14 +430,22 @@ fn nexmark_persistency_bench(c: &mut Criterion) {
     for size in [1_000_000] {
         g.throughput(Throughput::Elements(size as u64));
 
-        for q in ["0", "1", "2", "3", "4", "5", "6", "7", "8"] {
+        for q in ["0", "1", "2", "3", "5", "7", "8"] {
             bench_nx(&mut g, q, "T", size, &persist_none());
-            if size == 1_000_000 {
-                for interval in [5, 10, 100, 1000].map(Duration::from_millis) {
-                    let test = format!("{interval:?}");
-                    let conf = persist_interval(interval);
-                    bench_nx(&mut g, q, &test, size, &conf);
-                }
+            for interval in [5, 10, 20, 50].map(Duration::from_millis) {
+                let test = format!("{interval:?}");
+                let conf = persist_interval(interval);
+                bench_nx(&mut g, q, &test, size, &conf);
+            }
+
+        }
+
+        for q in ["4", "6"] {
+            bench_nx(&mut g, q, "T", size, &persist_none());            
+            for interval in [30, 50, 70, 90].map(Duration::from_millis) {
+                let test = format!("{interval:?}");
+                let conf = persist_interval(interval);
+                bench_nx(&mut g, q, &test, size, &conf);
             }
         }
         

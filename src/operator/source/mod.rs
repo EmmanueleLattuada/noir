@@ -70,6 +70,9 @@ impl SnapshotGenerator {
                 // Avoid timer lag
                 let lag = self.timer.elapsed().checked_sub(sti);
                 self.timer = Instant::now() - lag.unwrap_or(Duration::default());
+                if self.timer.elapsed() > sti {
+                    log::warn!("Snapshot generator drift occurs at time: {:?}", std::time::Instant::now());
+                }
             }            
             if self.iter_stack == 0 {
                 self.snapshot_id = self.snapshot_id.next();
