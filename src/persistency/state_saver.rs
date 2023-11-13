@@ -126,7 +126,7 @@ impl ActualSaver {
                         .unwrap_or(&self.initial_snapshot(&op_coord))
                         .check_next(&snap_id))
                 {
-                    panic!("Passed snap_id: {snap_id:?}.\n Last saved snap_id: {last_snap:?}.\n  Op_coord: {op_coord:?}.\n Snapshot id must be a sequence with step 1 starting from 1");
+                    panic!("Passed snap_id: {snap_id:?}.\n Last saved snap_id: {last_snap:?}.\n  Op_coord: {op_coord:?}.\n Snapshot id must be a monotonic sequence starting from 1");
                 }
                 self.save_state(op_coord, snap_id, state);
             } else if let PersistencyMessage::TerminatedState(op_coord, state) = msg {

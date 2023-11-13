@@ -211,13 +211,22 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
                     self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snap_id.clone(), state);
                 }
             } else {
-                // Remove the sender from the set of previous replicas for this snapshot
-                self.on_going_snapshots.get_mut(snap_id).unwrap().1.remove(&sender);
-                // Check if there are no more replicas
-                if self.on_going_snapshots.get(snap_id).unwrap().1.is_empty() {
-                    // This snapshot is complete: now i can save it 
-                    let state = self.on_going_snapshots.remove(snap_id).unwrap().0;
-                    self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snap_id.clone(), state);
+                // Remove the sender from the set of previous replicas for skipped snapshot and this snapshot
+                let mut past_snap: Vec<SnapshotId> = self.on_going_snapshots
+                    .keys()
+                    .cloned()
+                    .filter(|s| s <= &snap_id)
+                    .collect();
+                past_snap.sort();
+                for p_snap in past_snap {
+                    // Remove the sender from the set of previous replicas for this snapshot
+                    self.on_going_snapshots.get_mut(&p_snap).unwrap().1.remove(&sender);
+                    // Check if there are no more replicas
+                    if self.on_going_snapshots.get(&p_snap).unwrap().1.is_empty() {
+                        // This snapshot is complete: now i can save it 
+                        let state = self.on_going_snapshots.remove(&p_snap).unwrap().0;
+                        self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, p_snap, state);
+                    }
                 }
             }
             // I've already forwarded the snapshot marker
@@ -242,20 +251,36 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
                     self.on_going_snapshots.insert(snap_id.clone(), (state, HashSet::new()));
                 }
             } else {
-                // Save current state, messages will be add then 
-                let state: StartState<Out, Receiver>= StartState{
-                    missing_flush_and_restart: self.missing_flush_and_restart as u64,
-                    wait_for_state: self.wait_for_state,
-                    watermark_forntier: self.watermark_frontier.clone(),
-                    receiver_state: self.receiver.get_state(snap_id.clone()),
-                    message_queue: VecDeque::default(),
-                };
+                let mut bigger: Vec<(&Coord, &SnapshotId)> = self.last_snapshots
+                    .iter()
+                    .filter(|(c, s)| *c != &sender && s > &snap_id)
+                    .collect();
+                bigger.sort_by(|a, b| a.1.partial_cmp(b.1).unwrap());
+                // Take the state
+                let state: StartState<Out, Receiver>;
+                if bigger.is_empty() {
+                    // Save current state, messages will be add then 
+                    state = StartState{
+                        missing_flush_and_restart: self.missing_flush_and_restart as u64,
+                        wait_for_state: self.wait_for_state,
+                        watermark_forntier: self.watermark_frontier.clone(),
+                        receiver_state: self.receiver.get_state(snap_id.clone()),
+                        message_queue: VecDeque::default(),
+                    };
+                } else {
+                    // The state ie equal to the min snap bigger than this
+                    state = self.on_going_snapshots.get(bigger[0].1).unwrap().0.clone();
+                }
 
                 // Set all previous replicas that have to send this snapshot id
                 let mut prev_replicas = HashSet::from_iter(self.receiver().prev_replicas());
                 prev_replicas.remove(&sender);
                 for replica in self.terminated_replicas.iter() {
                     prev_replicas.remove(replica);
+                }
+                // remove also sender that have sent a snapshot bigger than this
+                for (replica, _) in bigger {                    
+                    prev_replicas.remove(replica);  
                 }
                 // Check if the snapshot is already complete
                 if prev_replicas.is_empty() {

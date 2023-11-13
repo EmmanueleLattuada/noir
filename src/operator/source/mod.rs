@@ -56,28 +56,34 @@ impl SnapshotGenerator {
     pub (crate) fn get_snapshot_marker(&mut self) -> Option<SnapshotId> {
         let mut res = false;
         if self.snap_time_interval.is_some(){
-            // Avoid deadlock with to high snapshot freq, produce at least 1 tuple between 2 snapshot tokens
-            res =self.timer.elapsed() > self.snap_time_interval.unwrap() && self.item_counter != 0;
+            res =self.timer.elapsed() > self.snap_time_interval.unwrap();
         }
         if !res && self.snap_item_interval.is_some(){
             res = self.item_counter == self.snap_item_interval.unwrap();
         }
         self.item_counter += 1;
         if res {
-            let tmp = self.snapshot_id.clone();
-            self.item_counter = 0;
-            if let Some(sti) = self.snap_time_interval {
-                // Avoid timer lag
-                let lag = self.timer.elapsed().checked_sub(sti);
-                self.timer = Instant::now() - lag.unwrap_or(Duration::default());
-                if self.timer.elapsed() > sti {
-                    log::warn!("Snapshot generator drift occurs at time: {:?}", std::time::Instant::now());
-                }
-            }            
+            let mut tmp = self.snapshot_id.clone();
             if self.iter_stack == 0 {
-                self.snapshot_id = self.snapshot_id.next();
+                self.item_counter = 0;
+                if let Some(sti) = self.snap_time_interval {
+                    // Skip late snapshots
+                    let mut lag = self.timer.elapsed().checked_sub(sti).unwrap_or(Duration::default());
+                    while lag > sti {
+                        if self.iter_stack == 0 {
+                            tmp = tmp.next();
+                        } else {
+                            tmp = tmp.next_iter(self.iter_stack);
+                        }
+                        lag = lag - sti;
+                    }
+                    self.timer = Instant::now() - lag;
+                }    
+                self.snapshot_id = tmp.next();
             } else {
-                self.snapshot_id = self.snapshot_id.next_iter(self.iter_stack);
+                self.item_counter = 0;
+                self.timer = Instant::now();
+                self.snapshot_id = tmp.next_iter(self.iter_stack);
             }
             return Some(tmp);
         }

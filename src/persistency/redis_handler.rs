@@ -134,7 +134,10 @@ impl PersistencyServices for RedisHandler {
         // Serialize op_coord
         let op_coord_key_buf = serialize_op_coord(op_coord);
 
-        let serial_index = snapshot_index.to_be_bytes().to_vec();
+        // Get the real last snapshot index 
+        let real_index = self.check_snapshot_index(op_coord, snapshot_index);
+
+        let serial_index = real_index.to_be_bytes().to_vec();
         let mut op_snap_id_key_buf =
             Vec::with_capacity(op_coord_key_buf.len() + serial_index.len());
         op_snap_id_key_buf.extend_from_slice(op_coord_key_buf.as_slice());
@@ -157,6 +160,46 @@ impl PersistencyServices for RedisHandler {
             return Some(des_iter_stack);
         }
         None
+    }
+
+    fn check_snapshot_index(
+        &self,
+        op_coord: &OperatorCoord,
+        snapshot_index: u64,
+    ) -> u64 {
+        let mut conn = self.pool.get().expect("Fail to connect to Redis");
+        // Serialize op_coord
+        let op_coord_key_buf = serialize_op_coord(op_coord);
+
+        // Get the real last snapshot index 
+        let mut real_index = 0;
+        let mut found = false;
+        let mut i = 0;
+        while !found {
+            let opt_snap_id: Option<Vec<u8>> = conn
+                .lindex(op_coord_key_buf.clone(), i)
+                .unwrap_or_else(|e| {
+                    panic!("Failed to get last snapshot id of operator: {op_coord}. Error {e:?}")
+                });
+            // Deserialize the snapshot_id
+            let error_msg = "Fail deserialization of snapshot id".to_string();
+            let snapshot_id: SnapshotId = KEY_SERIALIZER
+                .deserialize(opt_snap_id.unwrap().as_ref())
+                .expect(&error_msg);
+            if snapshot_id.id() > snapshot_index {
+                real_index = snapshot_id.id();
+            } else if snapshot_id.id() == snapshot_index {
+                real_index = snapshot_id.id();
+                found = true;
+            } else if snapshot_id.terminate() {
+                real_index = snapshot_index;
+                found = true;
+            } else {
+                found = true;
+            }
+            i += 1;
+        }
+        real_index
     }
 
     fn get_state<State: ExchangeData>(

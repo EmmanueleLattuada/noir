@@ -60,6 +60,8 @@ impl<State:ExchangeData> PersistencyService<State> {
     pub (crate) fn restart_from_snapshot(&self, op_coord: OperatorCoord) -> Option<SnapshotId> {
         if let Some(mut snap_id) = self.restart_from_id.clone() {
             let mut last_snap = self.get_last_snapshot(op_coord).unwrap();
+            // get real index
+            snap_id = SnapshotId::new(self.handler.check_snapshot_index(&op_coord, snap_id.id()));
             // Try to recover the iteration stack, if any
             let iteration_index = last_snap.iteration_index;
             if let Some(iter_index) = iteration_index {

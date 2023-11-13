@@ -184,7 +184,7 @@ impl SnapshotId {
                 i += 1;
             }
         } else {
-            self.snapshot_id + 1 == next.snapshot_id
+            self.snapshot_id < next.snapshot_id
         }
     }
 

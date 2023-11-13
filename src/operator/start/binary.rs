@@ -250,7 +250,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
                     }
                     to_persist = Vec::new();
                     // process this snapshot
-                    self.process_snapshot(snap_id, sender);                 
+                    self.process_snapshot(&snap_id, sender);                 
                 }
                 _ => {
                     to_persist.push(el.clone());
@@ -356,7 +356,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
                     }
                     to_persist = Vec::new();
                     // process this snapshot
-                    self.process_snapshot(snap_id, sender);                 
+                    self.process_snapshot(&snap_id, sender);                 
                 }
                 _ => {
                     to_persist.push(el.clone());
@@ -384,7 +384,7 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
         NetworkMessage::new_batch(to_return, sender)
     }
 
-    fn state_copy(&mut self) -> BinaryReceiverState<OutL, OutR> {
+    fn state_copy(&self) -> BinaryReceiverState<OutL, OutR> {
         let left = SideReceiverState {
             missing_flush_and_restart: self.left.missing_flush_and_restart as u64,
             //missing_terminate: self.left.missing_terminate as u64,
@@ -411,24 +411,49 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
         }
     }
 
-    fn process_snapshot(&mut self, snap_id: SnapshotId, sender: Coord) {
+    fn process_snapshot(&mut self, snap_id: &SnapshotId, sender: Coord) {
         // Update last snapshots map
         self.last_snapshots.insert(sender, snap_id.clone());
         // Check if is already arrived this snapshot id
-        if self.on_going_snapshots.contains_key(&snap_id) {
-            // Remove the sender from the set of previous replicas for this snapshot
-            self.on_going_snapshots.get_mut(&snap_id).unwrap().1.remove(&sender);
+        if self.on_going_snapshots.contains_key(snap_id) {
+            // Remove the sender from the set of previous replicas for skipped snapshot and this snapshot
+            let mut past_snap: Vec<SnapshotId> = self.on_going_snapshots
+                .keys()
+                .cloned()
+                .filter(|s| s <= &snap_id)
+                .collect();
+            past_snap.sort();
+            for p_snap in past_snap {
+                // Remove the sender from the set of previous replicas for this snapshot
+                self.on_going_snapshots.get_mut(&p_snap).unwrap().1.remove(&sender);
+            }
         } else {
-            // Save current state, messages will be add then 
-            let mut state = self.state_copy();
-            if self.iteration_stack_level > 0 && snap_id.iteration_stack[self.iteration_stack_level - 1] != 0 {
-                state.should_flush_cached_side = true;
+            let mut bigger: Vec<(&Coord, &SnapshotId)> = self.last_snapshots
+                .iter()
+                .filter(|(c, s)| *c != &sender && s > &snap_id)
+                .collect();
+            bigger.sort_by(|a, b| a.1.partial_cmp(b.1).unwrap());
+            // Take the state
+            let mut state;
+            if bigger.is_empty() {
+                // Save current state, messages will be add then 
+                state = self.state_copy();
+                if self.iteration_stack_level > 0 && snap_id.iteration_stack[self.iteration_stack_level - 1] != 0 {
+                    state.should_flush_cached_side = true;
+                }
+            } else {
+                // The state ie equal to the min snap bigger than this
+                state = self.on_going_snapshots.get(bigger[0].1).unwrap().0.clone();
             }
             // Set all previous replicas that have to send this snapshot id
             let mut prev_replicas = HashSet::from_iter(self.prev_replicas_for_snapshot()); 
             prev_replicas.remove(&sender);
             for replica in self.terminated_replicas.iter() {
                 prev_replicas.remove(replica);
+            }
+            // remove also sender that have sent a snapshot bigger than this
+            for (replica, _) in bigger {                    
+                prev_replicas.remove(replica);  
             }
             // Add a new entry in the map with this snapshot id
             self.on_going_snapshots.insert(snap_id.clone(), (state, prev_replicas));
