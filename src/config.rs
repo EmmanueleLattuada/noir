@@ -108,6 +108,7 @@ pub struct PersistencyConfig {
     /// - False: an "alignemnt-block" will be add in before iterative operators.
     /// In case of side inputs this must be true. 
     /// If there are no iterative operators this parameter won't be used.
+    /// TODO: remove this, if we skip late snapshot alignment-block solution won't work
     pub iterations_snapshot_alignment: bool,
 }
 

@@ -70,11 +70,7 @@ impl SnapshotGenerator {
                     // Skip late snapshots
                     let mut lag = self.timer.elapsed().checked_sub(sti).unwrap_or(Duration::default());
                     while lag > sti {
-                        if self.iter_stack == 0 {
-                            tmp = tmp.next();
-                        } else {
-                            tmp = tmp.next_iter(self.iter_stack);
-                        }
+                        tmp = tmp.next();
                         lag = lag - sti;
                     }
                     self.timer = Instant::now() - lag;

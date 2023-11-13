@@ -198,102 +198,87 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
     // return true -> forward snapshot token
     // return false -> don't forward
     fn process_snapshot(&mut self, snap_id: &SnapshotId, sender: Coord) -> bool {
+        let mut res = false;
         // Update last snapshots map
         self.last_snapshots.insert(sender, snap_id.clone());
         // Check if is already arrived this snapshot id
-        if self.on_going_snapshots.contains_key(snap_id) {
+        if !self.on_going_snapshots.contains_key(snap_id) {
+            if !self.insert_snapshot(snap_id, sender) {
+                // Ignore this snapshot
+                return false;
+            } else {
+                res = true;
+            }
+        }
+        // Remove the sender from the set of previous replicas for skipped snapshot and this snapshot
+        let mut past_snap: Vec<SnapshotId> = self.on_going_snapshots
+            .keys()
+            .cloned()
+            .filter(|s| s <= &snap_id)
+            .collect();
+        past_snap.sort();
+        for p_snap in past_snap {
             if self.receiver.keep_msg_queue() {
                 // if receiver returns state, is ready to be persisted
-                if let Some(receiver_state) = self.receiver.get_state(snap_id.clone()){
+                if let Some(receiver_state) = self.receiver.get_state(p_snap.clone()){
                     // This snapshot is complete: now i can save it 
-                    let mut state = self.on_going_snapshots.remove(snap_id).unwrap().0;
+                    let mut state = self.on_going_snapshots.remove(&p_snap).unwrap().0;
                     state.receiver_state = Some(receiver_state);
-                    self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snap_id.clone(), state);
+                    self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, p_snap.clone(), state);
                 }
             } else {
-                // Remove the sender from the set of previous replicas for skipped snapshot and this snapshot
-                let mut past_snap: Vec<SnapshotId> = self.on_going_snapshots
-                    .keys()
-                    .cloned()
-                    .filter(|s| s <= &snap_id)
-                    .collect();
-                past_snap.sort();
-                for p_snap in past_snap {
-                    // Remove the sender from the set of previous replicas for this snapshot
-                    self.on_going_snapshots.get_mut(&p_snap).unwrap().1.remove(&sender);
-                    // Check if there are no more replicas
-                    if self.on_going_snapshots.get(&p_snap).unwrap().1.is_empty() {
-                        // This snapshot is complete: now i can save it 
-                        let state = self.on_going_snapshots.remove(&p_snap).unwrap().0;
-                        self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, p_snap, state);
-                    }
-                }
-            }
-            // I've already forwarded the snapshot marker
-            false
-        } else {
-            if self.receiver.keep_msg_queue() {
-                // Save current state, receiver state will be add then 
-                let mut state: StartState<Out, Receiver>= StartState{
-                    missing_flush_and_restart: self.missing_flush_and_restart as u64,
-                    wait_for_state: self.wait_for_state,
-                    watermark_forntier: self.watermark_frontier.clone(),
-                    receiver_state: None,
-                    message_queue: VecDeque::default(),
-                };
-                // Check if the snapshot is already complete
-                if let Some(receiver_state) = self.receiver.get_state(snap_id.clone()){
+                // Remove the sender from the set of previous replicas for this snapshot
+                self.on_going_snapshots.get_mut(&p_snap).unwrap().1.remove(&sender);
+                // Check if there are no more replicas
+                if self.on_going_snapshots.get(&p_snap).unwrap().1.is_empty() {
                     // This snapshot is complete: now i can save it 
-                    state.receiver_state = Some(receiver_state);
-                    self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snap_id.clone(), state);
-                } else {
-                    // Add a new entry in the map with this snapshot id, i don't care about prev replicas
-                    self.on_going_snapshots.insert(snap_id.clone(), (state, HashSet::new()));
-                }
-            } else {
-                let mut bigger: Vec<(&Coord, &SnapshotId)> = self.last_snapshots
-                    .iter()
-                    .filter(|(c, s)| *c != &sender && s > &snap_id)
-                    .collect();
-                bigger.sort_by(|a, b| a.1.partial_cmp(b.1).unwrap());
-                // Take the state
-                let state: StartState<Out, Receiver>;
-                if bigger.is_empty() {
-                    // Save current state, messages will be add then 
-                    state = StartState{
-                        missing_flush_and_restart: self.missing_flush_and_restart as u64,
-                        wait_for_state: self.wait_for_state,
-                        watermark_forntier: self.watermark_frontier.clone(),
-                        receiver_state: self.receiver.get_state(snap_id.clone()),
-                        message_queue: VecDeque::default(),
-                    };
-                } else {
-                    // The state ie equal to the min snap bigger than this
-                    state = self.on_going_snapshots.get(bigger[0].1).unwrap().0.clone();
-                }
-
-                // Set all previous replicas that have to send this snapshot id
-                let mut prev_replicas = HashSet::from_iter(self.receiver().prev_replicas());
-                prev_replicas.remove(&sender);
-                for replica in self.terminated_replicas.iter() {
-                    prev_replicas.remove(replica);
-                }
-                // remove also sender that have sent a snapshot bigger than this
-                for (replica, _) in bigger {                    
-                    prev_replicas.remove(replica);  
-                }
-                // Check if the snapshot is already complete
-                if prev_replicas.is_empty() {
-                    // This snapshot is complete: i can save it immediately 
-                    self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, snap_id.clone(), state);
-                } else {
-                    // Add a new entry in the map with this snapshot id
-                    self.on_going_snapshots.insert(snap_id.clone(), (state, prev_replicas));
+                    let state = self.on_going_snapshots.remove(&p_snap).unwrap().0;
+                    self.persistency_service.as_mut().unwrap().save_state(self.operator_coord, p_snap, state);
                 }
             }
-            // Forward the snapshot marker
-            true
         }
+        
+        res
+    }
+
+    fn insert_snapshot(&mut self, snap_id: &SnapshotId, sender: Coord) -> bool {
+        // Check if a bigger snapshot is previously arrived, if yes ignore this snapshot
+        if self.last_snapshots.values().any(|x| x > snap_id) {
+            return false;
+        }        
+        // Take the state
+        let state: StartState<Out, Receiver>;        
+        // Check receiver
+        if self.receiver.keep_msg_queue() {
+            // Save current state, receiver state will be add then 
+            state = StartState{
+                missing_flush_and_restart: self.missing_flush_and_restart as u64,
+                wait_for_state: self.wait_for_state,
+                watermark_forntier: self.watermark_frontier.clone(),
+                receiver_state: None,
+                message_queue: VecDeque::default(),
+            };
+        } else {
+            // Save current state, messages will be add then 
+            state = StartState{
+                missing_flush_and_restart: self.missing_flush_and_restart as u64,
+                wait_for_state: self.wait_for_state,
+                watermark_forntier: self.watermark_frontier.clone(),
+                receiver_state: self.receiver.get_state(snap_id.clone()),
+                message_queue: VecDeque::default(),
+            };
+        }       
+
+        // Set all previous replicas that have to send this snapshot id
+        let mut prev_replicas = HashSet::from_iter(self.receiver().prev_replicas());
+        prev_replicas.remove(&sender);
+        for replica in self.terminated_replicas.iter() {
+            prev_replicas.remove(replica);
+        }
+        // Add a new entry in the map with this snapshot id
+        self.on_going_snapshots.insert(snap_id.clone(), (state, prev_replicas));
+
+        true
     }
 
     fn add_item_to_snapshot(&mut self, item: &StreamElement<Out>, sender: Coord) {
