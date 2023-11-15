@@ -205,7 +205,7 @@ impl<Out: ExchangeData, Receiver: StartReceiver<Out> + Send + 'static> Start<Out
         if !self.on_going_snapshots.contains_key(snap_id) {
             if !self.insert_snapshot(snap_id, sender) {
                 // Ignore this snapshot
-                return false;
+                res = false;
             } else {
                 res = true;
             }

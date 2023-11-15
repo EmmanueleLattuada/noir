@@ -414,12 +414,9 @@ impl<OutL: ExchangeData, OutR: ExchangeData> BinaryStartReceiver<OutL, OutR> {
     fn process_snapshot(&mut self, snap_id: &SnapshotId, sender: Coord) {
         // Update last snapshots map
         self.last_snapshots.insert(sender, snap_id.clone());
-        // Check if is already arrived this snapshot id
-        if !self.on_going_snapshots.contains_key(snap_id) {
-            // Check if a bigger snapshot is previously arrived, if yes ignore this snapshot
-            if self.last_snapshots.values().any(|x| x > snap_id) {
-                return;
-            }             
+        // Check if is already arrived this snapshot id, 
+        // check if a bigger snapshot is previously arrived, if yes ignore this snapshot
+        if !self.on_going_snapshots.contains_key(snap_id) && !self.last_snapshots.values().any(|x| x > snap_id) {            
             // Save current state, messages will be add then 
             let mut state = self.state_copy();
             if self.iteration_stack_level > 0 && snap_id.iteration_stack[self.iteration_stack_level - 1] != 0 {
